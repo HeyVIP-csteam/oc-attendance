@@ -4,7 +4,7 @@
   //   npx wrangler secret put ENCRYPTION_KEY
   // and NEVER written in this file.
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "tg-attendance",
+  "name": "oc-attendance",
   "main": "src/worker/index.ts",
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["nodejs_compat"],
@@ -22,7 +22,7 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "tg-attendance",
+      "database_name": "oc-attendance",
       "database_id": "00000000-0000-0000-0000-000000000000",
       "migrations_dir": "migrations"
     }
