@@ -1,0 +1,25 @@
+import { DEFAULT_KEYWORDS, DEFAULT_RULES, type KeywordConfig, type Rules, BIZ_TZ_DEFAULT } from '../../shared/codes';
+import type { Env } from '../env';
+
+export interface Settings { keywords: KeywordConfig; rules: Rules; dataVersion: number }
+
+export const settingsStmt = (db: D1Database) => db.prepare("SELECT key, value FROM system_settings WHERE key IN ('keywords','rules','data_version')");
+
+export function parseSettings(rows: { key: string; value: string }[]): Settings {
+  const m = new Map(rows.map((r) => [r.key, r.value]));
+  const safe = <T>(s: string | undefined, d: T): T => { try { return s ? { ...d, ...JSON.parse(s) } : d; } catch { return d; } };
+  const rules = safe<Rules>(m.get('rules'), DEFAULT_RULES);
+  rules.allowedChats = (rules.allowedChats ?? []).map(Number).filter((n) => Number.isFinite(n));
+  return {
+    keywords: safe<KeywordConfig>(m.get('keywords'), DEFAULT_KEYWORDS),
+    rules,
+    dataVersion: Number(m.get('data_version') ?? 0),
+  };
+}
+
+export async function loadSettings(db: D1Database): Promise<Settings> {
+  const r = await settingsStmt(db).all<{ key: string; value: string }>();
+  return parseSettings(r.results ?? []);
+}
+
+export const bizTz = (env: Env): string => env.BIZ_TZ || BIZ_TZ_DEFAULT;

@@ -1,0 +1,48 @@
+{
+  // Telegram Attendance – one Worker serves both the API (/api/*) and the React dashboard (static assets).
+  // Public configuration only. Secrets (ENCRYPTION_KEY, optional TELEGRAM_BOT_TOKEN_<CURRENCY>) are set with
+  //   npx wrangler secret put ENCRYPTION_KEY
+  // and NEVER written in this file.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "tg-attendance",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // React dashboard built by `npm run build` (Vite) into web/dist.
+  // Static asset requests are free and do not invoke the Worker; only /api/* runs Worker code.
+  "assets": {
+    "directory": "./web/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+
+  // Create with: npx wrangler d1 create tg-attendance   → paste the database_id below.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "tg-attendance",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  // One cron trigger (free plan allows 5 per account):
+  // missing-punch / no-show detection, self-healing recompute, roster generation from default shifts, cleanup.
+  "triggers": {
+    "crons": ["*/15 * * * *"]
+  },
+
+  "vars": {
+    "APP_ENV": "production",
+    "BIZ_TZ": "Asia/Colombo",
+    // Set to your production origin (e.g. https://tg-attendance.<you>.workers.dev) to enforce Origin checks on writes.
+    "PUBLIC_ORIGIN": ""
+  },
+
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  }
+}
