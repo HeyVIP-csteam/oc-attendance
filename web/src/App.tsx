@@ -17,9 +17,9 @@ import { Shifts } from './pages/Shifts';
 const PAGES: PageKey[] = ['overview', 'attendance', 'breaks', 'reports', 'employees', 'shifts', 'exceptions', 'settings'];
 const pageFromPath = (): PageKey => { const p = location.pathname.replace(/^\/+|\/+$/g, '') as PageKey; return PAGES.includes(p) ? p : 'overview'; };
 
-// Polling: one tiny request (/api/version reads one row) every 60 s, only while the tab is visible and the
-// admin has been active in the last 10 minutes. Data is re-fetched only when the version changed.
-const POLL_MS = 60_000;
+// Polling: one tiny request (/api/version reads one row) every 10 s, only while the tab is visible and the
+// admin has been active in the last 10 minutes. Page data is re-fetched only when the version changed.
+const POLL_MS = 10_000;
 const IDLE_MS = 10 * 60_000;
 
 export function App() {
@@ -69,12 +69,13 @@ export function App() {
     events.forEach((e) => window.addEventListener(e, activity, { passive: true }));
     const vis = () => { if (document.visibilityState === 'visible') { lastActive.current = Date.now(); setPaused(false); void check(); } };
     document.addEventListener('visibilitychange', vis);
+    window.addEventListener('focus', vis);
     const t = setInterval(() => {
       if (document.visibilityState !== 'visible') return;
       if (Date.now() - lastActive.current > IDLE_MS) { setPaused(true); return; }
       void check();
     }, POLL_MS);
-    return () => { events.forEach((e) => window.removeEventListener(e, activity)); document.removeEventListener('visibilitychange', vis); clearInterval(t); };
+    return () => { events.forEach((e) => window.removeEventListener(e, activity)); document.removeEventListener('visibilitychange', vis); window.removeEventListener('focus', vis); clearInterval(t); };
   }, [auth, paused, check]);
 
   const logout = async () => {

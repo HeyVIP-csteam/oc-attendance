@@ -46,7 +46,7 @@ employeeRoutes.get('/employees/:id', async (c) => {
 });
 
 const EmpSchema = z.object({
-  code: z.string().trim().min(1).max(32).regex(/^[A-Za-z0-9_.-]+$/, 'letters, digits, _ . - only'),
+  code: z.string().trim().min(1).max(32),
   name: z.string().trim().min(1).max(100),
   currency: z.string().trim().max(10).nullable().optional(),
   defaultShiftId: z.number().int().positive().nullable().optional(),
@@ -63,9 +63,12 @@ async function saveEmployee(c: Context<AppBindings>, id: number | null) {
   const ip = clientIp(c);
   const now = Date.now();
   const tz = bizTz(c.env);
+  if (!/^[A-Za-z0-9_.-]+$/.test(v.code)) throw bad('VALIDATION', 'Employee ID 只能用英文字母、数字和 _ . -，不能有空格', 'Employee ID may only contain letters, digits and _ . - (no spaces)');
   if (!validTz(v.timezone)) throw bad('VALIDATION', '时区无效', 'Invalid time zone');
   if (v.threadId && !/^\d+$/.test(v.threadId)) throw bad('VALIDATION', 'thread_id 必须为数字', 'thread_id must be numeric');
-  if (v.threadId && !/^-?\d{5,20}$/.test(v.chatId)) throw bad('VALIDATION', 'Chat ID 格式错误', 'Invalid Chat ID');
+  // a link like t.me/c/3959204082/28/… shows the group id without the -100 prefix every supergroup id has
+  if (/^\d{5,17}$/.test(v.chatId)) v.chatId = '-100' + v.chatId;
+  if (v.threadId && !/^-100\d{5,17}$/.test(v.chatId)) throw bad('VALIDATION', 'Chat ID 格式错误：超级群组的 Chat ID 是 -100 开头', 'Invalid Chat ID: supergroup ids start with -100');
   const chatId = v.threadId ? Number(v.chatId) : null;
   const threadId = v.threadId ? Number(v.threadId) : null;
 
@@ -83,6 +86,8 @@ async function saveEmployee(c: Context<AppBindings>, id: number | null) {
   if (v.defaultShiftId && !shR.results[0]) throw bad('VALIDATION', '班次不存在', 'Unknown shift');
   const old = (oldR.results[0] as Record<string, unknown> | undefined) ?? null;
   if (id && !old) throw notFound('Employee not found');
+  // shifts are planned in the roster; the dashboard no longer sends a default shift, so keep whatever is stored
+  if (v.defaultShiftId === undefined) v.defaultShiftId = (old?.default_shift_id as number | null | undefined) ?? null;
   const owner = topicR.results[0] as { employee_id: number; employee_code: string } | undefined;
   if (owner && owner.employee_id !== id) throw conflict('TOPIC_TAKEN', `Topic #${threadId} 当前已映射给 ${owner.employee_code}，请先解除`, `Topic #${threadId} is mapped to ${owner.employee_code}; unbind it first`);
   const curMap = (mapR.results[0] as { id: number; chat_id: number; message_thread_id: number } | undefined) ?? null;

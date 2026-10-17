@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { addDays, dayDiff, monthEnd, monthStart, weekday } from '../../../src/shared/time';
-import { Cnt, CurrencyOptions, ErrBox, Field, Modal, ModalActions, Pager, Tabs, TblTop } from '../components/ui';
+import { Cnt, CurrencyOptions, EmpSearch, ErrBox, Field, Modal, ModalActions, Pager, Tabs, TblTop } from '../components/ui';
 import { api, type ApiErr, qs } from '../lib/api';
 import { exportXLSX, readGrid } from '../lib/files';
 import { fmtDT, fmtT, today } from '../lib/format';
@@ -13,11 +13,11 @@ interface RosterData { from: string; to: string; total: number; employees: { id:
 export function Shifts() {
   const { L } = useI18n();
   const t = today();
-  const [f, set] = usePageState('sh', () => ({ tab: 'roster' as 'roster' | 'tpl', from: monthStart(t), to: monthEnd(t), cur: '', page: 1, size: 10 }));
+  const [f, set] = usePageState('sh', () => ({ tab: 'roster' as 'roster' | 'history' | 'tpl', cq: '', cpage: 1, from: monthStart(t), to: monthEnd(t), cur: '', page: 1, size: 10 }));
   return (
     <>
-      <Tabs items={[['roster', L('排班表（Shift Instances）', 'Roster (shift instances)')], ['tpl', L('班次模板', 'Shift templates')]]} value={f.tab} onChange={(tab) => set({ tab })} />
-      {f.tab === 'tpl' ? <Templates /> : <Roster f={f} set={set} />}
+      <Tabs items={[['roster', L('排班表（Shift Instances）', 'Roster (shift instances)')], ['history', L('历史记录', 'History')], ['tpl', L('班次模板', 'Shift templates')]]} value={f.tab} onChange={(tab) => set({ tab })} />
+      {f.tab === 'tpl' ? <Templates /> : f.tab === 'history' ? <History q={f.cq} page={f.cpage} size={f.size} set={(p) => set(p)} /> : <Roster f={f} set={set} />}
     </>
   );
 }
@@ -82,9 +82,8 @@ function Roster({ f, set }: { f: { from: string; to: string; cur: string; page: 
                   const raw = byKey.get(`${e.id}|${d}`);
                   const i = raw && raw.adjustment_status !== 'CANCELLED' ? raw : undefined;
                   const cancelled = !!raw && raw.adjustment_status === 'CANCELLED';
-                  const adj = (i && i.adjustment_status !== 'SCHEDULED' && i.source !== 'ROSTER_IMPORT') || cancelled;
                   return (
-                    <td key={d}><span className={`cell ${i ? i.shift_code : 'OFF'} ${adj ? 'adj' : ''}`} title={i ? `${i.shift_name} ${fmtT(i.scheduled_start_at)}–${fmtT(i.scheduled_end_at)} (LK)` : L('休息', 'Off')}
+                    <td key={d}><span className={`cell ${i ? i.shift_code : 'OFF'}`} title={i ? `${i.shift_name} ${fmtT(i.scheduled_start_at)}–${fmtT(i.scheduled_end_at)} (LK)` : L('休息', 'Off')}
                       onClick={() => !readOnly && setCell({ emp: e, date: d, inst: i, cancelled })} style={readOnly ? { cursor: 'default' } : undefined}>
                       {i ? (compact ? i.shift_code : <>{i.shift_code}<br /><span style={{ fontWeight: 400 }}>{fmtT(i.scheduled_start_at)}</span></>) : (compact ? '–' : 'OFF')}
                     </span></td>
@@ -246,5 +245,51 @@ function ShiftModal({ s, onClose }: { s: MetaShift | null; onClose: () => void }
       <div style={{ marginTop: 8 }}><ErrBox error={err} /></div>
       <ModalActions onCancel={onClose} onOk={save} busy={busy} />
     </Modal>
+  );
+}
+
+// ---------------------------------------------------------------- roster history: manual shift changes + roster imports
+interface HistRow { id: number; created_at: number; actor: string; action: string; entity_id: string; before_json: string | null; after_json: string | null; note: string | null; employee_code: string | null; name: string | null }
+
+function History({ q, page, size, set }: { q: string; page: number; size: number; set: (p: { cq?: string; cpage?: number; size?: number }) => void }) {
+  const { L } = useI18n();
+  const { data, error } = useApi<{ total: number; rows: HistRow[] }>(`/roster/history-log?${qs({ q, page, size })}`);
+  const parse = (s: string | null) => { try { return s ? JSON.parse(s) : {}; } catch { return {}; } };
+  const chip = (c: string | undefined) => <span className={`cell ${c ?? 'OFF'}`} style={{ display: 'inline-block', minWidth: 40, padding: '1px 6px' }}>{c ?? '—'}</span>;
+  return (
+    <>
+      <div className="card"><div className="row">
+        <Field label={L('员工', 'Employee')}><EmpSearch value={q} onChange={(v) => set({ cq: v, cpage: 1 })} /></Field>
+      </div></div>
+      <ErrBox error={error} />
+      {data && (data.rows.length === 0 ? <div className="card empty">{L('还没有记录', 'No history yet')}</div> : (
+        <>
+          <TblTop left={<Cnt n={data.total} />} size={size} onSize={(n) => set({ size: n, cpage: 1 })} />
+          <div className="tw"><table className="grid tpltbl"><thead><tr>
+            <th>{L('时间', 'Time')}</th><th>{L('动作', 'Action')}</th><th>{L('员工 / 文件', 'Employee / File')}</th><th>{L('班次日期', 'Shift date')}</th>
+            <th>{L('变更', 'Change')}</th><th>{L('原因', 'Reason')}</th><th>{L('操作人', 'By')}</th>
+          </tr></thead><tbody>
+            {data.rows.map((r) => {
+              const b = parse(r.before_json), a = parse(r.after_json);
+              const imp = r.action === 'ROSTER_IMPORTED';
+              return (
+                <tr key={r.id}>
+                  <td className="nw">{fmtDT(r.created_at)}</td>
+                  <td>{imp ? <span className="b i">{L('导入排班', 'Roster import')}</span> : <span className="b v">{L('换班', 'Shift change')}</span>}</td>
+                  <td style={{ textAlign: 'left' }}>{imp ? <>📄 {r.entity_id}</> : r.employee_code ? <><b>{r.employee_code}</b> {r.name}</> : r.entity_id.split('@')[0]}</td>
+                  <td>{imp ? <span className="mut">—</span> : r.entity_id.split('@')[1] ?? ''}</td>
+                  <td className="nw">{imp
+                    ? L(`新增 ${a.added ?? 0} · 修改 ${a.changed ?? 0} · 取消 ${a.removed ?? 0}${a.skipped_errors ? ` · 跳过 ${a.skipped_errors}` : ''}`, `+${a.added ?? 0} added · ${a.changed ?? 0} changed · ${a.removed ?? 0} removed${a.skipped_errors ? ` · ${a.skipped_errors} skipped` : ''}`)
+                    : <>{chip(b.shift)} → {chip(a.shift)}</>}</td>
+                  <td style={{ whiteSpace: 'normal', textAlign: 'left', minWidth: 180 }}>{r.note}</td>
+                  <td>{r.actor}</td>
+                </tr>
+              );
+            })}
+          </tbody></table></div>
+          <Pager total={data.total} page={page} size={size} onPage={(p) => set({ cpage: p })} />
+        </>
+      ))}
+    </>
   );
 }

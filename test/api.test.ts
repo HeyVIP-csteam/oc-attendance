@@ -435,3 +435,48 @@ describe('admin accounts', () => {
     expect(h.db.rows("SELECT action FROM audit_logs WHERE action LIKE 'ADMIN_USER_%'").length).toBe(3);
   });
 });
+
+describe('migration 0003 (roster-only shifts)', () => {
+  it('removes future auto-generated shifts and keeps roster shifts; editing an employee keeps shifts untouched', async () => {
+    const { h, e1, e2 } = await fixture(Date.now()); // migration uses the real "today"
+    const B = h.db.get<{ id: number }>("SELECT id FROM shift_templates WHERE code = 'B'")!.id;
+    await h.req('PUT', `/api/employees/${e1}`, { code: 'E001', name: 'Nimal Perera', currency: 'LKR', defaultShiftId: B, timezone: 'Asia/Colombo', chatId: String(CHAT), threadId: '1001' });
+    expect(h.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM shift_instances WHERE source = 'ASSIGNMENT'")!.n).toBe(14);
+    const future = h.db.get<{ d: string }>("SELECT MAX(shift_date) AS d FROM shift_instances")!.d;
+    await h.roster(e2, future, 'C');
+    const { readFileSync } = await import('node:fs');
+    h.db.sqlite.exec(readFileSync('migrations/0003_roster_only_shifts.sql', 'utf8'));
+    expect(h.db.get('SELECT COUNT(*) AS n FROM shift_instances WHERE source = ?', 'ASSIGNMENT')).toEqual({ n: 0 });
+    expect(h.db.get('SELECT shift_code FROM shift_instances WHERE employee_id = ?', e2)).toEqual({ shift_code: 'C' });
+    expect(h.db.get('SELECT default_shift_id FROM employees WHERE id = ?', e1)).toEqual({ default_shift_id: null });
+    // the dashboard no longer sends defaultShiftId: saving must not create assignments
+    await h.req('PUT', `/api/employees/${e2}`, { code: 'E002', name: 'Kasun S', currency: 'LKR', timezone: 'Asia/Colombo', chatId: String(CHAT), threadId: '1002' });
+    expect(h.db.get('SELECT COUNT(*) AS n FROM employee_shift_assignments WHERE employee_id = ?', e2)).toEqual({ n: 0 });
+    expect((await h.req('POST', '/api/employees', { code: 'Test 1', name: 'x', timezone: 'Asia/Colombo' })).json.message.zh).toMatch(/不能有空格/);
+  });
+});
+
+describe('chat id input', () => {
+  it('a group id copied from a message link (without -100) is normalised', async () => {
+    const { h } = await fixture();
+    const r = await h.req('POST', '/api/employees', { code: 'T3', name: 'Test 3', currency: 'LKR', timezone: 'Asia/Colombo', chatId: '2233445566', threadId: '28' });
+    expect(r.status).toBe(200);
+    expect(h.db.get('SELECT chat_id FROM telegram_topic_mappings WHERE message_thread_id = 28')).toEqual({ chat_id: CHAT });
+    expect((await h.send({ text: 'IN', ts: lk(D, '07:00'), thread: 28 })).json.status).toBe('PROCESSED');
+  });
+});
+
+describe('roster history', () => {
+  it('lists manual shift changes and one row per roster import, with who, when and why', async () => {
+    const { h, e1 } = await fixture();
+    await h.roster(e1, '2026-10-20', 'A', 'Cover for sick colleague');
+    await h.req('POST', '/api/roster/import', { grid: [['Employee ID', '2026-10-21'], ['E002', 'C']], fileName: 'r.csv', apply: true, reason: 'Weekly roster' });
+    const r = await h.req('GET', '/api/roster/history-log');
+    expect(r.json.total).toBe(2); // the import's per-cell entry is not listed separately
+    const [imp, man] = r.json.rows;
+    expect(imp).toMatchObject({ action: 'ROSTER_IMPORTED', entity_id: 'r.csv', actor: 'owner', note: 'Weekly roster' });
+    expect(JSON.parse(imp.after_json)).toMatchObject({ added: 1 });
+    expect(man).toMatchObject({ action: 'SHIFT_INSTANCE_ADJUSTED', employee_code: 'E001', note: 'Cover for sick colleague', entity_id: 'E001@2026-10-20' });
+    expect((await h.req('GET', '/api/roster/history-log?q=nimal')).json.total).toBe(1);
+  });
+});

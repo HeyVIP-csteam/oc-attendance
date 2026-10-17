@@ -159,7 +159,7 @@ function instanceChangeStmts(db: D1Database, ch: Change, cur: { adjustment_statu
   else out.push(upsertInstanceStmt(db, ch.employeeId, ch.date, ch.template!, source, cur && cur.adjustment_status !== 'CANCELLED' ? 'ADJUSTED' : 'MANUAL', null, actor, now));
   const w = ch.template ? shiftWindow(ch.date, ch.template.start_time, ch.template.end_time, ch.template.timezone) : null;
   out.push(auditStmt(db, { actor, action: 'SHIFT_INSTANCE_ADJUSTED', entityType: 'shift_instance', entityId: `${ch.code}@${ch.date}`,
-    before: { shift: ch.from }, after: { shift: ch.to, ...(w ? { start: fmtDateTime(w.startAt, tz), end: fmtDateTime(w.endAt, tz) } : {}) }, note: reason, ip, at: now }));
+    before: { shift: ch.from }, after: { shift: ch.to, source, ...(w ? { start: fmtDateTime(w.startAt, tz), end: fmtDateTime(w.endAt, tz) } : {}) }, note: reason, ip, at: now }));
   return out;
 }
 
@@ -273,4 +273,25 @@ shiftRoutes.post('/roster/import', async (c) => {
   const settings = await loadSettings(db);
   const r = await afterInstancesChanged(db, changes.map((x) => [x.employeeId, x.date] as Key), { now, tz, rules: settings.rules });
   return c.json({ plan, applied: { added, changed, removed, recomputed: r.inline, deferred: r.deferred } });
+});
+
+// ---------------------------------------------------------------- roster history (from the append-only audit log)
+shiftRoutes.get('/roster/history-log', async (c) => {
+  const f = query(c, z.object({
+    q: z.string().max(80).optional().default(''),
+    page: z.coerce.number().int().min(1).default(1), size: z.coerce.number().int().refine((n) => [10, 20, 30, 50, 100].includes(n)).default(10),
+  }));
+  const db = c.env.DB;
+  // manual shift changes one by one, plus ONE row per roster import (its per-cell entries are not listed)
+  const cond = ["a.entity_type = 'shift_instance'",
+    `((a.action = 'SHIFT_INSTANCE_ADJUSTED' AND COALESCE(a.after_json, '') NOT LIKE '%"source":"ROSTER_IMPORT"%') OR a.action = 'ROSTER_IMPORTED')`];
+  const p: unknown[] = [];
+  if (f.q) { cond.push("(e.employee_code LIKE ? ESCAPE '\\' OR e.name LIKE ? ESCAPE '\\')"); const like = `%${f.q.replace(/[\\%_]/g, (m) => '\\' + m)}%`; p.push(like, like); }
+  const FROM = `FROM audit_logs a LEFT JOIN employees e ON e.employee_code = substr(a.entity_id, 1, instr(a.entity_id, '@') - 1)`;
+  const [cnt, rows] = await db.batch([
+    stmt(db, `SELECT COUNT(*) AS n ${FROM} WHERE ${cond.join(' AND ')}`, ...p),
+    stmt(db, `SELECT a.id, a.created_at, a.actor, a.action, a.entity_id, a.before_json, a.after_json, a.note, e.employee_code, e.name
+              ${FROM} WHERE ${cond.join(' AND ')} ORDER BY a.created_at DESC, a.id DESC LIMIT ? OFFSET ?`, ...p, f.size, (f.page - 1) * f.size),
+  ]);
+  return c.json({ total: (cnt.results[0] as { n: number }).n, rows: rows.results });
 });

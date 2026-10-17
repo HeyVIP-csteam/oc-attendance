@@ -71,7 +71,7 @@ const RulesSchema = z.object({
 settingsRoutes.put('/settings/rules', async (c) => {
   requireAdminRole(c);
   const v = await body(c, RulesSchema);
-  const rules = { ...v, allowedChats: [...new Set(v.allowedChats.map(Number))] };
+  const rules = { ...v, allowedChats: [...new Set(v.allowedChats.map((c) => (/^\d{5,17}$/.test(String(c)) ? Number('-100' + c) : Number(c))))] };
   const db = c.env.DB;
   const now = Date.now();
   const before = await loadSettings(db);

@@ -65,17 +65,19 @@ function EmployeeModal({ id, onClose }: { id: number | null; onClose: () => void
   const cur = data?.mappings.find((m) => m.is_active);
   const v = form ?? {
     code: data?.employee.employee_code ?? '', name: data?.employee.name ?? '', currency: data?.employee.currency_code ?? '',
-    shift: String(data?.employee.default_shift_id ?? ''), tz: data?.employee.timezone ?? 'Asia/Colombo',
+    tz: data?.employee.timezone ?? 'Asia/Colombo',
     chat: String(cur?.chat_id ?? knownChat), thread: cur ? String(cur.message_thread_id) : '',
   };
   const upd = (k: string, val: string) => setForm({ ...v, [k]: val });
   const save = async () => {
     if (!v.code.trim() || !v.name.trim()) return setErr(new Error(L('Employee ID 与姓名必填', 'Employee ID and name are required')));
+    if (!/^[A-Za-z0-9_.-]+$/.test(v.code.trim())) return setErr(new Error(L('Employee ID 只能用英文字母、数字和 _ . -，不能有空格（例如 E001、Test-1）', 'Employee ID may only contain letters, digits and _ . - with no spaces (e.g. E001, Test-1)')));
     if (v.thread && !/^\d+$/.test(v.thread)) return setErr(new Error(L('thread_id 必须为数字', 'thread_id must be numeric')));
-    if (v.thread && !/^-?\d{5,20}$/.test(v.chat)) return setErr(new Error(L('Chat ID 格式错误', 'Invalid Chat ID')));
+    if (/^\d{5,17}$/.test(v.chat.trim())) v.chat = '-100' + v.chat.trim(); // copied from a t.me/c/<id>/… link
+    if (v.thread && !/^-100\d{5,17}$/.test(v.chat.trim())) return setErr(new Error(L('Chat ID 格式错误：超级群组的 Chat ID 是 -100 开头（例如 -1003959204082）', 'Invalid Chat ID: supergroup ids start with -100 (e.g. -1003959204082)')));
     setBusy(true);
     try {
-      await api(id ? `/employees/${id}` : '/employees', { method: id ? 'PUT' : 'POST', body: { code: v.code.trim(), name: v.name.trim(), currency: v.currency || null, defaultShiftId: v.shift ? Number(v.shift) : null, timezone: v.tz, chatId: v.chat.trim(), threadId: v.thread.trim() } });
+      await api(id ? `/employees/${id}` : '/employees', { method: id ? 'PUT' : 'POST', body: { code: v.code.trim(), name: v.name.trim(), currency: v.currency || null, timezone: v.tz, chatId: v.chat.trim(), threadId: v.thread.trim() } });
       toast(L('已保存，并写入 Audit Log', 'Saved and written to the audit log'));
       await reloadMeta();
       refresh();
@@ -89,9 +91,6 @@ function EmployeeModal({ id, onClose }: { id: number | null; onClose: () => void
         <div><label>Employee ID *</label><input type="text" value={v.code} onChange={(e) => upd('code', e.target.value)} /></div>
         <div><label>{L('姓名', 'Name')} *</label><input type="text" value={v.name} onChange={(e) => upd('name', e.target.value)} /></div>
         <div><label>{L('货币', 'Currency')}</label><select value={v.currency} onChange={(e) => upd('currency', e.target.value)}><CurrencyOptions all={L('（未指定）', '(none)')} /></select></div>
-        <div><label>{L('默认班次（从明天生效）', 'Default shift (from tomorrow)')}</label><select value={v.shift} onChange={(e) => upd('shift', e.target.value)}>
-          <option value="">{L('无（只用排班表）', 'None (roster only)')}</option>{meta.shifts.filter((s) => s.is_active).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-        </select></div>
         <div><label>{L('时区', 'Time zone')}</label><select value={v.tz} onChange={(e) => upd('tz', e.target.value)}><option value="Asia/Colombo">{L('斯里兰卡时间（UTC+05:30）', 'Sri Lanka time (UTC+05:30)')}</option></select></div>
       </div>
       <h3>{L('Telegram Topic 绑定', 'Telegram topic binding')}</h3>
