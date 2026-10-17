@@ -23,7 +23,7 @@
     {
       "binding": "DB",
       "database_name": "oc-attendance",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "4ebd1e03-28cd-48b9-92d0-969a203a87c7",
       "migrations_dir": "migrations"
     }
   ],
