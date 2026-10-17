@@ -217,7 +217,7 @@ shiftRoutes.post('/roster/import', async (c) => {
   let unchanged = 0;
   let cells = 0;
   const head = v.grid[0].map((x) => String(x ?? '').trim());
-  let idCol = head.findIndex((x) => /^(employee\s*id|员工编号|id)$/i.test(x));
+  let idCol = head.findIndex((x) => /^(psd\s*id|employee\s*id|员工编号|id)$/i.test(x));
   if (idCol < 0) idCol = 0;
   const dateCols = head.map((x, i) => ({ i, d: normDate(x) })).filter((x): x is { i: number; d: string } => !!x.d);
   if (!dateCols.length) errs.push({ where: 'Header', msg: { zh: '找不到日期栏位（格式 YYYY-MM-DD）', en: 'No date columns found (use YYYY-MM-DD)' } });

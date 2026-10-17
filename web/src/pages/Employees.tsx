@@ -32,7 +32,7 @@ export function Employees() {
         <>
           <TblTop left={<Cnt n={data.total} />} size={f.size} onSize={(size) => set({ size, page: 1 })} />
           <div className="tw"><table className="emtbl"><thead><tr>
-            <th>ID</th><th>{L('姓名', 'Name')}</th><th className="c">{L('货币', 'Currency')}</th><th>{L('状态', 'Status')}</th><th>Topic（chat / thread）</th><th>Mapping</th><th className="c">{L('操作', 'Action')}</th>
+            <th>{L('PSD ID', 'PSD ID')}</th><th>{L('员工姓名', 'Employee Name')}</th><th className="c">{L('货币', 'Currency')}</th><th>{L('状态', 'Status')}</th><th>Topic（chat / thread）</th><th>Mapping</th><th className="c">{L('操作', 'Action')}</th>
           </tr></thead><tbody>
             {data.rows.map((e) => (
               <tr key={e.id}>
@@ -72,8 +72,8 @@ function EmployeeModal({ id, onClose }: { id: number | null; onClose: () => void
   };
   const upd = (k: string, val: string) => setForm({ ...v, [k]: val });
   const save = async () => {
-    if (!v.code.trim() || !v.name.trim()) return setErr(new Error(L('Employee ID 与姓名必填', 'Employee ID and name are required')));
-    if (!/^[A-Za-z0-9_.-]+$/.test(v.code.trim())) return setErr(new Error(L('Employee ID 只能用英文字母、数字和 _ . -，不能有空格（例如 E001、Test-1）', 'Employee ID may only contain letters, digits and _ . - with no spaces (e.g. E001, Test-1)')));
+    if (!v.code.trim() || !v.name.trim()) return setErr(new Error(L('PSD ID 与员工姓名必填', 'PSD ID and employee name are required')));
+    if (!/^[A-Za-z0-9_.-]+$/.test(v.code.trim())) return setErr(new Error(L('PSD ID 只能用英文字母、数字和 _ . -，不能有空格（例如 E001、Test-1）', 'PSD ID may only contain letters, digits and _ . - with no spaces (e.g. E001, Test-1)')));
     if (v.thread && !/^\d+$/.test(v.thread)) return setErr(new Error(L('thread_id 必须为数字', 'thread_id must be numeric')));
     if (/^\d{5,17}$/.test(v.chat.trim())) v.chat = '-100' + v.chat.trim(); // copied from a t.me/c/<id>/… link
     if (v.thread && !/^-100\d{5,17}$/.test(v.chat.trim())) return setErr(new Error(L('Chat ID 格式错误：超级群组的 Chat ID 是 -100 开头（例如 -1003959204082）', 'Invalid Chat ID: supergroup ids start with -100 (e.g. -1003959204082)')));
@@ -90,7 +90,7 @@ function EmployeeModal({ id, onClose }: { id: number | null; onClose: () => void
     <Modal onClose={onClose}>
       <h3 style={{ marginTop: 0 }}>{id ? L('编辑员工 ', 'Edit employee ') + (data?.employee.employee_code ?? '') : L('新增员工', 'Add employee')}</h3>
       <div className="fg">
-        <div><label>Employee ID *</label><input type="text" value={v.code} onChange={(e) => upd('code', e.target.value)} /></div>
+        <div><label>PSD ID *</label><input type="text" value={v.code} onChange={(e) => upd('code', e.target.value)} /></div>
         <div><label>{L('姓名', 'Name')} *</label><input type="text" value={v.name} onChange={(e) => upd('name', e.target.value)} /></div>
         <div><label>{L('货币', 'Currency')}</label><select value={v.currency} onChange={(e) => upd('currency', e.target.value)}><CurrencyOptions all={L('（未指定）', '(none)')} /></select></div>
         <div><label>{L('时区', 'Time zone')}</label><select value={v.tz} onChange={(e) => upd('tz', e.target.value)}><option value="Asia/Colombo">{L('斯里兰卡时间（UTC+05:30）', 'Sri Lanka time (UTC+05:30)')}</option></select></div>

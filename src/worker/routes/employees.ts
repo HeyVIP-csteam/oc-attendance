@@ -67,7 +67,7 @@ async function saveEmployee(c: Context<AppBindings>, id: number | null) {
   const ip = clientIp(c);
   const now = Date.now();
   const tz = bizTz(c.env);
-  if (!/^[A-Za-z0-9_.-]+$/.test(v.code)) throw bad('VALIDATION', 'Employee ID 只能用英文字母、数字和 _ . -，不能有空格', 'Employee ID may only contain letters, digits and _ . - (no spaces)');
+  if (!/^[A-Za-z0-9_.-]+$/.test(v.code)) throw bad('VALIDATION', 'PSD ID 只能用英文字母、数字和 _ . -，不能有空格', 'PSD ID may only contain letters, digits and _ . - (no spaces)');
   if (!validTz(v.timezone)) throw bad('VALIDATION', '时区无效', 'Invalid time zone');
   if (v.threadId && !/^\d+$/.test(v.threadId)) throw bad('VALIDATION', 'thread_id 必须为数字', 'thread_id must be numeric');
   // a link like t.me/c/3959204082/28/… shows the group id without the -100 prefix every supergroup id has
@@ -86,7 +86,7 @@ async function saveEmployee(c: Context<AppBindings>, id: number | null) {
               WHERE m.chat_id = ? AND m.message_thread_id = ? AND m.is_active = 1`, chatId ?? 0, threadId ?? 0),
   ]);
   if (v.currency && !curR.results[0]) throw bad('VALIDATION', '货币不存在', 'Unknown currency');
-  if (dupR.results[0]) throw conflict('DUPLICATE_CODE', 'Employee ID 已存在', 'Employee ID already exists');
+  if (dupR.results[0]) throw conflict('DUPLICATE_CODE', 'PSD ID 已存在', 'PSD ID already exists');
   if (v.defaultShiftId && !shR.results[0]) throw bad('VALIDATION', '班次不存在', 'Unknown shift');
   const old = (oldR.results[0] as Record<string, unknown> | undefined) ?? null;
   if (id && !old) throw notFound('Employee not found');
@@ -141,7 +141,7 @@ async function saveEmployee(c: Context<AppBindings>, id: number | null) {
   statements.push(stmt(db, "UPDATE system_settings SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT), updated_at = ? WHERE key = 'data_version'", now));
   try { await db.batch(statements); }
   catch (e) {
-    if (/UNIQUE/i.test(String((e as Error).message))) throw conflict('CONFLICT', '资料冲突（Employee ID 或 Topic 已被使用）', 'Conflict: Employee ID or topic already in use');
+    if (/UNIQUE/i.test(String((e as Error).message))) throw conflict('CONFLICT', '资料冲突（PSD ID 或 Topic 已被使用）', 'Conflict: PSD ID or topic already in use');
     throw e;
   }
   if (shiftChanged && v.defaultShiftId) await generateFromAssignments(db, tomorrow, addDays(tomorrow, 13), now);

@@ -471,7 +471,7 @@ describe('roster history', () => {
   it('lists manual shift changes and one row per roster import, with who, when and why', async () => {
     const { h, e1 } = await fixture();
     await h.roster(e1, '2026-10-20', 'A', 'Cover for sick colleague');
-    await h.req('POST', '/api/roster/import', { grid: [['Employee ID', '2026-10-21'], ['E002', 'C']], fileName: 'r.csv', apply: true, reason: 'Weekly roster' });
+    await h.req('POST', '/api/roster/import', { grid: [['PSD ID', '2026-10-21'], ['E002', 'C']], fileName: 'r.csv', apply: true, reason: 'Weekly roster' });
     const r = await h.req('GET', '/api/roster/history-log');
     expect(r.json.total).toBe(2); // the import's per-cell entry is not listed separately
     const [imp, man] = r.json.rows;

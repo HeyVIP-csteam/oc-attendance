@@ -166,7 +166,7 @@ export function EmpSearch({ value, onChange }: { value: string; onChange: (v: st
   const commit = (v: string) => { clearTimeout(timer.current); setText(v); setOpen(false); onChange(v); };
   return (
     <div className="acw" ref={wrap}>
-      <input type="text" value={text} placeholder={L('输入姓名或员工编号', 'Type a name or employee ID')} autoComplete="off" spellCheck={false}
+      <input type="text" value={text} placeholder={L('输入姓名或 PSD ID', 'Type a name or PSD ID')} autoComplete="off" spellCheck={false}
         role="combobox" aria-autocomplete="list" aria-expanded={open}
         onChange={(e) => { const v = e.target.value; setText(v); setOpen(!!v.trim()); setHi(0); clearTimeout(timer.current); timer.current = setTimeout(() => onChange(v), 300); }}
         onFocus={() => { if (text.trim()) setOpen(true); }}

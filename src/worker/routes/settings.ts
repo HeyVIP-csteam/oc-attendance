@@ -222,8 +222,10 @@ async function botAction(c: Context<AppBindings>, action: 'check' | 'stop' | 'st
       // Telegram keeps reporting its last delivery error for a long time; once a later update has been
       // received and nothing is queued, the error is history and is no longer shown.
       const errAt = info.last_error_date ? info.last_error_date * 1000 : null;
-      const recovered = !!info.last_error_message && errAt != null && !info.pending_update_count &&
-        !!(await first(db, 'SELECT id FROM telegram_messages WHERE bot_id = ? AND received_at > ? LIMIT 1', bot.id, errAt));
+      // Nothing queued at Telegram = every update was eventually delivered. The error is then history if a
+      // message has arrived since, or if it is more than 10 minutes old (no new failures since then).
+      const recovered = !!info.last_error_message && errAt != null && !info.pending_update_count && (errAt < now - 10 * 60_000 ||
+        !!(await first(db, 'SELECT id FROM telegram_messages WHERE bot_id = ? AND received_at > ? LIMIT 1', bot.id, errAt)));
       const lastErr = !urlOk ? `Webhook URL mismatch: Telegram has "${info.url || '(none)'}"` : recovered ? null : webhookError(info, null);
       await db.batch([stmt(db, `UPDATE telegram_bots SET can_read_all_group_messages = ?, pending_update_count = ?, last_error = ?, last_checked_at = ?, status = ?, updated_at = ? WHERE id = ?`,
         me.can_read_all_group_messages ? 1 : 0, info.pending_update_count, lastErr, now, bot.status === 'ACTIVE' && !urlOk ? 'ERROR' : bot.status, now, bot.id), bump(db, now)]);

@@ -42,12 +42,12 @@ function ExList({ f, set }: { f: { code: string; sev: string; status: string; q:
         <>
           <TblTop left={<Cnt n={data.total} />} size={f.size} onSize={(size) => set({ size, page: 1 })} />
           <div className="tw"><table className="grid extbl"><thead><tr>
-            <th>{L('员工', 'Employee')}</th><th>{L('日期', 'Date')}</th><th>{L('类型', 'Type')}</th><th>{L('严重级', 'Severity')}</th><th>{L('原始消息', 'Raw message')}</th><th>{L('说明', 'Detail')}</th>
+            <th>{L('PSD ID', 'PSD ID')}</th><th>{L('员工姓名', 'Employee Name')}</th><th>{L('日期', 'Date')}</th><th>{L('类型', 'Type')}</th><th>{L('严重级', 'Severity')}</th><th>{L('原始消息', 'Raw message')}</th><th>{L('说明', 'Detail')}</th>
             <th>{L('状态', 'Status')}</th><th>{L('编辑人', 'By')}</th><th>{L('更新时间', 'Update Time')}</th><th className="c">{L('操作', 'Action')}</th>
           </tr></thead><tbody>
             {data.rows.map((x) => (
               <tr key={x.id}>
-                <td className="nw">{x.employee_code ? <><b>{x.employee_code}</b> {x.name}</> : <span className="b r">{L('未知', 'Unknown')}</span>}</td>
+                <td className="nw">{x.employee_code ? <b>{x.employee_code}</b> : <span className="b r">{L('未知', 'Unknown')}</span>}</td><td className="nw">{x.name ?? <span className="mut">—</span>}</td>
                 <td className="nw">{fmtDT(x.occurred_at)}</td><td><ExB code={x.code} /></td><td><SevB sev={x.severity} /></td>
                 <td>{x.raw_text != null ? <>「{x.raw_text}」<div className="mut" style={{ fontSize: 11 }}>thread {x.message_thread_id ?? 'General'}</div></> : <span className="mut">—</span>}</td>
                 <td>{x.detail ? dt(parseBi(x.detail)) : <span className="mut">—</span>}</td>
@@ -103,7 +103,7 @@ function ExModal({ x, onClose }: { x: ExRow; onClose: () => void }) {
       <h3 style={{ marginTop: 0 }}>{L('编辑异常', 'Edit exception')}</h3>
       <div className="kv">
         <div><span>{L('类型', 'Type')}</span><ExB code={x.code} /></div>
-        <div><span>{L('员工', 'Employee')}</span><b>{x.employee_code ? `${x.employee_code} ${x.name}` : '—'}</b></div>
+        <div><span>PSD ID</span><b>{x.employee_code ?? '—'}</b></div><div><span>{L('员工姓名', 'Employee Name')}</span><b>{x.name ?? '—'}</b></div>
         <div><span>{L('发生时间', 'Occurred')}</span><b>{fmtDT(x.occurred_at)}</b></div>
         {x.raw_text != null && <div><span>{L('原始消息', 'Raw message')}</span><b>「{x.raw_text}」</b></div>}
       </div>

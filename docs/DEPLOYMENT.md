@@ -119,7 +119,7 @@ Cloudflare Dashboard → Workers & Pages → `tg-attendance` → Settings → Bu
 2. 设置 → **Bot 设置** → 该货币「设置」→ 贴上 Bot Token → Webhook URL 保持预设 → 「保存并启动 Webhook」
    - 系统会呼叫 Telegram `getMe`、`setWebhook`（含 secret_token、`allowed_updates=["message","edited_message"]`）
    - 如果出现「Privacy Mode 仍开启」提醒，按提示处理后按「检查」
-3. 员工 → 新增员工：填 Employee ID、姓名、货币、群组 Chat ID、该员工 Topic 的 `message_thread_id`
+3. 员工 → 新增员工：填 PSD ID、员工姓名、货币、群组 Chat ID、该员工 Topic 的 `message_thread_id`
 4. 班次与排班 → 导入排班（CSV/XLSX，格式同「导出」）或逐格点选
 5. 在员工 Topic 发 `IN` → Bot 回复「✅ Clock In recorded」→ 后台「考勤明细」出现记录
 

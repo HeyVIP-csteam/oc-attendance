@@ -43,7 +43,7 @@ function Roster({ f, set }: { f: { from: string; to: string; cur: string; page: 
       const ds: string[] = [];
       for (let d = r.from; d <= r.to; d = addDays(d, 1)) ds.push(d);
       const m = new Map(r.instances.map((i) => [`${i.employee_id}|${i.shift_date}`, i.shift_code]));
-      await exportXLSX(`roster_${r.from}_${r.to}${f.cur ? '_' + f.cur : ''}`, ['Employee ID', 'Name', 'Currency', ...ds], r.employees.map((e) => [e.employee_code, e.name, e.currency_code ?? '', ...ds.map((d) => m.get(`${e.id}|${d}`) ?? 'OFF')]));
+      await exportXLSX(`roster_${r.from}_${r.to}${f.cur ? '_' + f.cur : ''}`, ['PSD ID', 'Employee Name', 'Currency', ...ds], r.employees.map((e) => [e.employee_code, e.name, e.currency_code ?? '', ...ds.map((d) => m.get(`${e.id}|${d}`) ?? 'OFF')]));
       toast(L(`已导出 ${r.employees.length} 名员工的排班`, `Exported the roster of ${r.employees.length} employees`));
     } catch (e) { toast(L('导出失败', 'Export failed') + ': ' + (e as Error).message); }
   };
@@ -72,12 +72,12 @@ function Roster({ f, set }: { f: { from: string; to: string; cur: string; page: 
         <>
           <TblTop left={<Cnt n={data.total} />} size={f.size} onSize={(size) => set({ size, page: 1 })} />
           <div className={`tw roster ${compact ? 'compact' : ''}`}><table><thead><tr>
-            <th className="rname">{L('员工', 'Employee')}</th>
+            <th className="rid">{L('PSD ID', 'PSD ID')}</th><th className="rname">{L('员工姓名', 'Employee Name')}</th>
             {days.map((d) => <th key={d} className={`${d === t ? 'today' : ''} ${[0, 6].includes(weekday(d)) ? 'wkend' : ''}`}>{compact ? <><span className="dw">{wd(d)}</span>{Number(d.slice(8))}</> : `${wd(d)} ${d.slice(5)}`}</th>)}
           </tr></thead><tbody>
             {data.employees.map((e) => (
               <tr key={e.id}>
-                <td className="rname"><b>{e.employee_code}</b> {e.name.split(' ')[0]}{e.employment_status !== 'ACTIVE' && <> <span className="b">{L('停用', 'Inactive')}</span></>}</td>
+                <td className="rid"><b>{e.employee_code}</b></td><td className="rname">{e.name}{e.employment_status !== 'ACTIVE' && <> <span className="b">{L('停用', 'Inactive')}</span></>}</td>
                 {days.map((d) => {
                   const raw = byKey.get(`${e.id}|${d}`);
                   const i = raw && raw.adjustment_status !== 'CANCELLED' ? raw : undefined;
@@ -164,8 +164,8 @@ function ImportModal({ grid, file, plan, onClose }: { grid: (string | number | n
         <div><span>{L('今天及以前', 'Today or earlier')}</span><b style={{ color: plan.pastCount ? 'var(--warn)' : 'inherit' }}>{plan.pastCount}</b></div>
       </div>
       {plan.changes.length > 0 && (
-        <div className="tw" style={{ marginTop: 12, maxHeight: 260, overflow: 'auto' }}><table><thead><tr><th>{L('员工', 'Employee')}</th><th>{L('日期', 'Date')}</th><th>{L('原本', 'Current')}</th><th>{L('改为', 'New')}</th></tr></thead><tbody>
-          {plan.changes.map((c: any, i: number) => <tr key={i}><td><b>{c.code}</b> {c.name}</td><td>{c.date}{c.date <= t && <> <span className="b w">{L('会重算', 'recalc')}</span></>}</td><td>{lbl(c.from)}</td><td>{lbl(c.to)}</td></tr>)}
+        <div className="tw" style={{ marginTop: 12, maxHeight: 260, overflow: 'auto' }}><table><thead><tr><th>{L('PSD ID', 'PSD ID')}</th><th>{L('员工姓名', 'Employee Name')}</th><th>{L('日期', 'Date')}</th><th>{L('原本', 'Current')}</th><th>{L('改为', 'New')}</th></tr></thead><tbody>
+          {plan.changes.map((c: any, i: number) => <tr key={i}><td><b>{c.code}</b></td><td>{c.name}</td><td>{c.date}{c.date <= t && <> <span className="b w">{L('会重算', 'recalc')}</span></>}</td><td>{lbl(c.from)}</td><td>{lbl(c.to)}</td></tr>)}
         </tbody></table></div>
       )}
       {plan.errors.length > 0 && (
@@ -266,7 +266,7 @@ function History({ q, page, size, set }: { q: string; page: number; size: number
         <>
           <TblTop left={<Cnt n={data.total} />} size={size} onSize={(n) => set({ size: n, cpage: 1 })} />
           <div className="tw"><table className="grid tpltbl"><thead><tr>
-            <th>{L('时间', 'Time')}</th><th>{L('动作', 'Action')}</th><th>{L('员工 / 文件', 'Employee / File')}</th><th>{L('班次日期', 'Shift date')}</th>
+            <th>{L('PSD ID', 'PSD ID')}</th><th>{L('员工姓名 / 文件', 'Employee Name / File')}</th><th>{L('时间', 'Time')}</th><th>{L('动作', 'Action')}</th><th>{L('班次日期', 'Shift date')}</th>
             <th>{L('变更', 'Change')}</th><th>{L('原因', 'Reason')}</th><th>{L('操作人', 'By')}</th>
           </tr></thead><tbody>
             {data.rows.map((r) => {
@@ -274,9 +274,10 @@ function History({ q, page, size, set }: { q: string; page: number; size: number
               const imp = r.action === 'ROSTER_IMPORTED';
               return (
                 <tr key={r.id}>
+                  <td style={{ textAlign: 'left' }}>{imp ? <span className="mut">—</span> : <b>{r.employee_code ?? r.entity_id.split('@')[0]}</b>}</td>
+                  <td style={{ textAlign: 'left' }}>{imp ? <>📄 {r.entity_id}</> : r.name ?? <span className="mut">—</span>}</td>
                   <td className="nw">{fmtDT(r.created_at)}</td>
                   <td>{imp ? <span className="b i">{L('导入排班', 'Roster import')}</span> : <span className="b v">{L('换班', 'Shift change')}</span>}</td>
-                  <td style={{ textAlign: 'left' }}>{imp ? <>📄 {r.entity_id}</> : r.employee_code ? <><b>{r.employee_code}</b> {r.name}</> : r.entity_id.split('@')[0]}</td>
                   <td>{imp ? <span className="mut">—</span> : r.entity_id.split('@')[1] ?? ''}</td>
                   <td className="nw">{imp
                     ? L(`新增 ${a.added ?? 0} · 修改 ${a.changed ?? 0} · 取消 ${a.removed ?? 0}${a.skipped_errors ? ` · 跳过 ${a.skipped_errors}` : ''}`, `+${a.added ?? 0} added · ${a.changed ?? 0} changed · ${a.removed ?? 0} removed${a.skipped_errors ? ` · ${a.skipped_errors} skipped` : ''}`)

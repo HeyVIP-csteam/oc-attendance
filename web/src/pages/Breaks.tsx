@@ -31,7 +31,7 @@ export function Breaks() {
         <>
           <TblTop left={<Cnt n={data.total} />} size={f.size} onSize={(size) => set({ size, page: 1 })} />
           <div className="tw"><table className="brtbl"><thead><tr>
-            <th></th><th>{L('员工', 'Employee')}</th><th>{L('日期', 'Date')}</th><th>{L('班次', 'Shift')}</th><th className="n">{L('休息次数', 'Breaks')}</th>
+            <th>{L('PSD ID', 'PSD ID')}</th><th>{L('员工姓名', 'Employee Name')}</th><th>{L('日期', 'Date')}</th><th>{L('班次', 'Shift')}</th><th className="n">{L('休息次数', 'Breaks')}</th>
             <th className="n">{L('当日休息总时长', 'Total Daily Break')}</th><th>{L('状态', 'Status')}</th><th className="c">{L('超出', 'Exceeded')}</th>
           </tr></thead><tbody>
             {data.rows.map((r) => {
@@ -39,7 +39,7 @@ export function Breaks() {
               return (
                 <Fragment key={r.session_id}>
                   <tr className="cl" onClick={() => setOpen({ ...open, [r.session_id]: !o })}>
-                    <td>{o ? '▾' : '▸'}</td><td><b>{r.employee_code}</b> {r.name}</td><td>{r.work_date}</td><td>{r.shift_name ?? L('未排班', 'No schedule')}</td>
+                    <td className="nw"><span className="mut" style={{ display: 'inline-block', width: 14 }}>{o ? '▾' : '▸'}</span><b>{r.employee_code}</b></td><td>{r.name}</td><td>{r.work_date}</td><td>{r.shift_name ?? L('未排班', 'No schedule')}</td>
                     <td className="n">{r.break_count}{r.open_break_count > 0 && <> <span className="b r">+{r.open_break_count}</span></>}</td><td className="n">{fmtDur(r.total_break_ms)}</td>
                     <td>{r.open_break_count ? <span className="b w">{L('休息中', 'On break')}</span> : <span className="b ok">{L('全部结束', 'All closed')}</span>}</td>
                     <td className="c">{r.break_exceeded == null ? <Mut /> : r.break_exceeded ? <span className="b w">{L('是', 'Yes')}</span> : <span className="b ok">{L('否', 'No')}</span>}</td>
