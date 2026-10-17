@@ -32,11 +32,11 @@ export function Employees() {
         <>
           <TblTop left={<Cnt n={data.total} />} size={f.size} onSize={(size) => set({ size, page: 1 })} />
           <div className="tw"><table className="emtbl"><thead><tr>
-            <th>{L('PSD ID', 'PSD ID')}</th><th>{L('员工姓名', 'Employee Name')}</th><th className="c">{L('货币', 'Currency')}</th><th>{L('状态', 'Status')}</th><th>Topic（chat / thread）</th><th>Mapping</th><th className="c">{L('操作', 'Action')}</th>
+            <th className="pid">{L('PSD ID', 'PSD ID')}</th><th>{L('员工姓名', 'Employee Name')}</th><th>{L('货币', 'Currency')}</th><th>{L('状态', 'Status')}</th><th>Topic（chat / thread）</th><th>Mapping</th><th className="c">{L('操作', 'Action')}</th>
           </tr></thead><tbody>
             {data.rows.map((e) => (
               <tr key={e.id}>
-                <td><b>{e.employee_code}</b></td><td>{e.name}</td><td className="c"><CurB c={e.currency_code} /></td>
+                <td className="pid"><b>{e.employee_code}</b></td><td>{e.name}</td><td className="c"><CurB c={e.currency_code} /></td>
                 <td>{e.employment_status === 'ACTIVE' ? <span className="b ok">ACTIVE</span> : <span className="b">INACTIVE</span>}</td>
                 <td>{e.message_thread_id != null ? <><code>{e.chat_id}</code> / <b>#{e.message_thread_id}</b></> : <span className="b w">{L('未绑定 Topic', 'Topic not bound')}</span>}</td>
                 <td>{e.message_thread_id != null && <span className="b ok">{L('已验证', 'Verified')}</span>}</td>
@@ -62,7 +62,7 @@ function EmployeeModal({ id, onClose }: { id: number | null; onClose: () => void
   const [form, setForm] = useState<Record<string, string> | null>(null);
   const [err, setErr] = useState<ApiErr | Error | null>(null);
   const [busy, setBusy] = useState(false);
-  const knownChat = meta.rules.allowedChats[0] ?? '';
+  const knownChat = '';
   if (id && !data) return <Modal onClose={onClose}><div className="mut">…</div></Modal>;
   const cur = data?.mappings.find((m) => m.is_active);
   const v = form ?? {

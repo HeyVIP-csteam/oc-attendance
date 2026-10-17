@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { EVENT_LABEL, EVENT_TYPES, type EventType, STATUSES } from '../../../src/shared/codes';
 import { addDays } from '../../../src/shared/time';
-import { Cnt, CurB, CurrencyOptions, Drawer, EmpSearch, Empty, ErrBox, ExB, Field, KvList, Mut, Pager, ShiftChip, ShiftOptions, StatusBadge, StatusOptions, TblTop, jsonOrNull } from '../components/ui';
+import { Cnt, CurB, CurrencyOptions, Drawer, EmpSearch, Empty, ErrBox, ExB, Field, KvList, Mut, Pager, ShiftOptions, StatusBadge, StatusOptions, TblTop, jsonOrNull } from '../components/ui';
 import { api, type ApiErr, qs } from '../lib/api';
 import { exportCSV, exportXLSX } from '../lib/files';
 import { fmtDT, fmtDur, fmtMin, fmtT, fromLocalInput, hrs, LATE_RED, toLocalInput, today, TZ } from '../lib/format';
@@ -68,12 +68,12 @@ export function Attendance() {
         <>
           <TblTop left={<Cnt n={data.total} />} size={f.size} onSize={(size) => set({ size, page: 1 })} />
           <div className="tw"><table className="attbl"><thead><tr>
-            {COLS.map(([k, zh, en]) => <th key={k} className={`s ${['lateMin', 'earlyMin', 'completedBreaks', 'totalBreak', 'net'].includes(k) ? 'n' : ['cur', 'flags'].includes(k) ? 'c' : ''}`} onClick={() => sortBy(k)}>{L(zh, en)}{f.sort === k ? (f.dir > 0 ? ' ▲' : ' ▼') : ''}</th>)}
+            {COLS.map(([k, zh, en]) => <th key={k} className={`s ${k === 'emp' ? 'pid' : ['lateMin', 'earlyMin', 'completedBreaks', 'totalBreak', 'net'].includes(k) ? 'n' : ''}`} onClick={() => sortBy(k)}>{L(zh, en)}{f.sort === k ? (f.dir > 0 ? ' ▲' : ' ▼') : ''}</th>)}
           </tr></thead><tbody>
             {data.rows.map((r) => (
               <tr key={`${r.employee_id}|${r.work_date}`} className="cl" onClick={() => setOpen({ emp: r.employee_id, date: r.work_date })}>
-                <td><b>{r.employee_code}</b></td><td>{r.name}</td><td className="c"><CurB c={r.currency_code} /></td><td>{r.work_date}</td>
-                <td>{r.shift_code && <><ShiftChip code={r.shift_code} inline /> </>}{r.shift_name ?? L('未排班', 'No schedule')}</td>
+                <td className="pid"><b>{r.employee_code}</b></td><td>{r.name}</td><td className="c"><CurB c={r.currency_code} /></td><td>{r.work_date}</td>
+                <td>{r.shift_name ?? L('未排班', 'No schedule')}</td>
                 <td>{r.scheduled_start_at ? fmtT(r.scheduled_start_at) : <Mut />}</td><td>{r.actual_in_at ? fmtT(r.actual_in_at) : <Mut />}</td><td className="n">{num(r.late_min)}</td>
                 <td>{r.scheduled_end_at ? fmtT(r.scheduled_end_at) : <Mut />}</td><td>{r.actual_out_at ? fmtT(r.actual_out_at) : <Mut />}</td><td className="n">{num(r.early_min)}</td>
                 <td className="n">{r.break_count}{r.open_break_count > 0 && <> <span className="b r">+{r.open_break_count} {L('未结束', 'open')}</span></>}</td>

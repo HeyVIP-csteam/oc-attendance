@@ -100,7 +100,7 @@ export async function ingestUpdate(env: Env, bot: BotRow, upd: TgUpdate, receive
   const settings = parseSettings(setR.results as { key: string; value: string }[]);
   const rules: Rules = settings.rules;
   const mapping = threadId != null ? ((mapR.results[0] as unknown as MappingRow) ?? null) : null;
-  const allowed = rules.allowedChats.includes(chatId) || allowR.results.length > 0;
+  const allowed = allowR.results.length > 0; // only groups where at least one employee topic is bound
   if (!allowed) return { http: 200, status: 'IGNORED_CHAT', codes: [] };
 
   // Several currency bots may sit in one group: the bot of the employee's currency handles that employee's topic.

@@ -89,13 +89,12 @@ const RulesSchema = z.object({
   windowHours: z.number().int().min(1).max(8),
   lateAsException: z.boolean(),
   botReply: z.boolean(),
-  allowedChats: z.array(z.union([z.number().int(), z.string().regex(/^-?\d{5,20}$/)])).max(50),
 });
 
 settingsRoutes.put('/settings/rules', async (c) => {
   requireAdminRole(c);
   const v = await body(c, RulesSchema);
-  const rules = { ...v, allowedChats: [...new Set(v.allowedChats.map((c) => (/^\d{5,17}$/.test(String(c)) ? Number('-100' + c) : Number(c))))] };
+  const rules = { ...v };
   const db = c.env.DB;
   const now = Date.now();
   const before = await loadSettings(db);

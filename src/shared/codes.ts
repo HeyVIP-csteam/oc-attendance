@@ -71,7 +71,6 @@ export interface Rules {
   windowHours: number;        // shift matching window (hours before/after the scheduled shift)
   lateAsException: boolean;   // also list late / early leave as exceptions
   botReply: boolean;          // bot replies in the topic
-  allowedChats: number[];     // extra allowed chat ids (chat ids of active topic mappings are always allowed)
 }
 
 /** Fixed thresholds (not user-editable; removed from the UI by request). */
@@ -101,6 +100,6 @@ export interface ParserRules {
   typedTimeReview: boolean;
 }
 export const DEFAULT_PARSER: ParserRules = { skipLabels: [], typoTolerance: true, ignoreBrackets: true, typedTimeReview: true };
-export const DEFAULT_RULES: Rules = { windowHours: 4, lateAsException: false, botReply: true, allowedChats: [] };
+export const DEFAULT_RULES: Rules = { windowHours: 4, lateAsException: false, botReply: true };
 
 export const BIZ_TZ_DEFAULT = 'Asia/Colombo';

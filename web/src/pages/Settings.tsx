@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react';
 import { DEFAULT_PARSER, EVENT_LABEL, EVENT_TYPES, type KeywordConfig, type ParserRules } from '../../../src/shared/codes';
-import { buildKeywordIndex, parseText } from '../../../src/shared/parser';
 import { toMin } from '../../../src/shared/time';
 import { Empty, ErrBox, Field, Modal, ModalActions, Mut, Tabs } from '../components/ui';
 import { api, type ApiErr } from '../lib/api';
@@ -118,14 +117,11 @@ function Keywords() {
   const { L, dt } = useI18n();
   const { meta, reloadMeta, readOnly } = useData();
   const [kw, setKw] = useState(() => Object.fromEntries(EVENT_TYPES.map((k) => [k, meta.keywords[k].join('\n')])) as Record<string, string>);
-  const [test, setTest] = useState('');
   const [err, setErr] = useState('');
-  const onErr = useErr();
   const parsed = useMemo(() => Object.fromEntries(EVENT_TYPES.map((k) => [k, [...new Set(kw[k].split('\n').map((s) => s.trim()).filter(Boolean))]])) as unknown as KeywordConfig, [kw]);
   const [pr, setPr] = useState<ParserRules>(() => ({ ...DEFAULT_PARSER, ...meta.parser }));
   const [labels, setLabels] = useState(() => (meta.parser?.skipLabels ?? []).join('\n'));
   const rulesNow: ParserRules = useMemo(() => ({ ...pr, skipLabels: labels.split('\n').map((s) => s.trim()).filter(Boolean) }), [pr, labels]);
-  const res = test ? parseText(test, buildKeywordIndex(parsed, rulesNow)) : null;
   const saveRules = async () => {
     try { await api('/settings/parser', { method: 'PUT', body: rulesNow }); setErr(''); toast(L('读取规则已保存', 'Reading rules saved')); await reloadMeta(); }
     catch (e) { setErr(dt((e as ApiErr).msg)); }
@@ -141,27 +137,17 @@ function Keywords() {
     try { await api('/settings/keywords', { method: 'PUT', body: { keywords: parsed } }); setErr(''); toast(L('关键词已保存', 'Keywords saved')); await reloadMeta(); }
     catch (e) { setErr(dt((e as ApiErr).msg)); }
   };
-  const reparse = async () => {
-    try { const r = await api<{ count: number }>('/messages/reparse', { method: 'POST' }); toast(r.count ? L(`已重新解析 ${r.count} 条消息`, `Re-parsed ${r.count} messages`) : L('没有可以用新关键词匹配的待检查消息', 'No pending messages match the new keywords')); }
-    catch (e) { onErr(e); }
-  };
   return (
     <>
     <div className="card"><h3>{L('打卡关键词（每行一个，不区分大小写）', 'Punch keywords (one per line, case-insensitive)')}</h3>
       <div className="fg">{EVENT_TYPES.map((k) => <div key={k}><label>{k} · {dt(EVENT_LABEL[k])}</label><textarea rows={9} value={kw[k]} disabled={readOnly} onChange={(e) => setKw({ ...kw, [k]: e.target.value })} /></div>)}</div>
-      <div className="row" style={{ marginTop: 8 }}>
-        <Field label={L('测试解析', 'Test the parser')}><textarea rows={3} style={{ minWidth: 300 }} placeholder={L('输入一条消息试试', 'Type a message to test')} value={test} onChange={(e) => setTest(e.target.value)} /></Field>
-        <span style={{ paddingBottom: 6 }}>{res && (res.kind === 'PUNCH' ? <><span className="b ok">{res.type}</span>{res.fuzzy && <> <span className="b w">{L('容错匹配', 'Typo-tolerant')}</span></>} <span className="mut">{L('读取：', 'Read: ')}「{res.remark}」</span></>
-          : res.kind === 'UNRECOGNIZED' ? <span className="b w">{L('待检查（不会生成打卡）', 'Pending review (no punch created)')}：{res.reason === 'CONFLICT' ? L('包含多个动作', 'more than one action') : res.reason === 'TIME' ? L('包含自己写的时间', 'contains a typed time') : L('接近但不匹配', 'close, but no match')}</span>
-          : <span className="b">{L('忽略（普通聊天）', 'Ignored (chat)')}</span>)}</span>
-      </div>
       {err && <div className="err">{err}</div>}
-      {!readOnly && <div className="row" style={{ marginTop: 12 }}><button className="btn p" onClick={save}>{L('保存关键词', 'Save keywords')}</button><button className="btn" onClick={reparse}>{L('用新关键词重新解析「待检查」消息', 'Re-parse pending messages with new keywords')}</button></div>}
+      {!readOnly && <div className="row" style={{ marginTop: 12 }}><button className="btn p" onClick={save}>{L('保存关键词', 'Save keywords')}</button></div>}
     </div>
     <div className="card"><h3>{L('消息读取规则', 'Message reading rules')}</h3>
       <div className="fg">
         <div><label>{L('跳过的资料行（每行一个标签）', 'Lines to skip (one label per line)')}</label>
-          <textarea rows={8} value={labels} disabled={readOnly} placeholder={'Agent\nName\nCS Name\nDate'} onChange={(e) => setLabels(e.target.value)} />
+          <textarea rows={8} value={labels} disabled={readOnly} placeholder={L('例如：\nAgent\nName\nCS Name\nDate', 'e.g.\nAgent\nName\nCS Name\nDate')} onChange={(e) => setLabels(e.target.value)} />
           <div className="mut" style={{ fontSize: 12, marginTop: 4 }}>{L('以这些字开头、后面接「:」的整行会被忽略，例如 Agent: Nisha、Date: 16/10/2026。', 'A whole line starting with one of these followed by ":" is ignored, e.g. "Agent: Nisha", "Date: 16/10/2026".')}</div>
         </div>
         <div>
@@ -170,7 +156,6 @@ function Keywords() {
           {sw('typedTimeReview', '有自己写的时间 → 待检查', 'Typed time → review', L('例如 IN 08:30 不直接打卡，交给管理员确认；关闭则照样打卡。打卡时间一律用 Telegram 消息时间', 'e.g. "IN 08:30" goes to review; when off it punches. The Telegram message time is always used'))}
         </div>
       </div>
-      <div className="mut" style={{ fontSize: 12 }}>{L('上方「测试解析」会同时套用这里尚未保存的设定。', 'The parser test above already uses these (unsaved) settings.')}</div>
       {!readOnly && <div className="row" style={{ marginTop: 12 }}><button className="btn p" onClick={saveRules}>{L('保存读取规则', 'Save reading rules')}</button></div>}
     </div>
     </>
@@ -181,13 +166,11 @@ function Keywords() {
 function Rules() {
   const { L } = useI18n();
   const { meta, reloadMeta, readOnly } = useData();
-  const [v, setV] = useState({ win: String(meta.rules.windowHours), lx: meta.rules.lateAsException ? '1' : '0', bot: meta.rules.botReply ? '1' : '0', chats: meta.rules.allowedChats.join(',') });
+  const [v, setV] = useState({ win: String(meta.rules.windowHours), lx: meta.rules.lateAsException ? '1' : '0', bot: meta.rules.botReply ? '1' : '0' });
   const onErr = useErr();
   const save = async () => {
-    const chats = v.chats.split(',').map((s) => s.trim()).filter(Boolean);
-    if (chats.some((c) => !/^-?\d{5,20}$/.test(c))) { toast(L('Chat ID 格式错误', 'Invalid Chat ID')); return; }
     try {
-      await api('/settings/rules', { method: 'PUT', body: { windowHours: Math.min(8, Math.max(1, Number(v.win) || 1)), lateAsException: v.lx === '1', botReply: v.bot === '1', allowedChats: chats } });
+      await api('/settings/rules', { method: 'PUT', body: { windowHours: Math.min(8, Math.max(1, Number(v.win) || 1)), lateAsException: v.lx === '1', botReply: v.bot === '1' } });
       toast(L('设置已保存，计算已更新', 'Settings saved; results updated'));
       await reloadMeta();
     } catch (e) { onErr(e); }
@@ -198,7 +181,6 @@ function Rules() {
         <div className="setrow"><label htmlFor="stWin">{L('班次匹配窗口（排班前后小时）', 'Shift matching window (hours before/after)')}</label><div className="setctl"><input id="stWin" type="number" min={1} max={8} value={v.win} disabled={readOnly} onChange={(e) => setV({ ...v, win: e.target.value })} /></div></div>
         <div className="setrow"><label htmlFor="stLx">{L('迟到/早退是否也列为异常', 'Also list late / early leave as exceptions')}</label><div className="setctl"><select id="stLx" value={v.lx} disabled={readOnly} onChange={(e) => setV({ ...v, lx: e.target.value })}><option value="0">{L('否，只显示状态', 'No, status only')}</option><option value="1">{L('是', 'Yes')}</option></select></div></div>
         <div className="setrow"><label htmlFor="stBot">{L('Bot 在 Topic 回复确认', 'Bot replies in the topic')}</label><div className="setctl"><select id="stBot" value={v.bot} disabled={readOnly} onChange={(e) => setV({ ...v, bot: e.target.value })}><option value="1">{L('开启', 'On')}</option><option value="0">{L('关闭', 'Off')}</option></select></div></div>
-        <div className="setrow"><label htmlFor="stChats">{L('允许的 Chat ID（逗号分隔）', 'Allowed Chat IDs (comma-separated)')}</label><div className="setctl"><input id="stChats" type="text" value={v.chats} disabled={readOnly} placeholder={L('员工资料中的 Chat ID 会自动允许', 'Chat IDs in employee profiles are allowed automatically')} onChange={(e) => setV({ ...v, chats: e.target.value })} /></div></div>
       </div>
       {!readOnly && <div className="setfoot"><button className="btn p" onClick={save}>{L('保存规则', 'Save rules')}</button></div>}
     </div>

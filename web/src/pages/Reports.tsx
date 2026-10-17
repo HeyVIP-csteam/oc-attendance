@@ -27,7 +27,7 @@ export function Reports() {
   const title = !f.status ? L('员工出勤', 'Employee Attendance') : f.status === 'MISSING' ? L('任何缺卡', 'Any missing punch') : dt((STATUSES as any)[f.status]?.label ?? f.status);
   let cols: string[] = [];
   let rows: (string | number)[][] = [];
-  let left: number[] = [0, 1];
+  const left: number[] = [0]; // PSD ID
   if (data?.mode === 'summary') {
     cols = L('PSD ID|员工姓名|排班|出勤|缺勤|迟到次数|迟到时长|早退次数|早退时长|休息次数|休息总时长(h)|总工时(h)|异常数', 'PSD ID|Employee Name|Scheduled|Present|Absent|Late (times)|Late (time)|Early (times)|Early (time)|Breaks|Total Break (h)|Total Shift (h)|Exceptions').split('|');
     rows = (data.rows as SummaryRow[]).map((a) => [a.employee_code, a.name, a.scheduled, a.present, a.absent, a.late_times, a.late_min ? fmtMin(a.late_min) : 0, a.early_times, a.early_min ? fmtMin(a.early_min) : 0, a.breaks, hrs(a.break_ms), hrs(a.shift_ms), a.exceptions]);
@@ -55,8 +55,8 @@ export function Reports() {
           <TblTop left={<h3 style={{ margin: 0 }}>{title} · {from} → {to} · {L(`${data.total} 行`, `${data.total} rows`)} · {L('斯里兰卡时间', 'Sri Lanka time')}</h3>} size={f.size} onSize={(size) => set({ size, page: 1 })} />
           {rows.length ? (
             <>
-              <div className="tw"><table><thead><tr>{cols.map((c, i) => <th key={i} className={left.includes(i) ? '' : 'c'}>{c}</th>)}</tr></thead><tbody>
-                {rows.map((r, j) => <tr key={j}>{r.map((v, i) => <td key={i} className={left.includes(i) ? '' : 'c'}>{v}</td>)}</tr>)}
+              <div className="tw"><table><thead><tr>{cols.map((c, i) => <th key={i} className={left.includes(i) ? 'pid' : ''}>{c}</th>)}</tr></thead><tbody>
+                {rows.map((r, j) => <tr key={j}>{r.map((v, i) => <td key={i} className={left.includes(i) ? 'pid' : ''}>{i === 0 ? <b>{v}</b> : v}</td>)}</tr>)}
               </tbody></table></div>
               <Pager total={data.total} page={f.page} size={f.size} onPage={(page) => set({ page })} />
             </>

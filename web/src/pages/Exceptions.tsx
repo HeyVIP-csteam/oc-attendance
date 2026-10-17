@@ -42,14 +42,14 @@ function ExList({ f, set }: { f: { code: string; sev: string; status: string; q:
         <>
           <TblTop left={<Cnt n={data.total} />} size={f.size} onSize={(size) => set({ size, page: 1 })} />
           <div className="tw"><table className="grid extbl"><thead><tr>
-            <th>{L('PSD ID', 'PSD ID')}</th><th>{L('员工姓名', 'Employee Name')}</th><th>{L('日期', 'Date')}</th><th>{L('类型', 'Type')}</th><th>{L('严重级', 'Severity')}</th><th>{L('原始消息', 'Raw message')}</th><th>{L('说明', 'Detail')}</th>
+            <th className="pid">{L('PSD ID', 'PSD ID')}</th><th>{L('员工姓名', 'Employee Name')}</th><th>{L('日期', 'Date')}</th><th>{L('类型', 'Type')}</th><th>{L('严重级', 'Severity')}</th><th>{L('原始消息', 'Raw message')}</th><th>{L('说明', 'Detail')}</th>
             <th>{L('状态', 'Status')}</th><th>{L('编辑人', 'By')}</th><th>{L('更新时间', 'Update Time')}</th><th className="c">{L('操作', 'Action')}</th>
           </tr></thead><tbody>
             {data.rows.map((x) => (
               <tr key={x.id}>
-                <td className="nw">{x.employee_code ? <b>{x.employee_code}</b> : <span className="b r">{L('未知', 'Unknown')}</span>}</td><td className="nw">{x.name ?? <span className="mut">—</span>}</td>
+                <td className="nw pid">{x.employee_code ? <b>{x.employee_code}</b> : <span className="b r">{L('未知', 'Unknown')}</span>}</td><td className="nw">{x.name ?? <span className="mut">—</span>}</td>
                 <td className="nw">{fmtDT(x.occurred_at)}</td><td><ExB code={x.code} /></td><td><SevB sev={x.severity} /></td>
-                <td>{x.raw_text != null ? <>「{x.raw_text}」<div className="mut" style={{ fontSize: 11 }}>thread {x.message_thread_id ?? 'General'}</div></> : <span className="mut">—</span>}</td>
+                <td>{x.raw_text != null ? <>「{x.raw_text}」</> : <span className="mut">—</span>}</td>
                 <td>{x.detail ? dt(parseBi(x.detail)) : <span className="mut">—</span>}</td>
                 <td><span className={`b ${x.status === 'OPEN' ? 'w' : x.status === 'RESOLVED' ? 'ok' : ''}`} title={x.note ?? undefined}>{stLabel(x.status, L)}</span></td>
                 <td className="nw">{x.handled_by ?? <span className="mut">—</span>}</td><td className="nw">{x.handled_at ? fmtDT(x.handled_at) : <span className="mut">—</span>}</td>
@@ -141,7 +141,7 @@ function AuditList({ page, size, onPage, onSize }: { page: number; size: number;
           <div className="tw"><table className="grid autbl"><thead><tr><th>{L('时间', 'Time')}</th><th>Actor</th><th>Action</th><th>Entity</th><th>Before</th><th>After</th><th>Note</th></tr></thead><tbody>
             {data.rows.map((a) => {
               const b = jsonOrNull(a.before_json);
-              return <tr key={a.id}><td>{fmtDT(a.created_at)}</td><td>{a.actor}</td><td><span className="b i">{a.action}</span></td><td>{a.entity_type} #{a.entity_id}</td><td><KvList obj={b} /></td><td><KvList obj={jsonOrNull(a.after_json)} other={b} /></td><td style={{ minWidth: 220, maxWidth: 340, overflowWrap: 'anywhere' }}>{a.note}</td></tr>;
+              return <tr key={a.id}><td className="nw">{fmtDT(a.created_at)}</td><td className="nw">{a.actor}</td><td><span className="b i">{a.action}</span></td><td>{a.entity_type} #{a.entity_id}</td><td><KvList obj={b} /></td><td><KvList obj={jsonOrNull(a.after_json)} other={b} /></td><td style={{ minWidth: 220, maxWidth: 340, overflowWrap: 'anywhere' }}>{a.note}</td></tr>;
             })}
           </tbody></table></div>
           <Pager total={data.total} page={page} size={size} onPage={onPage} />
