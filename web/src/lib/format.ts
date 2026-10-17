@@ -8,6 +8,13 @@ export const fmtDT = (ms: number | null | undefined) => fmtDateTime(ms, TZ);
 export const fmtDur = (ms: number | null | undefined) => fmtDuration(ms);
 export const hrs = (ms: number | null | undefined) => (ms == null ? '—' : (ms / HOUR).toFixed(2));
 export const today = () => localDate(Date.now(), TZ);
+/** Whole minutes → "45m" / "7h 19m" (late and early leave are stored in minutes). */
+export const fmtMin = (m: number | null | undefined): string => {
+  if (m == null) return '—';
+  if (m < 60) return `${m}m`;
+  return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`;
+};
+export const LATE_RED = '#e60012';
 
 export function toLocalInput(ms: number): string {
   const p = wallParts(ms, TZ);

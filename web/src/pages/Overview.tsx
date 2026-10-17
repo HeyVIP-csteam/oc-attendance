@@ -2,7 +2,7 @@ import { ArcElement, CategoryScale, Chart, DoughnutController, Filler, Legend, L
 import { type ReactNode, useEffect, useRef } from 'react';
 import { CurrencyOptions, ErrBox, Field, ShiftOptions } from '../components/ui';
 import { qs } from '../lib/api';
-import { today } from '../lib/format';
+import { fmtMin, today } from '../lib/format';
 import { useI18n } from '../lib/i18n';
 import { useApi, usePageState } from '../lib/store';
 
@@ -52,8 +52,8 @@ export function Overview() {
             {k(L('今日应到', 'Expected Today'), d.expected, L('有班次实例', 'with a shift instance'))}
             {k(L('工作中', 'Currently Working'), d.working, L('实时', 'live'))}
             {k(L('休息中', 'Currently On Break'), d.onBreak, L('实时', 'live'))}
-            {k(L('迟到人数', 'Late Employees'), d.late, L(`合计 ${d.lateMin} 分钟`, `${d.lateMin} min total`), 'kw')}
-            {k(L('早退人数', 'Early Leave'), d.early, L(`合计 ${d.earlyMin} 分钟`, `${d.earlyMin} min total`), 'kw')}
+            {k(L('迟到人数', 'Late Employees'), d.late, L(`合计 ${fmtMin(d.lateMin)}`, `${fmtMin(d.lateMin)} total`), 'kw')}
+            {k(L('早退人数', 'Early Leave'), d.early, L(`合计 ${fmtMin(d.earlyMin)}`, `${fmtMin(d.earlyMin)} total`), 'kw')}
             {k(L('出勤率', 'Attendance Rate'), pct(d.startedPresent, d.started), L(`${d.startedPresent}/${d.started} 已开始班次`, `${d.startedPresent}/${d.started} started shifts`), 'kg')}
             {k(L('迟到率', 'Late Rate'), pct(d.late, d.clockedIn), L('迟到 / 已打卡', 'late / clocked in'))}
           </div>

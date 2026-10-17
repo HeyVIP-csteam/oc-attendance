@@ -41,8 +41,12 @@ employeeRoutes.get('/employees/:id', async (c) => {
     stmt(db, 'SELECT * FROM employees WHERE id = ?', id),
     stmt(db, 'SELECT id, chat_id, message_thread_id, valid_from, valid_until, is_active, created_by FROM telegram_topic_mappings WHERE employee_id = ? ORDER BY valid_from DESC', id),
   ]);
-  if (!e.results[0]) throw notFound('Employee not found');
-  return c.json({ employee: e.results[0], mappings: maps.results });
+  const emp = e.results[0] as { employee_code: string } | undefined;
+  if (!emp) throw notFound('Employee not found');
+  // change log of this employee's profile and topic binding (append-only audit log)
+  const changes = await all(db, `SELECT id, created_at, actor, action, before_json, after_json, note FROM audit_logs
+    WHERE entity_type IN ('employee', 'telegram_topic_mapping') AND entity_id = ? ORDER BY created_at DESC, id DESC LIMIT 100`, emp.employee_code);
+  return c.json({ employee: emp, mappings: maps.results, changes });
 });
 
 const EmpSchema = z.object({

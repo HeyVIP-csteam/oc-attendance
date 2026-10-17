@@ -4,7 +4,7 @@ import { addDays } from '../../../src/shared/time';
 import { Cnt, CurB, CurrencyOptions, Drawer, EmpSearch, Empty, ErrBox, ExB, Field, KvList, Mut, Pager, ShiftChip, ShiftOptions, StatusBadge, StatusOptions, TblTop, jsonOrNull } from '../components/ui';
 import { api, type ApiErr, qs } from '../lib/api';
 import { exportCSV, exportXLSX } from '../lib/files';
-import { fmtDT, fmtDur, fmtT, fromLocalInput, hrs, toLocalInput, today, TZ } from '../lib/format';
+import { fmtDT, fmtDur, fmtMin, fmtT, fromLocalInput, hrs, LATE_RED, toLocalInput, today, TZ } from '../lib/format';
 import { parseBi, useI18n } from '../lib/i18n';
 import { toast, useApi, useData, usePageState } from '../lib/store';
 
@@ -51,7 +51,7 @@ export function Attendance() {
     } catch (e) { toast(dt((e as ApiErr).msg ?? { zh: '导出失败', en: 'Export failed' })); }
   };
   const sortBy = (k: string) => set({ sort: k, dir: f.sort === k ? -f.dir : 1, page: 1 });
-  const num = (v: number | null) => (v ? <b style={{ color: 'var(--warn)' }}>{v}</b> : v === 0 ? '0' : '—');
+  const num = (v: number | null) => (v ? <b style={{ color: LATE_RED }}>{fmtMin(v)}</b> : v === 0 ? '0' : '—');
   return (
     <>
       <div className="card"><div className="row">
@@ -151,9 +151,9 @@ export function SessionDrawer({ emp, date, onClose }: { emp: number; date: strin
           <div className="kv">
             <div><span>{L('状态', 'Status')}</span>{s ? <StatusBadge st={s.status} /> : '—'}</div><div><span>{L('缺卡', 'Missing Punch')}</span><b>{s?.missing ?? '—'}</b></div>
             <div><span>{L('排班上班', 'Scheduled In')}</span><b>{fmtDT(s?.scheduled_start_at)}</b></div><div><span>{L('实际上班', 'Actual In')}</span><b>{fmtDT(s?.actual_in_at)}</b></div>
-            <div><span>{L('迟到分钟', 'Late Minutes')}</span><b>{s?.late_min ?? '—'}</b> <span className="mut">{L('宽限', 'grace')} {inst ? inst.late_grace_min : '—'}m</span></div>
+            <div><span>{L('迟到', 'Late')}</span><b style={s?.late_min ? { color: LATE_RED } : undefined}>{s?.late_min ? fmtMin(s.late_min) : s?.late_min ?? '—'}</b> <span className="mut">{L('宽限', 'grace')} {inst ? inst.late_grace_min : '—'}m</span></div>
             <div><span>{L('排班下班', 'Scheduled Out')}</span><b>{fmtDT(s?.scheduled_end_at)}</b></div><div><span>{L('实际下班', 'Actual Out')}</span><b>{fmtDT(s?.actual_out_at)}</b></div>
-            <div><span>{L('早退分钟', 'Early Leave Minutes')}</span><b>{s?.early_min ?? '—'}</b> <span className="mut">{L('宽限', 'grace')} {inst ? inst.early_grace_min : '—'}m</span></div>
+            <div><span>{L('早退', 'Early Leave')}</span><b style={s?.early_min ? { color: LATE_RED } : undefined}>{s?.early_min ? fmtMin(s.early_min) : s?.early_min ?? '—'}</b> <span className="mut">{L('宽限', 'grace')} {inst ? inst.early_grace_min : '—'}m</span></div>
             <div><span>{L('班次总时长', 'Total Shift')}</span><b>{fmtDur(s?.shift_duration_ms)}</b></div><div><span>{L('休息（完成 / 未结束）', 'Breaks (done / open)')}</span><b>{s ? `${s.break_count} / ${s.open_break_count}` : '—'}</b></div>
             <div><span>{L('休息总时长', 'Total Break')}</span><b>{fmtDur(s?.total_break_ms ?? 0)}</b></div>
             <div><span>{L('净工时', 'Net Worked')}</span><b>{s?.net_worked_ms == null ? L('—（不完整）', '— (incomplete)') : `${fmtDur(s.net_worked_ms)} · ${hrs(s.net_worked_ms)}h`}</b></div>

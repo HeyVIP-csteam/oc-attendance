@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Cnt, CurB, CurrencyOptions, EmpSearch, ErrBox, Field, Modal, ModalActions, Pager, TblTop } from '../components/ui';
+import { Cnt, CurB, CurrencyOptions, EmpSearch, ErrBox, Field, jsonOrNull, KvList, Modal, ModalActions, Pager, TblTop } from '../components/ui';
 import { api, type ApiErr, qs } from '../lib/api';
 import { fmtDT } from '../lib/format';
 import { useI18n } from '../lib/i18n';
@@ -13,6 +13,7 @@ export function Employees() {
   const [f, set] = usePageState('em', () => ({ q: '', status: 'ACTIVE', page: 1, size: 10 }));
   const { data, error } = useApi<{ total: number; rows: EmpRow[] }>(`/employees?${qs(f)}`);
   const [edit, setEdit] = useState<number | 'new' | null>(null);
+  const [hist, setHist] = useState<number | null>(null);
   const deactivate = async (e: EmpRow) => {
     const reason = prompt(L(`停用 ${e.employee_code} ${e.name}？历史考勤会保留。请输入原因：`, `Deactivate ${e.employee_code} ${e.name}? History is kept. Enter a reason:`));
     if (!reason) return;
@@ -38,8 +39,8 @@ export function Employees() {
                 <td><b>{e.employee_code}</b></td><td>{e.name}</td><td className="c"><CurB c={e.currency_code} /></td>
                 <td>{e.employment_status === 'ACTIVE' ? <span className="b ok">ACTIVE</span> : <span className="b">INACTIVE</span>}</td>
                 <td>{e.message_thread_id != null ? <><code>{e.chat_id}</code> / <b>#{e.message_thread_id}</b></> : <span className="b w">{L('未绑定 Topic', 'Topic not bound')}</span>}</td>
-                <td>{e.message_thread_id != null && <span className="b ok">{L('已验证', 'Verified')}</span>}{e.mapping_count > 1 && <> <span className="b v">{L(`${e.mapping_count} 条历史`, `${e.mapping_count} history`)}</span></>}</td>
-                <td>{!readOnly && <><button className="btn sm" onClick={() => setEdit(e.id)}>{L('编辑', 'Edit')}</button> {e.employment_status === 'ACTIVE' && <button className="btn sm d" onClick={() => deactivate(e)}>{L('停用', 'Deactivate')}</button>}</>}</td>
+                <td>{e.message_thread_id != null && <span className="b ok">{L('已验证', 'Verified')}</span>}</td>
+                <td><button className="btn sm" onClick={() => setHist(e.id)}>{L('历史', 'History')}</button>{!readOnly && <> <button className="btn sm" onClick={() => setEdit(e.id)}>{L('编辑', 'Edit')}</button> {e.employment_status === 'ACTIVE' && <button className="btn sm d" onClick={() => deactivate(e)}>{L('停用', 'Deactivate')}</button>}</>}</td>
               </tr>
             ))}
           </tbody></table></div>
@@ -47,11 +48,12 @@ export function Employees() {
         </>
       )}
       {edit != null && <EmployeeModal id={edit === 'new' ? null : edit} onClose={() => setEdit(null)} />}
+      {hist != null && <HistoryModal id={hist} onClose={() => setHist(null)} />}
     </>
   );
 }
 
-interface EmpDetail { employee: { id: number; employee_code: string; name: string; currency_code: string | null; default_shift_id: number | null; timezone: string }; mappings: { id: number; chat_id: number; message_thread_id: number; valid_from: number; valid_until: number | null; is_active: number; created_by: string }[] }
+interface EmpDetail { changes?: { id: number; created_at: number; actor: string; action: string; before_json: string | null; after_json: string | null; note: string | null }[]; employee: { id: number; employee_code: string; name: string; currency_code: string | null; default_shift_id: number | null; timezone: string }; mappings: { id: number; chat_id: number; message_thread_id: number; valid_from: number; valid_until: number | null; is_active: number; created_by: string }[] }
 
 function EmployeeModal({ id, onClose }: { id: number | null; onClose: () => void }) {
   const { L } = useI18n();
@@ -98,16 +100,45 @@ function EmployeeModal({ id, onClose }: { id: number | null; onClose: () => void
         <div><label>Chat ID</label><input type="text" value={v.chat} placeholder="-100..." onChange={(e) => upd('chat', e.target.value)} /></div>
         <div><label>Topic message_thread_id</label><input type="text" value={v.thread} placeholder={L('留空 = 不绑定', 'Empty = not bound')} onChange={(e) => upd('thread', e.target.value)} /></div>
       </div>
-      {data && data.mappings.length > 0 && (
-        <>
-          <h4 className="subh">{L('绑定历史', 'Binding history')}</h4>
-          <div className="tw"><table className="histbl"><thead><tr><th>Topic</th><th>{L('开始', 'From')}</th><th>{L('结束', 'Until')}</th><th>{L('设置人', 'By')}</th></tr></thead><tbody>
-            {data.mappings.map((h) => <tr key={h.id}><td>#{h.message_thread_id}</td><td>{fmtDT(h.valid_from)}</td><td>{h.valid_until ? fmtDT(h.valid_until) : <span className="b ok">{L('有效', 'Active')}</span>}</td><td>{h.created_by}</td></tr>)}
-          </tbody></table></div>
-        </>
-      )}
       <div style={{ marginTop: 10 }}><ErrBox error={err} /></div>
       <ModalActions onCancel={onClose} onOk={save} busy={busy} />
+    </Modal>
+  );
+}
+
+const ACTION_LABEL: Record<string, [string, string]> = {
+  EMPLOYEE_CREATED: ['新增员工', 'Employee created'], EMPLOYEE_UPDATED: ['修改资料', 'Profile updated'], EMPLOYEE_DEACTIVATED: ['停用', 'Deactivated'],
+  TOPIC_MAPPING_CHANGED: ['更换 Topic', 'Topic changed'], TOPIC_MAPPING_REMOVED: ['解除 Topic', 'Topic removed'],
+};
+
+function HistoryModal({ id, onClose }: { id: number; onClose: () => void }) {
+  const { L } = useI18n();
+  const { data, error } = useApi<EmpDetail>(`/employees/${id}`);
+  return (
+    <Modal onClose={onClose} wide>
+      <h3 style={{ marginTop: 0 }}>{L('历史', 'History')} · {data ? `${data.employee.employee_code} ${data.employee.name}` : '…'}</h3>
+      <ErrBox error={error} />
+      {data && (
+        <>
+          <h4 className="subh" style={{ marginTop: 6 }}>{L('Topic 绑定历史', 'Topic binding history')}</h4>
+          {data.mappings.length ? (
+            <div className="tw"><table className="histbl"><thead><tr><th>Topic</th><th>Chat ID</th><th>{L('开始', 'From')}</th><th>{L('结束', 'Until')}</th><th>{L('设置人', 'By')}</th></tr></thead><tbody>
+              {data.mappings.map((h) => <tr key={h.id}><td>#{h.message_thread_id}</td><td><code>{h.chat_id}</code></td><td>{fmtDT(h.valid_from)}</td><td>{h.valid_until ? fmtDT(h.valid_until) : <span className="b ok">{L('有效', 'Active')}</span>}</td><td>{h.created_by}</td></tr>)}
+            </tbody></table></div>
+          ) : <div className="mut">{L('没有绑定记录', 'No bindings yet')}</div>}
+          <h4 className="subh">{L('资料修改记录', 'Change log')}</h4>
+          {data.changes && data.changes.length ? (
+            <div className="tw"><table className="grid histbl"><thead><tr><th>{L('时间', 'Time')}</th><th>{L('动作', 'Action')}</th><th>{L('修改前', 'Before')}</th><th>{L('修改后', 'After')}</th><th>{L('操作人', 'By')}</th></tr></thead><tbody>
+              {data.changes.map((c) => {
+                const b = jsonOrNull(c.before_json);
+                const lbl = ACTION_LABEL[c.action];
+                return <tr key={c.id}><td className="nw">{fmtDT(c.created_at)}</td><td><span className="b i">{lbl ? L(lbl[0], lbl[1]) : c.action}</span>{c.note && <div className="mut" style={{ fontSize: 11.5, marginTop: 2, whiteSpace: 'normal' }}>{c.note}</div>}</td><td><KvList obj={b} /></td><td><KvList obj={jsonOrNull(c.after_json)} other={b} /></td><td>{c.actor}</td></tr>;
+              })}
+            </tbody></table></div>
+          ) : <div className="mut">{L('没有修改记录', 'No changes yet')}</div>}
+          <ModalActions onCancel={onClose} />
+        </>
+      )}
     </Modal>
   );
 }
