@@ -48,9 +48,10 @@ describe('Telegram webhook', () => {
     expect(h.db.get('SELECT COUNT(*) AS n FROM telegram_messages')).toEqual({ n: 0 });
   });
 
-  it('unknown bot path → 404; stopped bot → 503', async () => {
+  it('unknown currency path → 404; bot mid-setup (NOT_SET) with a valid secret is accepted; stopped bot → 503', async () => {
     const { h } = await fixture();
-    expect((await h.send({ text: 'IN', ts: lk(D, '07:00'), thread: 1001, code: 'USD' })).status).toBe(404);
+    expect((await h.send({ text: 'IN', ts: lk(D, '07:00'), thread: 1001, code: 'XYZ', secret: 'x' })).status).toBe(404);
+    expect((await h.send({ text: 'IN', ts: lk(D, '07:00'), thread: 1001, code: 'USD' })).status).toBe(200);
     await h.req('POST', '/api/bots/LKR/stop');
     expect((await h.send({ text: 'IN', ts: lk(D, '07:00'), thread: 1001 })).status).toBe(503);
   });

@@ -81,7 +81,7 @@ tr.cl{cursor:pointer}
 .tw th{white-space:nowrap}
 /* 对齐：考勤明细 / 休息管理 / 员工 —— 除员工姓名栏外全部居中 */
 .tw .attbl th,.tw .attbl td,.tw .brtbl th,.tw .brtbl td,.tw .emtbl th,.tw .emtbl td{text-align:center}
-.tw .attbl th:nth-child(1),.tw .attbl td:nth-child(1),.tw .brtbl th:nth-child(2),.tw .brtbl td:nth-child(2),.tw .emtbl th:nth-child(2),.tw .emtbl td:nth-child(2){text-align:left}
+.tw .attbl th:nth-child(1),.tw .attbl td:nth-child(1),.tw .attbl th:nth-child(2),.tw .attbl td:nth-child(2),.tw .brtbl th:nth-child(2),.tw .brtbl td:nth-child(2),.tw .emtbl th:nth-child(2),.tw .emtbl td:nth-child(2){text-align:left}
 /* 异常：类型、严重级、员工、原始消息、状态、编辑人、更新时间 居中 */
 .tw .extbl th:is(:nth-child(2),:nth-child(3),:nth-child(4),:nth-child(5),:nth-child(7),:nth-child(8),:nth-child(9),:nth-child(10)),.tw .extbl td:is(:nth-child(2),:nth-child(3),:nth-child(4),:nth-child(5),:nth-child(7),:nth-child(8),:nth-child(9),:nth-child(10)){text-align:center}
 /* Audit Log：时间、Actor、Action、Entity 居中 */

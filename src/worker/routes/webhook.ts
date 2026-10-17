@@ -11,7 +11,7 @@ const MAX_BODY = 64 * 1024;
 
 /**
  * POST /api/telegram/webhook/:code   (one URL per currency bot)
- * Responses: 200 = handled (including ignored/duplicate) · 401 = wrong secret · 404 = unknown bot ·
+ * Responses: 200 = handled (including ignored/duplicate) · 401 = wrong secret · 404 = unknown currency ·
  *            503 = bot stopped · 500 = storage failure (Telegram retries the update later).
  */
 webhookRoutes.post('/webhook/:code', async (c) => {
@@ -19,7 +19,9 @@ webhookRoutes.post('/webhook/:code', async (c) => {
   const code = c.req.param('code').toUpperCase();
   if (!/^[A-Z0-9]{2,10}$/.test(code)) return c.json({ ok: false }, 404);
   const bot = await loadBot(c.env.DB, code);
-  if (!bot || bot.status === 'NOT_SET') return c.json({ ok: false }, 404);
+  // A NOT_SET bot is accepted when the secret matches: right after "Save", Telegram may deliver queued
+  // updates before the ACTIVE status is written, and a 404 there would show up as a webhook error.
+  if (!bot) return c.json({ ok: false }, 404);
 
   let expected: string;
   try { expected = await webhookSecret(c.env.ENCRYPTION_KEY, bot.id, bot.secret_salt); }

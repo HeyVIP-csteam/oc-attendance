@@ -208,7 +208,13 @@ async function botAction(c: Context<AppBindings>, action: 'check' | 'stop' | 'st
       const me = await tgCall<TgUser>(token, 'getMe');
       const info = await tgCall<TgWebhookInfo>(token, 'getWebhookInfo');
       const urlOk = bot.status !== 'ACTIVE' || info.url === bot.webhook_url;
-      const lastErr = !urlOk ? `Webhook URL mismatch: Telegram has "${info.url || '(none)'}"` : info.last_error_message ? `${info.last_error_message}${info.last_error_date ? ` @ ${new Date(info.last_error_date * 1000).toISOString()}` : ''}` : null;
+      // Telegram keeps reporting its last delivery error for a long time; once a later update has been
+      // received and nothing is queued, the error is history and is no longer shown.
+      const errAt = info.last_error_date ? info.last_error_date * 1000 : null;
+      const recovered = !!info.last_error_message && errAt != null && !info.pending_update_count &&
+        !!(await first(db, 'SELECT id FROM telegram_messages WHERE bot_id = ? AND received_at > ? LIMIT 1', bot.id, errAt));
+      const lastErr = !urlOk ? `Webhook URL mismatch: Telegram has "${info.url || '(none)'}"`
+        : info.last_error_message && !recovered ? `${info.last_error_message}${errAt ? ` @ ${new Date(errAt).toISOString()}` : ''}` : null;
       await db.batch([stmt(db, `UPDATE telegram_bots SET can_read_all_group_messages = ?, pending_update_count = ?, last_error = ?, last_checked_at = ?, status = ?, updated_at = ? WHERE id = ?`,
         me.can_read_all_group_messages ? 1 : 0, info.pending_update_count, lastErr, now, bot.status === 'ACTIVE' && !urlOk ? 'ERROR' : bot.status, now, bot.id), bump(db, now)]);
       return c.json({ ok: true, pending: info.pending_update_count, url: info.url, canReadAllGroupMessages: !!me.can_read_all_group_messages, lastError: lastErr });

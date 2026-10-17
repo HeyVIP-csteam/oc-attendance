@@ -27,14 +27,13 @@ export function Reports() {
   const title = !f.status ? L('员工出勤', 'Employee Attendance') : f.status === 'MISSING' ? L('任何缺卡', 'Any missing punch') : dt((STATUSES as any)[f.status]?.label ?? f.status);
   let cols: string[] = [];
   let rows: (string | number)[][] = [];
-  let left: number[] = [0];
+  let left: number[] = [0, 1];
   if (data?.mode === 'summary') {
-    cols = L('名称|排班|出勤|缺勤|迟到次数|迟到时长|早退次数|早退时长|休息次数|休息总时长(h)|总工时(h)|异常数', 'Name|Scheduled|Present|Absent|Late (times)|Late (time)|Early (times)|Early (time)|Breaks|Total Break (h)|Total Shift (h)|Exceptions').split('|');
-    rows = (data.rows as SummaryRow[]).map((a) => [`${a.employee_code} ${a.name}`, a.scheduled, a.present, a.absent, a.late_times, a.late_min ? fmtMin(a.late_min) : 0, a.early_times, a.early_min ? fmtMin(a.early_min) : 0, a.breaks, hrs(a.break_ms), hrs(a.shift_ms), a.exceptions]);
+    cols = L('PSD ID|员工姓名|排班|出勤|缺勤|迟到次数|迟到时长|早退次数|早退时长|休息次数|休息总时长(h)|总工时(h)|异常数', 'PSD ID|Employee Name|Scheduled|Present|Absent|Late (times)|Late (time)|Early (times)|Early (time)|Breaks|Total Break (h)|Total Shift (h)|Exceptions').split('|');
+    rows = (data.rows as SummaryRow[]).map((a) => [a.employee_code, a.name, a.scheduled, a.present, a.absent, a.late_times, a.late_min ? fmtMin(a.late_min) : 0, a.early_times, a.early_min ? fmtMin(a.early_min) : 0, a.breaks, hrs(a.break_ms), hrs(a.shift_ms), a.exceptions]);
   } else if (data?.mode === 'detail') {
     cols = ex.cols();
     rows = (data.rows as AttRow[]).map((r) => { const x = ex.row(r, (s) => dt((STATUSES as any)[s]?.label ?? s)) as (string | number)[]; x[7] = r.late_min ? fmtMin(r.late_min) : x[7]; x[10] = r.early_min ? fmtMin(r.early_min) : x[10]; return x; });
-    left = [0, 1];
   }
   return (
     <>

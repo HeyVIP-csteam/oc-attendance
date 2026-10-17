@@ -28,7 +28,7 @@ const Filters = z.object({
 type Filters = z.infer<typeof Filters>;
 
 const SORT: Record<string, string> = {
-  emp: 'e.employee_code', cur: 'e.currency_code', workDate: 's.work_date', shiftName: 'i.shift_name', schedIn: 's.scheduled_start_at', inT: 's.actual_in_at',
+  emp: 'e.employee_code', name: 'e.name', cur: 'e.currency_code', workDate: 's.work_date', shiftName: 'i.shift_name', schedIn: 's.scheduled_start_at', inT: 's.actual_in_at',
   lateMin: 's.late_min', schedOut: 's.scheduled_end_at', outT: 's.actual_out_at', earlyMin: 's.early_min', completedBreaks: 's.break_count',
   totalBreak: 's.total_break_ms', net: 's.net_worked_ms', status: 's.status', flags: 's.exception_count',
 };

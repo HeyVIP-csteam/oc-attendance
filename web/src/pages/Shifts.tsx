@@ -123,7 +123,7 @@ function CellModal({ emp, date, inst, onClose }: { emp: { id: number; employee_c
   return (
     <Modal onClose={onClose}>
       <h3 style={{ marginTop: 0 }}>{L('调整班次', 'Change shift')} · {emp.employee_code} {emp.name} · {date}</h3>
-      <p>{L('当前：', 'Current: ')}<b>{inst ? `${inst.shift_name} ${fmtDT(inst.scheduled_start_at)} → ${fmtDT(inst.scheduled_end_at)}` : L('OFF（无班次）', 'OFF (no shift)')}</b> {inst && <span className="b v">{inst.adjustment_status}</span>}</p>
+      <p>{L('当前：', 'Current: ')}<b>{inst ? `${inst.shift_name} ${fmtDT(inst.scheduled_start_at)} → ${fmtDT(inst.scheduled_end_at)}` : L('OFF（无班次）', 'OFF (no shift)')}</b></p>
       {hist.data && hist.data.rows.length > 0 && <div className="note">{hist.data.rows.map((h, i) => <div key={i}>{fmtDT(h.created_at)} {h.actor}：{h.note}</div>)}</div>}
       <div className="fg"><div><label>{L('调整为', 'Change to')}</label><select value={val} onChange={(e) => setVal(e.target.value)}>
         {!inst && <option value="">—</option>}

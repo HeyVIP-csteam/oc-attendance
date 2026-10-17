@@ -17,15 +17,15 @@ export interface AttRow {
 
 export function useDetailExport() {
   const { L, dt } = useI18n();
-  const cols = () => L('员工编号|员工|货币|考勤日期|班次|排班上班 (LK)|实际上班 (LK)|迟到(分)|排班下班 (LK)|实际下班 (LK)|早退(分)|休息次数|休息总时长|净工时(h)|状态|缺卡',
-    'Employee ID|Employee|Currency|Date|Shift|Scheduled In (LK)|Actual In (LK)|Late Min|Scheduled Out (LK)|Actual Out (LK)|Early Min|Breaks|Total Break|Net Hours|Status|Missing Punch').split('|');
+  const cols = () => L('PSD ID|员工姓名|货币|考勤日期|班次|排班上班 (LK)|实际上班 (LK)|迟到(分)|排班下班 (LK)|实际下班 (LK)|早退(分)|休息次数|休息总时长|净工时(h)|状态|缺卡',
+    'PSD ID|Employee Name|Currency|Date|Shift|Scheduled In (LK)|Actual In (LK)|Late Min|Scheduled Out (LK)|Actual Out (LK)|Early Min|Breaks|Total Break|Net Hours|Status|Missing Punch').split('|');
   const row = (r: AttRow, statusLabel: (s: string) => string) => [r.employee_code, r.name, r.currency_code ?? '', r.work_date, r.shift_name ?? L('未排班', 'No schedule'), fmtDT(r.scheduled_start_at), fmtDT(r.actual_in_at), r.late_min ?? '',
     fmtDT(r.scheduled_end_at), fmtDT(r.actual_out_at), r.early_min ?? '', `${r.break_count}${r.open_break_count ? ` (+${r.open_break_count} open)` : ''}`, Math.round(r.total_break_ms / 60000) + 'm', r.net_worked_ms == null ? '' : hrs(r.net_worked_ms), statusLabel(r.status), r.missing];
   return { cols, row, dt };
 }
 
 const COLS: [string, string, string][] = [
-  ['emp', '员工', 'Employee'], ['cur', '货币', 'Currency'], ['workDate', '日期', 'Date'], ['shiftName', '班次', 'Shift'], ['schedIn', '排班上班', 'Sched In'], ['inT', '实际上班', 'Actual In'],
+  ['emp', 'PSD ID', 'PSD ID'], ['name', '员工姓名', 'Employee Name'], ['cur', '货币', 'Currency'], ['workDate', '日期', 'Date'], ['shiftName', '班次', 'Shift'], ['schedIn', '排班上班', 'Sched In'], ['inT', '实际上班', 'Actual In'],
   ['lateMin', '迟到', 'Late'], ['schedOut', '排班下班', 'Sched Out'], ['outT', '实际下班', 'Actual Out'], ['earlyMin', '早退', 'Early'], ['completedBreaks', '休息', 'Breaks'],
   ['totalBreak', '休息总计', 'Break Total'], ['net', '净工时', 'Net Hrs'], ['status', '状态', 'Status'], ['flags', '异常', 'Exceptions'],
 ];
@@ -72,8 +72,8 @@ export function Attendance() {
           </tr></thead><tbody>
             {data.rows.map((r) => (
               <tr key={`${r.employee_id}|${r.work_date}`} className="cl" onClick={() => setOpen({ emp: r.employee_id, date: r.work_date })}>
-                <td><b>{r.employee_code}</b> {r.name}</td><td className="c"><CurB c={r.currency_code} /></td><td>{r.work_date}</td>
-                <td>{r.shift_code && <><ShiftChip code={r.shift_code} inline /> </>}{r.shift_name ?? L('未排班', 'No schedule')}{r.adjustment_status && !['SCHEDULED'].includes(r.adjustment_status) && <> <span className="b v">{r.adjustment_status}</span></>}</td>
+                <td><b>{r.employee_code}</b></td><td>{r.name}</td><td className="c"><CurB c={r.currency_code} /></td><td>{r.work_date}</td>
+                <td>{r.shift_code && <><ShiftChip code={r.shift_code} inline /> </>}{r.shift_name ?? L('未排班', 'No schedule')}</td>
                 <td>{r.scheduled_start_at ? fmtT(r.scheduled_start_at) : <Mut />}</td><td>{r.actual_in_at ? fmtT(r.actual_in_at) : <Mut />}</td><td className="n">{num(r.late_min)}</td>
                 <td>{r.scheduled_end_at ? fmtT(r.scheduled_end_at) : <Mut />}</td><td>{r.actual_out_at ? fmtT(r.actual_out_at) : <Mut />}</td><td className="n">{num(r.early_min)}</td>
                 <td className="n">{r.break_count}{r.open_break_count > 0 && <> <span className="b r">+{r.open_break_count} {L('未结束', 'open')}</span></>}</td>
