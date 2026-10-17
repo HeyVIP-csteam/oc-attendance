@@ -52,16 +52,40 @@ describe('keyword parser', () => {
   ])('"%s" → %s', (text, type) => {
     expect(parseText(text, idx)).toMatchObject({ kind: 'PUNCH', type });
   });
-  it.each(['in 9am', 'IN 08:30', 'out early', 'break 15min'])('near miss "%s" → UNRECOGNIZED (never a punch, typed times are ignored)', (text) => {
-    expect(parseText(text, idx).kind).toBe('UNRECOGNIZED');
+  it.each([
+    ['Clocked in\nAgent: Nisha\nDate: 16/10/2026', 'CLOCK_IN', 'Clocked in'],
+    ['Log in for the day.\nAgent : Michael den.', 'CLOCK_IN', 'Log in for the day'],
+    ['🟢Start of Shift🟢 Clocked In', 'CLOCK_IN', null],
+    ['Dinner Break\nNisha', 'BREAK_START', 'Dinner Break'],
+    ['CS Name: probas sharma\nWC', 'BREAK_START', 'WC'],
+    ['Name: Paul Parks\nLunch Break - 60 mins', 'BREAK_START', 'Lunch Break - 60 mins'],
+    ['Taking Break ( David)', 'BREAK_START', 'Taking Break'],
+    ['Taking Break (30minute).', 'BREAK_START', 'Taking Break (30minute)'],
+    ['CS Name: Joy Shah\n1st Break ( 60 minit)', 'BREAK_START', null],
+    ['back', 'BREAK_END', 'back'], ['back from break', 'BREAK_END', null],
+    ['CS Name: TONMOY HOSSAIN\nChecked Out', 'CLOCK_OUT', 'Checked Out'],
+    ['Done For the day ( David )', 'CLOCK_OUT', 'Done For the day'],
+    ['Clocked out\nAgent: Nisha\nDate: 14/10/2026', 'CLOCK_OUT', 'Clocked out'],
+    ['out early', 'CLOCK_OUT', null], ['break 15min', 'BREAK_START', null],
+  ])('real-world message %j → %s (labels, names and dates are skipped)', (text, type, remark) => {
+    const r = parseText(text, idx);
+    expect(r).toMatchObject({ kind: 'PUNCH', type });
+    if (remark) expect(r).toMatchObject({ remark });
   });
-  it.each(['good morning', 'ok noted', "I'm in the meeting now", 'will be out for lunch later?', '', '👍'])('chat "%s" → NONE', (text) => {
+  it.each([['clok in', 'CLOCK_IN'], ['brek', 'BREAK_START'], ['resme', 'BREAK_END'], ['innnn', 'CLOCK_IN'], ['outtt', 'CLOCK_OUT'], ['chekced out', 'CLOCK_OUT']])('typo %j → %s', (text, type) => {
+    expect(parseText(text, idx)).toMatchObject({ kind: 'PUNCH', type });
+  });
+  it.each([['in 9am', 'TIME'], ['IN 08:30', 'TIME'], ['Clocked in 4.55', 'TIME'], ['in out', 'CONFLICT'], ['break back', 'CONFLICT']])('%j → UNRECOGNIZED (%s): never a punch, typed times are ignored', (text, reason) => {
+    expect(parseText(text, idx)).toMatchObject({ kind: 'UNRECOGNIZED', reason });
+  });
+  it.each(['good morning', 'ok noted', "I'm in the meeting now", 'will be out for lunch later?', '', '👍', 'on', 'it', 'thanks'])('chat "%s" → NONE', (text) => {
     expect(parseText(text, idx).kind).toBe('NONE');
   });
   it('custom aliases including non-Latin keywords', () => {
     const i2 = buildKeywordIndex({ ...DEFAULT_KEYWORDS, CLOCK_IN: ['IN', '上班'] });
     expect(parseText('上班', i2)).toMatchObject({ kind: 'PUNCH', type: 'CLOCK_IN' });
-    expect(parseText('上班了', i2).kind).toBe('UNRECOGNIZED');
+    expect(parseText('上班了', i2)).toMatchObject({ kind: 'PUNCH', type: 'CLOCK_IN' });
+    expect(parseText('今天上班的时候系统一直卡住很久', i2).kind).toBe('NONE');
   });
   it('rejects ambiguous keyword configurations', () => {
     expect(validateKeywords({ ...DEFAULT_KEYWORDS, CLOCK_OUT: ['OUT', 'in'] })).not.toBeNull();

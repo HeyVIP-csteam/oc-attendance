@@ -304,12 +304,34 @@ describe('admin corrections and audit (test 16)', () => {
     expect(h.db.get('SELECT status, handled_by FROM attendance_exceptions WHERE id = ?', ex.id)).toEqual({ status: 'RESOLVED', handled_by: 'owner' });
   });
 
+  it('real-world messages: label lines skipped, break remark shown, bot says what it read; migration 0005 widened the defaults', async () => {
+    const { h, e1 } = await fixture();
+    const kw = JSON.parse((h.db.get("SELECT value FROM system_settings WHERE key = 'keywords'") as { value: string }).value);
+    expect(kw.BREAK_START).toContain('WC');
+    expect(kw.CLOCK_OUT).toContain('DONE FOR THE DAY');
+    await h.roster(e1, D, 'A');
+    const a = await h.send({ text: 'Clocked in\nAgent: Nimal\nDate: 15/10/2026', ts: lk(D, '06:58'), thread: 1001 });
+    expect(a.json.status).toBe('PROCESSED');
+    const b = await h.send({ text: 'Name: Nimal\nLunch Break - 60 mins', ts: lk(D, '11:00'), thread: 1001 });
+    expect(b.json.status).toBe('PROCESSED');
+    await h.send({ text: 'back', ts: lk(D, '11:40'), thread: 1001 });
+    await h.send({ text: 'CS Name: Nimal\nWC', ts: lk(D, '13:00'), thread: 1001 });
+    await h.send({ text: 'Back', ts: lk(D, '13:07'), thread: 1001 });
+    await h.send({ text: 'Done for the day - Nimal', ts: lk(D, '15:01'), thread: 1001 });
+    const s = (await h.session(e1, D))!;
+    expect([s.actual_in_at, s.actual_out_at, s.break_count]).toEqual([lk(D, '06:58'), lk(D, '15:01'), 2]);
+    const br = await h.req('GET', `/api/breaks?from=${D}&to=${D}`);
+    expect(br.json.breaks.map((x: { remark: string }) => x.remark)).toEqual(['Lunch Break - 60 mins', 'WC']);
+    const t = await h.send({ text: 'IN 08:30', ts: lk(D, '15:05'), thread: 1001 });
+    expect(t.json.status).toBe('PENDING_REVIEW');
+  });
+
   it('re-parses pending messages after the keyword list changes', async () => {
     const { h, e1 } = await fixture();
     await h.roster(e1, D, 'A');
-    expect((await h.send({ text: 'checkin', ts: lk(D, '07:00'), thread: 1001 })).json.status).toBe('IGNORED');
-    expect((await h.send({ text: 'in pls', ts: lk(D, '07:01'), thread: 1001 })).json.status).toBe('PENDING_REVIEW');
-    await h.req('PUT', '/api/settings/keywords', { keywords: { CLOCK_IN: ['IN', 'CLOCK IN', 'in pls'], BREAK_START: ['BREAK'], BREAK_END: ['RESUME'], CLOCK_OUT: ['OUT'] } });
+    expect((await h.send({ text: 'hello', ts: lk(D, '07:00'), thread: 1001 })).json.status).toBe('IGNORED');
+    expect((await h.send({ text: 'clock', ts: lk(D, '07:01'), thread: 1001 })).json.status).toBe('PENDING_REVIEW');
+    await h.req('PUT', '/api/settings/keywords', { keywords: { CLOCK_IN: ['IN', 'CLOCK IN', 'clock'], BREAK_START: ['BREAK'], BREAK_END: ['RESUME'], CLOCK_OUT: ['OUT'] } });
     const r = await h.req('POST', '/api/messages/reparse');
     expect(r.json.count).toBe(1);
     expect((await h.session(e1, D))!.actual_in_at).toBe(lk(D, '07:01'));

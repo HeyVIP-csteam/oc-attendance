@@ -97,7 +97,7 @@ interface Detail {
   instance: { id: number; shift_name: string; adjustment_status: string; source: string; late_grace_min: number; early_grace_min: number; scheduled_start_at: number; scheduled_end_at: number } | null;
   session: AttRow & { scheduled_start_at: number | null } | null;
   events: { id: number; event_type: EventType; event_ts: number; source: string; is_voided: number; sm_result: string | null; adjustment_id: number | null; raw_text: string | null; tg_message_id: number | null; message_thread_id: number | null; from_user_id: number | null; telegram_message_ts: number | null; raw_received_at: number | null; processed_at: number | null }[];
-  breaks: { seq: number; start_at: number; end_at: number | null; duration_ms: number | null; status: string }[];
+  breaks: { seq: number; start_at: number; end_at: number | null; duration_ms: number | null; status: string; remark: string | null }[];
   exceptions: { id: number; code: string; occurred_at: number; detail: string | null; status: string }[];
   adjustments: { id: number; action: string; event_type: EventType | null; event_ts: number | null; target_event_id: number | null; reason: string; before_json: string | null; after_json: string | null; created_by: string; created_at: number }[];
 }
@@ -182,8 +182,8 @@ export function SessionDrawer({ emp, date, onClose }: { emp: number; date: strin
             </div></div>
             <div>
               <div className="card"><h3>{L('休息明细', 'Breaks')}</h3>{data.breaks.length ? (
-                <div className="tw"><table><thead><tr><th>#</th><th>{L('开始', 'Start')}</th><th>{L('结束', 'End')}</th><th className="n">{L('时长', 'Duration')}</th><th>{L('状态', 'Status')}</th></tr></thead><tbody>
-                  {data.breaks.map((b) => <tr key={b.seq}><td>#{b.seq}</td><td>{fmtT(b.start_at)}</td><td>{b.end_at ? fmtT(b.end_at) : <span className="b r">{L('未结束', 'Open')}</span>}</td><td className="n">{fmtDur(b.duration_ms)}</td><td>{b.status === 'OPEN' ? <span className="b r">OPEN</span> : <span className="b ok">CLOSED</span>}</td></tr>)}
+                <div className="tw"><table><thead><tr><th>#</th><th>{L('备注', 'Remark')}</th><th>{L('开始', 'Start')}</th><th>{L('结束', 'End')}</th><th className="n">{L('时长', 'Duration')}</th><th>{L('状态', 'Status')}</th></tr></thead><tbody>
+                  {data.breaks.map((b) => <tr key={b.seq}><td>#{b.seq}</td><td>{b.remark ?? <span className="mut">—</span>}</td><td>{fmtT(b.start_at)}</td><td>{b.end_at ? fmtT(b.end_at) : <span className="b r">{L('未结束', 'Open')}</span>}</td><td className="n">{fmtDur(b.duration_ms)}</td><td>{b.status === 'OPEN' ? <span className="b r">OPEN</span> : <span className="b ok">CLOSED</span>}</td></tr>)}
                 </tbody></table></div>) : <div className="mut">{L('无休息记录', 'No breaks')}</div>}
               </div>
               <div className="card"><h3>{L('异常', 'Exceptions')}（{data.exceptions.length}）</h3>

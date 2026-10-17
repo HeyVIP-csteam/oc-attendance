@@ -1,12 +1,18 @@
-// Plain-text punch parser. Deterministic: only an exact keyword match (after normalisation) produces a punch.
-// Near misses ("in 9am", "IN 08:30") become UNRECOGNIZED (pending review) and never create a clock event.
-// Employee-typed times are never trusted — the event time is always Telegram's message.date.
+// Plain-text punch parser. Deterministic: the same text and keyword list always give the same result.
+//
+// Each employee's topic is used only for punching, so the parser reads the way people actually write:
+//   "Clocked in\nAgent: Nisha\nDate: 16/10/2026"   → CLOCK_IN   (label lines such as Agent:/Name:/Date: are skipped)
+//   "Taking Break ( David)", "Lunch Break - 60 mins" → BREAK_START (text in brackets and durations are ignored)
+//   "Done For the day ( David )"                    → CLOCK_OUT
+//   "clok in", "brek", "innnn"                      → typo-tolerant (one letter off, repeated letters)
+// Messages are UNRECOGNIZED (pending review, never a punch) when they mention two different actions, or contain a
+// clock time ("IN 08:30") — an employee-typed time is never trusted; the event time is always Telegram's message.date.
 
 import type { EventType, KeywordConfig } from './codes';
 
 export type ParseResult =
-  | { kind: 'PUNCH'; type: EventType; norm: string }
-  | { kind: 'UNRECOGNIZED'; norm: string }
+  | { kind: 'PUNCH'; type: EventType; norm: string; keyword: string; fuzzy: boolean; remark: string }
+  | { kind: 'UNRECOGNIZED'; norm: string; reason: 'CONFLICT' | 'TIME' | 'NEAR'; types: EventType[] }
   | { kind: 'NONE'; norm: string };
 
 export function normText(t: string | null | undefined): string {
@@ -15,13 +21,13 @@ export function normText(t: string | null | undefined): string {
     .toLowerCase()
     .replace(/[\p{Extended_Pictographic}\u{FE0F}\u{200D}\u{20E3}]/gu, ' ')
     .replace(/^\/(\S+?)(@\w+)?(?=\s|$)/, '$1') // "/in@MyBot" → "in"
-    .replace(/[_\-]/g, ' ')
-    .replace(/[.!?,;:。！？，；：~…'"`()[\]]+/g, ' ')
+    .replace(/[_\-–—]/g, ' ')
+    .replace(/[.!?,;:。！？，；：~…'"`()[\]（）|/\\]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
 
-export interface KeywordIndex { map: Map<string, EventType>; tokens: Set<string> }
+export interface KeywordIndex { map: Map<string, EventType>; sorted: string[]; tokens: Set<string> }
 
 export function buildKeywordIndex(kw: KeywordConfig): KeywordIndex {
   const map = new Map<string, EventType>();
@@ -31,23 +37,114 @@ export function buildKeywordIndex(kw: KeywordConfig): KeywordIndex {
       if (n) map.set(n, type);
     }
   }
+  const sorted = [...map.keys()].sort((a, b) => b.length - a.length); // longest phrase first
   const tokens = new Set<string>();
   for (const k of map.keys()) for (const w of k.split(' ')) tokens.add(w);
-  return { map, tokens };
+  return { map, sorted, tokens };
+}
+
+/** "Agent: Nisha", "CS Name: Joy Shah", "Date: 16/10/2026", "姓名：…" — information lines, never the action. */
+const LABEL_LINE = /^\s*(agent|agent name|name|cs name|cs|staff|staff name|employee|employee name|emp|id|psd id|date|time|day|shift|姓名|名字|名称|日期|时间|班次)\s*[:：]/i;
+/** A clock time typed by the employee: 08:30, 8.30, 9am, 9 pm. Durations ("60 mins", "30minute") are fine. */
+const TIME_RE = /(^|[^\d])\d{1,2}\s*[:：.]\s*\d{2}(?!\d)|(^|[^\d])\d{1,2}\s*(am|pm|a\.m|p\.m)\b/i;
+const MAX_LINE_WORDS = 12;   // longer lines are prose, not a punch
+const SHORT_LINE_WORDS = 4;  // a single-word keyword ("in", "back") only counts on a short line
+const isLatin = (s: string) => !/[^\x00-\x7f]/.test(s);
+
+/** Splits the message into the lines that may carry the action (label lines and bracketed asides removed). */
+function actionLines(text: string): { raw: string; norm: string }[] {
+  return text.split(/\r?\n/)
+    .filter((l) => !LABEL_LINE.test(l))
+    .map((l) => ({ raw: l.trim(), norm: normText(l.replace(/[(（][^)）]*[)）]?/g, ' ')) }))
+    .filter((l) => l.norm);
+}
+
+/** Optimal-string-alignment distance (insert / delete / substitute / swap two neighbours), capped early. */
+function editDistance(a: string, b: string): number {
+  if (Math.abs(a.length - b.length) > 1) return 2;
+  const d: number[][] = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
+  for (let j = 1; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + cost);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 1);
+    }
+  }
+  return d[a.length][b.length];
+}
+const squeeze = (s: string) => s.replace(/(.)\1+/g, '$1'); // "innnn" → "in", "outtt" → "out"
+
+interface Hit { type: EventType; keyword: string; raw: string; fuzzy: boolean }
+
+/** Exact phrase matches inside one line, longest keyword first; a matched span is consumed. */
+function exactHits(line: { raw: string; norm: string }, idx: KeywordIndex): Hit[] {
+  const words = line.norm.split(' ').length;
+  if (words > MAX_LINE_WORDS) return [];
+  let rest = ` ${line.norm} `;
+  const hits: Hit[] = [];
+  for (const k of idx.sorted) {
+    const single = !k.includes(' ');
+    if (isLatin(k)) {
+      if (single && words > SHORT_LINE_WORDS) continue;
+      const needle = ` ${k} `;
+      if (!rest.includes(needle)) continue;
+      rest = rest.split(needle).join(' \u0000 ');
+    } else {
+      // non-Latin keywords (上班, 下班 …) are matched inside the text, on a short line only
+      if (!rest.includes(k) || line.norm.replace(/\s/g, '').length > k.length + 4) continue;
+      rest = rest.split(k).join(' \u0000 ');
+    }
+    hits.push({ type: idx.map.get(k)!, keyword: k, raw: line.raw, fuzzy: false });
+  }
+  return hits;
+}
+
+/** One-letter typos and repeated letters, on short lines only ("clok in", "brek", "innnn"). */
+function fuzzyHits(line: { raw: string; norm: string }, idx: KeywordIndex): Hit[] {
+  const words = line.norm.split(' ');
+  if (words.length > SHORT_LINE_WORDS) return [];
+  const hits: Hit[] = [];
+  for (const k of idx.sorted) {
+    if (!isLatin(k)) continue;
+    const n = k.split(' ').length;
+    for (let i = 0; i + n <= words.length; i++) {
+      const cand = words.slice(i, i + n).join(' ');
+      const typo = k.length >= 4 && editDistance(cand, k) <= 1;
+      const repeated = squeeze(cand) === squeeze(k) && cand !== k && (n > 1 || words.length <= 2);
+      if (typo || repeated) { hits.push({ type: idx.map.get(k)!, keyword: k, raw: line.raw, fuzzy: true }); break; }
+    }
+  }
+  return hits;
 }
 
 export function parseText(text: string | null | undefined, idx: KeywordIndex): ParseResult {
   const n = normText(text);
   if (!n) return { kind: 'NONE', norm: n };
-  const hit = idx.map.get(n);
-  if (hit) return { kind: 'PUNCH', type: hit, norm: n };
-  const words = n.split(' ');
-  if (words.length <= 3 && words.some((w) => idx.tokens.has(w))) return { kind: 'UNRECOGNIZED', norm: n };
-  for (const k of idx.map.keys()) {
-    // non-Latin keywords (e.g. 上班) embedded in a very short message
-    if (/[^\x00-\x7f]/.test(k) && n.includes(k) && n.length <= k.length + 4) return { kind: 'UNRECOGNIZED', norm: n };
+  const lines = actionLines(text || '');
+  let hits = lines.flatMap((l) => exactHits(l, idx));
+  if (!hits.length) hits = lines.flatMap((l) => fuzzyHits(l, idx));
+  if (!hits.length) {
+    // short message that shares a word with a keyword but is not one ("clock", "shift") → let an admin look at it
+    const w = n.split(' ');
+    if (w.length <= 2 && w.some((x) => x.length >= 4 && idx.tokens.has(x))) return { kind: 'UNRECOGNIZED', norm: n, reason: 'NEAR', types: [] };
+    return { kind: 'NONE', norm: n };
   }
-  return { kind: 'NONE', norm: n };
+  const types = [...new Set(hits.map((h) => h.type))];
+  if (types.length > 1) return { kind: 'UNRECOGNIZED', norm: n, reason: 'CONFLICT', types };
+  const actionText = lines.map((l) => l.raw).join(' ');
+  if (TIME_RE.test(actionText)) return { kind: 'UNRECOGNIZED', norm: n, reason: 'TIME', types };
+  const h = hits[0];
+  // bracketed names are dropped ("Taking Break ( David)"), bracketed durations are kept ("Taking Break (30minute)")
+  const clean = (r: string) => r.replace(/\s*[(（][^)）\d]*[)）]/g, '').replace(/[\s.。]+$/, '').trim();
+  const remark = [...new Set(hits.map((x) => clean(x.raw)))].filter(Boolean).join(' · ').slice(0, 80);
+  return { kind: 'PUNCH', type: h.type, norm: n, keyword: h.keyword, fuzzy: hits.every((x) => x.fuzzy), remark };
+}
+
+/** The employee's own words for a punch, e.g. "Lunch Break - 60 mins", "WC" — shown as a remark on breaks. */
+export function punchRemark(text: string | null | undefined, idx: KeywordIndex): string | null {
+  const p = parseText(text, idx);
+  return p.kind === 'PUNCH' ? p.remark : null;
 }
 
 /** Validates an admin-submitted keyword configuration. Returns an error message or null. */
@@ -58,7 +155,7 @@ export function validateKeywords(kw: KeywordConfig): { zh: string; en: string } 
     for (const w of list) {
       const n = normText(w);
       if (!n) return { zh: `「${w}」去掉符号后为空`, en: `"${w}" is empty after removing symbols` };
-      if (n.split(' ').length > 3) return { zh: `「${w}」太长（最多 3 个词）`, en: `"${w}" is too long (max 3 words)` };
+      if (n.split(' ').length > 6) return { zh: `「${w}」太长（最多 6 个词）`, en: `"${w}" is too long (max 6 words)` };
       const prev = seen.get(n);
       if (prev && prev !== type) return { zh: `「${w}」同时出现在 ${prev} 和 ${type}`, en: `"${w}" appears in both ${prev} and ${type}` };
       seen.set(n, type);

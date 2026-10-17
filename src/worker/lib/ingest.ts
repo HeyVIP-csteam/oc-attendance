@@ -7,7 +7,8 @@
 //   * the session recompute that follows is idempotent; if it fails, the cron job heals it (events newer than session).
 //
 // Trust
-//   * Event time = Telegram's message.date. Text such as "IN 08:30" is never parsed as a time (it is UNRECOGNIZED).
+//   * Event time = Telegram's message.date. A typed time ("IN 08:30") is never used — such a message is UNRECOGNIZED.
+//   * Label lines (Agent:/Name:/Date:) are skipped; the employee is identified by topic, never by a typed name.
 //   * Identity = verified (chat_id, message_thread_id) mapping valid at message time. Topic names/usernames are ignored.
 
 import { bi, type Bi, EVENT_LABEL, type EventType, EXCEPTIONS, exceptionSeverity, type ExceptionCode, type KeywordConfig, type Rules } from '../../shared/codes';
@@ -59,10 +60,10 @@ export const mappingSql = `SELECT m.employee_id, e.employee_code, e.name, e.curr
 
 const tzLabel = 'Sri Lanka time';
 
-export function replyText(kind: 'ok' | 'sm' | 'unrec' | 'id', data: { type?: EventType; code?: string; ts?: number; tz: string; keywords?: string[] }): string {
+export function replyText(kind: 'ok' | 'sm' | 'unrec' | 'id', data: { type?: EventType; code?: string; ts?: number; tz: string; keywords?: string[]; readAs?: string }): string {
   const label = (c?: string) => (c && (EXCEPTIONS as Record<string, { label: Bi }>)[c]?.label.en) || c || '';
   switch (kind) {
-    case 'ok': return `✅ ${EVENT_LABEL[data.type!].en} recorded · ${fmtTime(data.ts!, data.tz)} (${tzLabel})`;
+    case 'ok': return `✅ ${EVENT_LABEL[data.type!].en} recorded · ${fmtTime(data.ts!, data.tz)} (${tzLabel})${data.readAs ? `\nRead from: "${data.readAs}"` : ''}`;
     case 'sm': return `⚠️ ${EVENT_LABEL[data.type!].en} not counted: ${label(data.code)}`;
     case 'unrec': return `⚠️ Not recognised. Please send only ${(data.keywords ?? ['IN', 'BREAK', 'RESUME', 'OUT']).join(' / ')}`;
     case 'id': return `⚠️ Not counted: ${label(data.code)}. The admin has been notified.`;
@@ -159,7 +160,11 @@ export async function ingestUpdate(env: Env, bot: BotRow, upd: TgUpdate, receive
     const empId = mapping?.employee_id ?? null;
     const r = await write([
       rawInsert('PENDING_REVIEW', 'UNRECOGNIZED', empId, null),
-      exInsert('UNRECOGNIZED', empId, bi(`「${text}」接近打卡关键词但不完全匹配`, `"${text}" looks like a punch but does not match a keyword exactly`)),
+      exInsert('UNRECOGNIZED', empId, parsed.reason === 'CONFLICT'
+        ? bi(`「${text}」同时包含多个打卡动作（${parsed.types.join(' / ')}），无法判断`, `"${text}" mentions more than one action (${parsed.types.join(' / ')})`)
+        : parsed.reason === 'TIME'
+          ? bi(`「${text}」包含自己写的时间；打卡时间只采用 Telegram 消息时间，请确认后处理`, `"${text}" contains a typed time; only the Telegram message time is used — please review`)
+          : bi(`「${text}」接近打卡关键词但不完全匹配`, `"${text}" looks like a punch but does not match a keyword`)),
     ]);
     if (r === 'dup') return { http: 200, status: 'DUPLICATE', codes: [] };
     return { http: 200, status: 'PENDING_REVIEW', codes: ['UNRECOGNIZED'], reply: rules.botReply ? replyText('unrec', { tz, keywords: primaryKeywords(settings.keywords) }) : null };
@@ -197,7 +202,7 @@ export async function ingestUpdate(env: Env, bot: BotRow, upd: TgUpdate, receive
   const accepted = code === null || code === 'CLOCK_OUT_DURING_BREAK';
   return {
     http: 200, status: 'PROCESSED', codes: code ? [code] : [], event: parsed.type,
-    reply: rules.botReply ? (accepted ? replyText('ok', { type: parsed.type, ts: tgTs, tz }) : replyText('sm', { type: parsed.type, code: code!, tz })) : null,
+    reply: rules.botReply ? (accepted ? replyText('ok', { type: parsed.type, ts: tgTs, tz, readAs: parsed.norm === parsed.keyword ? undefined : parsed.remark }) : replyText('sm', { type: parsed.type, code: code!, tz })) : null,
   };
 }
 

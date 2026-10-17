@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { EVENT_LABEL, EVENT_TYPES, type EventType, EXCEPTIONS } from '../../shared/codes';
-import { buildKeywordIndex, normText } from '../../shared/parser';
+import { buildKeywordIndex, normText, parseText } from '../../shared/parser';
 import { isDate, MIN } from '../../shared/time';
 import type { AppBindings } from '../env';
 import { auditStmt } from '../lib/audit';
@@ -64,9 +64,14 @@ exceptionRoutes.get('/exceptions/:id/fix', async (c) => {
   let type: EventType = EX_FIX[x.code] ?? 'CLOCK_IN';
   let ts = x.telegram_message_ts ?? x.occurred_at;
   if (x.code in EX_FIX && EX_FIX[x.code] == null) {
-    const n = normText(x.raw_text ?? '');
     const idx = buildKeywordIndex(settings.keywords);
-    for (const [k, t] of idx.map) if (n.split(' ').includes(k.split(' ')[0])) { type = t; break; }
+    const p = parseText(x.raw_text ?? '', idx);
+    if (p.kind === 'PUNCH') type = p.type;
+    else if (p.kind === 'UNRECOGNIZED' && p.types.length) type = p.types[0];
+    else {
+      const n = normText(x.raw_text ?? '');
+      for (const [k, t] of idx.map) if (n.split(' ').includes(k.split(' ')[0])) { type = t; break; }
+    }
   }
   if (x.code === 'MISSING_CLOCK_OUT' && s?.scheduled_end_at) ts = s.scheduled_end_at;
   if ((x.code === 'MISSING_CLOCK_IN' || x.code === 'NO_SHOW') && s?.scheduled_start_at) ts = s.scheduled_start_at;

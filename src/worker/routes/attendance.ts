@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { EVENT_TYPES } from '../../shared/codes';
+import { buildKeywordIndex, punchRemark } from '../../shared/parser';
 import { addDays, dayDiff, fmtDateTime, isDate, localDate, MIN, zonedToUtc } from '../../shared/time';
 import type { AppBindings } from '../env';
 import { auditStmt } from '../lib/audit';
@@ -135,7 +136,7 @@ attendanceRoutes.get('/sessions/:emp/:date', async (c) => {
                 m.id AS raw_id, m.raw_text, m.message_id AS tg_message_id, m.message_thread_id, m.from_user_id, m.telegram_message_ts, m.received_at AS raw_received_at, m.processed_at
               FROM attendance_events ev LEFT JOIN telegram_messages m ON m.id = ev.message_id
               WHERE ev.employee_id = ? AND ev.work_date = ? ORDER BY ev.event_ts, ev.tg_message_id, ev.id`, emp, date),
-    stmt(db, 'SELECT b.seq, b.start_at, b.end_at, b.duration_ms, b.status FROM break_sessions b JOIN attendance_sessions s ON s.id = b.session_id WHERE s.employee_id = ? AND s.work_date = ? ORDER BY b.seq', emp, date),
+    stmt(db, `SELECT b.seq, b.start_at, b.end_at, b.duration_ms, b.status, ${BREAK_TEXT} AS start_text FROM break_sessions b JOIN attendance_sessions s ON s.id = b.session_id WHERE s.employee_id = ? AND s.work_date = ? ORDER BY b.seq`, emp, date),
     stmt(db, 'SELECT id, code, severity, occurred_at, detail, status, source FROM attendance_exceptions WHERE employee_id = ? AND work_date = ? ORDER BY occurred_at', emp, date),
     stmt(db, 'SELECT id, action, event_type, event_ts, target_event_id, reason, before_json, after_json, created_by, created_at FROM attendance_adjustments WHERE employee_id = ? AND work_date = ? ORDER BY id', emp, date),
   ]);
@@ -143,7 +144,7 @@ attendanceRoutes.get('/sessions/:emp/:date', async (c) => {
   if (!employee) throw notFound('Employee not found');
   return c.json({
     employee, workDate: date, instance: instR.results[0] ?? null, session: sessR.results[0] ?? null,
-    events: evR.results, breaks: brR.results, exceptions: exR.results, adjustments: adjR.results,
+    events: evR.results, breaks: await withRemarks(db, brR.results as { start_text: string | null }[]), exceptions: exR.results, adjustments: adjR.results,
   });
 });
 
@@ -208,6 +209,16 @@ attendanceRoutes.post('/sessions/:emp/:date/adjustments', async (c) => {
 });
 
 // ---------------------------------------------------------------- Breaks
+/** The Telegram text that started a break (e.g. "Lunch Break - 60 mins", "WC"); admin-added breaks have none. */
+const BREAK_TEXT = `(SELECT m.raw_text FROM attendance_events ev JOIN telegram_messages m ON m.id = ev.message_id
+  WHERE ev.employee_id = s.employee_id AND ev.work_date = s.work_date AND ev.event_type = 'BREAK_START' AND ev.is_voided = 0 AND ev.event_ts = b.start_at
+  ORDER BY ev.id LIMIT 1)`;
+async function withRemarks<T extends { start_text: string | null }>(db: D1Database, rows: T[]): Promise<(Omit<T, 'start_text'> & { remark: string | null })[]> {
+  if (!rows.some((r) => r.start_text)) return rows.map(({ start_text: _t, ...r }) => ({ ...r, remark: null }));
+  const idx = buildKeywordIndex((await loadSettings(db)).keywords);
+  return rows.map(({ start_text, ...r }) => ({ ...r, remark: start_text ? punchRemark(start_text, idx) ?? start_text.split(/\r?\n/)[0].slice(0, 80) : null }));
+}
+
 attendanceRoutes.get('/breaks', async (c) => {
   const f = query(c, Filters.pick({ from: true, to: true, cur: true, q: true, page: true, size: true }));
   const w = sessionWhere(f, todayOf(c));
@@ -218,8 +229,9 @@ attendanceRoutes.get('/breaks', async (c) => {
     stmt(db, `${ROW_SELECT} WHERE ${cond} ORDER BY s.work_date DESC, e.employee_code ASC LIMIT ? OFFSET ?`, ...w.params, f.size, (f.page - 1) * f.size),
   ]);
   const ids = (rows.results as { session_id: number }[]).map((r) => r.session_id);
-  const breaks = ids.length ? await all(db, `SELECT session_id, seq, start_at, end_at, duration_ms, status FROM break_sessions WHERE session_id IN (${ids.map(() => '?').join(',')}) ORDER BY session_id, seq`, ...ids) : [];
-  return c.json({ total: (cnt.results[0] as { n: number }).n, rows: rows.results, breaks });
+  const breaks = ids.length ? await all<{ start_text: string | null }>(db, `SELECT b.session_id, b.seq, b.start_at, b.end_at, b.duration_ms, b.status, ${BREAK_TEXT} AS start_text
+    FROM break_sessions b JOIN attendance_sessions s ON s.id = b.session_id WHERE b.session_id IN (${ids.map(() => '?').join(',')}) ORDER BY b.session_id, b.seq`, ...ids) : [];
+  return c.json({ total: (cnt.results[0] as { n: number }).n, rows: rows.results, breaks: await withRemarks(c.env.DB, breaks) });
 });
 
 // ---------------------------------------------------------------- Reports

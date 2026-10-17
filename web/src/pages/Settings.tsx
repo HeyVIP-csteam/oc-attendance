@@ -134,10 +134,12 @@ function Keywords() {
   };
   return (
     <div className="card"><h3>{L('打卡关键词（每行一个，不区分大小写）', 'Punch keywords (one per line, case-insensitive)')}</h3>
-      <div className="fg">{EVENT_TYPES.map((k) => <div key={k}><label>{k} · {dt(EVENT_LABEL[k])}</label><textarea rows={5} value={kw[k]} disabled={readOnly} onChange={(e) => setKw({ ...kw, [k]: e.target.value })} /></div>)}</div>
+      <div className="fg">{EVENT_TYPES.map((k) => <div key={k}><label>{k} · {dt(EVENT_LABEL[k])}</label><textarea rows={9} value={kw[k]} disabled={readOnly} onChange={(e) => setKw({ ...kw, [k]: e.target.value })} /></div>)}</div>
       <div className="row" style={{ marginTop: 8 }}>
-        <Field label={L('测试解析', 'Test the parser')}><input type="text" style={{ minWidth: 260 }} placeholder={L('输入一条消息试试', 'Type a message to test')} value={test} onChange={(e) => setTest(e.target.value)} /></Field>
-        <span style={{ paddingBottom: 6 }}>{res && (res.kind === 'PUNCH' ? <><span className="b ok">{res.type}</span> <span className="mut">「{res.norm}」</span></> : res.kind === 'UNRECOGNIZED' ? <span className="b w">{L('待检查（不会生成打卡）', 'Pending review (no punch created)')}</span> : <span className="b">{L('忽略（普通聊天）', 'Ignored (chat)')}</span>)}</span>
+        <Field label={L('测试解析', 'Test the parser')}><textarea rows={3} style={{ minWidth: 300 }} placeholder={L('输入一条消息试试', 'Type a message to test')} value={test} onChange={(e) => setTest(e.target.value)} /></Field>
+        <span style={{ paddingBottom: 6 }}>{res && (res.kind === 'PUNCH' ? <><span className="b ok">{res.type}</span>{res.fuzzy && <> <span className="b w">{L('容错匹配', 'Typo-tolerant')}</span></>} <span className="mut">{L('读取：', 'Read: ')}「{res.remark}」</span></>
+          : res.kind === 'UNRECOGNIZED' ? <span className="b w">{L('待检查（不会生成打卡）', 'Pending review (no punch created)')}：{res.reason === 'CONFLICT' ? L('包含多个动作', 'more than one action') : res.reason === 'TIME' ? L('包含自己写的时间', 'contains a typed time') : L('接近但不匹配', 'close, but no match')}</span>
+          : <span className="b">{L('忽略（普通聊天）', 'Ignored (chat)')}</span>)}</span>
       </div>
       {err && <div className="err">{err}</div>}
       {!readOnly && <div className="row" style={{ marginTop: 12 }}><button className="btn p" onClick={save}>{L('保存关键词', 'Save keywords')}</button><button className="btn" onClick={reparse}>{L('用新关键词重新解析「待检查」消息', 'Re-parse pending messages with new keywords')}</button></div>}

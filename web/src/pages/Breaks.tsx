@@ -7,7 +7,7 @@ import { useI18n } from '../lib/i18n';
 import { useApi, usePageState } from '../lib/store';
 import type { AttRow } from './Attendance';
 
-interface BreakRow { session_id: number; seq: number; start_at: number; end_at: number | null; duration_ms: number | null; status: string }
+interface BreakRow { session_id: number; seq: number; start_at: number; end_at: number | null; duration_ms: number | null; status: string; remark: string | null }
 
 export function Breaks() {
   const { L } = useI18n();
@@ -45,7 +45,7 @@ export function Breaks() {
                     <td className="c">{r.break_exceeded == null ? <Mut /> : r.break_exceeded ? <span className="b w">{L('是', 'Yes')}</span> : <span className="b ok">{L('否', 'No')}</span>}</td>
                   </tr>
                   {o && (bySession.get(r.session_id) ?? []).map((b) => (
-                    <tr key={`${r.session_id}-${b.seq}`}><td></td><td colSpan={2} className="mut">Break #{b.seq}</td>
+                    <tr key={`${r.session_id}-${b.seq}`}><td></td><td className="mut">Break #{b.seq}</td><td>{b.remark ? <span className="b i" title={L('员工消息', 'Employee message')}>{b.remark}</span> : <span className="mut">—</span>}</td>
                       <td>{fmtT(b.start_at)} → {b.end_at ? fmtT(b.end_at) : <span className="b r">{L('未结束', 'Open')}</span>}</td><td></td><td className="n">{fmtDur(b.duration_ms)}</td><td>{b.status}</td><td></td></tr>
                   ))}
                 </Fragment>
