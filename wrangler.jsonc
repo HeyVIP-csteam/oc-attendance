@@ -8,6 +8,8 @@
   "main": "src/worker/index.ts",
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": false,
 
   // React dashboard built by `npm run build` (Vite) into web/dist.
   // Static asset requests are free and do not invoke the Worker; only /api/* runs Worker code.
@@ -38,7 +40,7 @@
     "APP_ENV": "production",
     "BIZ_TZ": "Asia/Colombo",
     // Set to your production origin (e.g. https://tg-attendance.<you>.workers.dev) to enforce Origin checks on writes.
-    "PUBLIC_ORIGIN": ""
+    "PUBLIC_ORIGIN": "https://oc-attendance.heyvip.workers.dev"
   },
 
   "observability": {

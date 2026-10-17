@@ -94,12 +94,13 @@ NOT_STARTED --IN--> WORKING --BREAK--> ON_BREAK --RESUME--> WORKING --OUT--> COM
 
 ## 9. API 一览（全部在 /api 下，除标注外都需要登录）
 
-`POST auth/login`（公开）、`POST auth/logout`、`GET auth/me`、`POST auth/password` ·
+`POST auth/login`、`GET auth/setup-status`、`POST auth/setup`（公开；setup 只在没有管理员且设定了 SETUP_CODE 时可用）、`POST auth/logout`、`GET auth/me`、`POST auth/password` ·
 `POST telegram/webhook/:code`（公开，验证 secret） · `GET meta`、`GET version` ·
 `GET overview`、`GET attendance`、`GET attendance/export`、`GET sessions/:emp/:date`、`POST sessions/:emp/:date/adjustments`、`GET breaks`、`GET reports` ·
 `GET/POST employees`、`GET/PUT employees/:id`、`POST employees/:id/deactivate` ·
 `GET/POST shifts`、`PUT shifts/:id`、`PUT shifts-bulk`、`GET roster`、`GET roster/export`、`GET roster/history`、`PUT roster/cell`、`POST roster/import` ·
 `GET exceptions`、`GET exceptions/:id/fix`、`PUT exceptions/:id`、`GET audit`、`GET messages` ·
-`PUT settings/keywords`、`PUT settings/rules`、`POST messages/reparse`、`POST currencies`、`DELETE currencies/:code`、`GET bots`、`PUT bots/:code`、`POST bots/:code/{check|stop|start|rotate}`
+`PUT settings/keywords`、`PUT settings/rules`、`POST messages/reparse`、`POST currencies`、`DELETE currencies/:code`、`GET bots`、`PUT bots/:code`、`POST bots/:code/{check|stop|start|rotate}` ·
+`GET admins`、`POST admins`、`PUT admins/:id`
 
 写入类 API 需要 admin 角色，并检查 Origin。

@@ -6,6 +6,7 @@ import { log } from './lib/audit';
 import { requireSession } from './lib/auth';
 import { ConfigError, redact } from './lib/crypto';
 import { ApiError } from './lib/http';
+import { adminRoutes } from './routes/admins';
 import { attendanceRoutes } from './routes/attendance';
 import { authRoutes } from './routes/auth';
 import { employeeRoutes } from './routes/employees';
@@ -46,6 +47,7 @@ app.route('/api', attendanceRoutes);
 app.route('/api', employeeRoutes);
 app.route('/api', shiftRoutes);
 app.route('/api', exceptionRoutes);
+app.route('/api', adminRoutes);
 app.all('/api/*', (c) => c.json({ error: 'NOT_FOUND', message: { zh: '接口不存在', en: 'Not found' } }, 404));
 
 // non-API paths are normally served from static assets before the Worker runs; this is the fallback.

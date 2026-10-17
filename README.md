@@ -25,7 +25,7 @@
 npm install
 npm run setup:local                 # 生成 .dev.vars（本地专用 ENCRYPTION_KEY，不会提交）
 npm run db:migrate:local            # 建立本地 D1
-npm run admin:create -- --local     # 建立管理员（密码以隐藏方式输入）
+npm run admin:create -- --local     # 建立本地管理员（正式环境改用网页上的第一次设置页面）
 npm run db:seed:demo:local          # （可选）40 名示范员工 + 本月 A/B/C 排班
 npm run dev                         # 构建网页并启动 http://127.0.0.1:8787
 npm run simulate -- --demo          # （可选）另开终端：模拟最近 7 天的 Telegram 打卡
@@ -41,7 +41,7 @@ npm run simulate -- --demo          # （可选）另开终端：模拟最近 7 
 | `npm run typecheck` | Worker + 网页 TypeScript 检查 |
 | `npm run build` | 构建网页到 `web/dist` |
 | `npm run db:migrate:remote` | 对生产 D1 套用**尚未执行**的 migration（不会清空资料） |
-| `npm run admin:create -- --remote` | 建立 / 重设生产管理员 |
+| `npm run admin:create -- --remote` | 备用：直接在 D1 建立 / 重设管理员（平常在网页「设置 → 管理员账号」管理） |
 | `npm run deploy` | 构建并部署 |
 | `npm run logs` | 查看线上实时日志（`wrangler tail`） |
 
@@ -68,4 +68,5 @@ scripts/               create-admin、setup-local、demo-seed（本地）、simu
 - 每个 Bot 的 Webhook `secret_token` 由 `ENCRYPTION_KEY` 推导，不存数据库；错误的 secret 一律 401。
 - 管理员密码 PBKDF2-SHA256（100,000 次）；连续 5 次失败锁定 15 分钟；Session 存 HttpOnly + SameSite=Strict Cookie，数据库只存 SHA-256。
 - 原始消息、考勤事件、修正记录、Audit Log 由数据库 Trigger 保护，不能被改写或删除。
+- 第一个管理员在网页建立，需要 Cloudflare Secret `SETUP_CODE`；一旦有管理员，此入口永久关闭。之后的账号在「设置 → 管理员账号」管理。
 - 只读账号（role = viewer）只能查看。

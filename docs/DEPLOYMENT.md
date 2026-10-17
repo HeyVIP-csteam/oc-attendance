@@ -13,7 +13,7 @@
 ```bash
 unzip tg-attendance.zip && cd tg-attendance
 npm install
-npm test                 # 检查：显示 78 passed
+npm test                 # 检查：显示 80 passed
 npx wrangler login       # 浏览器会打开 Cloudflare 授权页面
 ```
 
@@ -54,6 +54,14 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64'))" | np
 
 > ⚠️ **ENCRYPTION_KEY 不能遗失或随意更换**：它用来加密 Bot Token 和推导 Webhook secret。更换后需要在后台重新输入每个 Bot Token。请另存在你的密码管理器。
 
+再设定一个**一次性设置码**，用来在网页上建立第一个管理员（自己想一串不容易猜的字，例如 20 个字符以上）：
+
+```bash
+npx wrangler secret put SETUP_CODE
+```
+
+> 也可以不用命令：Cloudflare Dashboard → Workers & Pages → `tg-attendance` → Settings → Variables and Secrets → Add → 类型选 **Secret**，名称 `SETUP_CODE`。`ENCRYPTION_KEY` 也可以这样加（值用上面命令产生的随机字串）。
+
 （可选）若不想在后台输入 Bot Token，可改用 Secret：`npx wrangler secret put TELEGRAM_BOT_TOKEN_LKR`（每个货币一个）。
 
 ## 4. 第一次部署
@@ -66,16 +74,20 @@ npm run deploy
 
 检查：`curl https://tg-attendance.<你的子域>.workers.dev/api/health` → `{"ok":true,"env":"production"}`
 
-## 5. 建立管理员
+## 5. 建立第一个管理员（网页）
 
-```bash
-npm run admin:create -- --remote --username owner
-# 只读账号：npm run admin:create -- --remote --username auditor --role viewer
-```
+1. 打开你的网址。系统还没有任何管理员时，登录页会自动变成「建立第一个管理员」
+2. 输入第 3 步的 **设置码（SETUP_CODE）**、账号、密码（至少 10 个字符）→「建立管理员并登录」
+3. 建立后这个页面永久关闭（只要已有任何一个管理员，设置码就不再有效）。之后可以到 Cloudflare 把 `SETUP_CODE` 删除
 
-密码以隐藏方式输入（至少 12 个字符），只有 PBKDF2 hash 会写进数据库。忘记密码时重跑同一个命令即可重设。
+之后的账号全部在网页管理：**设置 → 管理员账号**
+- 新增账号：管理员（可修改）或只读（只能查看）
+- 编辑：重设密码、改权限、停用（会登出该账号所有装置）；不能停用自己，也至少要保留一个启用中的管理员
+- 自己改密码：右上角用户名 → 更改密码
 
-检查：打开网址 → 用该账号登录成功。
+账号都保存在 D1 的 `admin_users` 表，密码只存 PBKDF2 hash；每次新增 / 修改都写入 Audit Log。
+
+> 备用方法（例如所有管理员都忘记密码）：`npm run admin:create -- --remote --username owner` 直接在 D1 建立或重设账号。
 
 ## 6. 自动部署（二选一）
 

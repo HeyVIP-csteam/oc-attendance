@@ -399,3 +399,39 @@ describe('dashboard queries', () => {
     expect(meta.json.employees.map((e: any) => e.thread)).toEqual([1001, 1002]);
   });
 });
+
+describe('admin accounts', () => {
+  it('first admin from the setup page: needs SETUP_CODE, works once, then closes', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(lk(D, '05:00'));
+    const h = new Harness();
+    expect((await h.req('GET', '/api/auth/setup-status')).json).toEqual({ needsSetup: true, setupEnabled: false });
+    expect((await h.req('POST', '/api/auth/setup', { code: 'x', username: 'owner', password: 'long-enough-pw' })).status).toBe(403);
+    h.env.SETUP_CODE = 'my-setup-code';
+    expect((await h.req('POST', '/api/auth/setup', { code: 'wrong', username: 'owner', password: 'long-enough-pw' })).status).toBe(401);
+    const ok = await h.req('POST', '/api/auth/setup', { code: 'my-setup-code', username: 'owner', password: 'long-enough-pw' });
+    expect(ok.status).toBe(200);
+    expect((await h.req('GET', '/api/auth/me')).json).toMatchObject({ username: 'owner', role: 'admin' }); // signed in
+    expect((await h.req('GET', '/api/auth/setup-status')).json.needsSetup).toBe(false);
+    expect((await h.req('POST', '/api/auth/setup', { code: 'my-setup-code', username: 'intruder', password: 'long-enough-pw' })).status).toBe(409);
+    expect(h.db.get('SELECT COUNT(*) AS n FROM admin_users')).toEqual({ n: 1 });
+  });
+
+  it('admins add, reset and disable accounts; the last admin and yourself are protected', async () => {
+    const { h } = await fixture();
+    expect((await h.req('POST', '/api/admins', { username: 'alice', password: 'alice-password-1', role: 'viewer' })).status).toBe(200);
+    expect((await h.req('POST', '/api/admins', { username: 'alice', password: 'alice-password-1', role: 'viewer' })).status).toBe(409);
+    const list = (await h.req('GET', '/api/admins')).json;
+    const me = list.rows.find((r: any) => r.username === 'owner');
+    const alice = list.rows.find((r: any) => r.username === 'alice');
+    expect(JSON.stringify(list)).not.toContain('pbkdf2'); // hashes are never returned
+    expect((await h.req('PUT', `/api/admins/${me.id}`, { role: 'viewer', isActive: true })).status).toBe(400);
+    expect((await h.req('PUT', `/api/admins/${alice.id}`, { role: 'viewer', isActive: true, password: 'new-alice-pass-2' })).status).toBe(200);
+    await h.login('alice', 'new-alice-pass-2');
+    expect((await h.req('POST', '/api/admins', { username: 'bob', password: 'bob-password-12', role: 'admin' })).status).toBe(403);
+    await h.login();
+    expect((await h.req('PUT', `/api/admins/${alice.id}`, { role: 'viewer', isActive: false })).status).toBe(200);
+    expect((await h.req('POST', '/api/auth/login', { username: 'alice', password: 'new-alice-pass-2' })).status).toBe(401);
+    expect(h.db.rows("SELECT action FROM audit_logs WHERE action LIKE 'ADMIN_USER_%'").length).toBe(3);
+  });
+});

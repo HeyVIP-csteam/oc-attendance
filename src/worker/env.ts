@@ -3,6 +3,8 @@ export interface Env {
   ASSETS: Fetcher;
   /** Secret: base64-encoded 32 random bytes. Encrypts bot tokens at rest and derives webhook secret tokens. */
   ENCRYPTION_KEY?: string;
+  /** Optional secret: one-time code that allows creating the FIRST admin from the login page (ignored once an admin exists). */
+  SETUP_CODE?: string;
   APP_ENV?: string;
   BIZ_TZ?: string;
   /** Optional: production origin, enforced on state-changing requests (in addition to SameSite=Strict cookies). */

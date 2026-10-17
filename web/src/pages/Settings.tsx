@@ -8,19 +8,20 @@ import { fmtDT } from '../lib/format';
 import { useI18n } from '../lib/i18n';
 import { toast, useApi, useData, usePageState } from '../lib/store';
 
-type Tab = 'shift3' | 'cur' | 'kw' | 'rules' | 'bot';
+type Tab = 'shift3' | 'cur' | 'kw' | 'rules' | 'bot' | 'admins';
 
 export function SettingsPage() {
   const { L } = useI18n();
   const [s, set] = usePageState('st', () => ({ tab: 'shift3' as Tab }));
   return (
     <>
-      <Tabs items={[['shift3', L('班次设置', 'Shift Setting')], ['cur', L('货币', 'Currency')], ['kw', L('打卡关键词', 'Punch keywords')], ['rules', L('考勤与异常规则', 'Attendance rules')], ['bot', L('Bot 设置', 'Bot Setting')]]} value={s.tab} onChange={(tab) => set({ tab })} />
+      <Tabs items={[['shift3', L('班次设置', 'Shift Setting')], ['cur', L('货币', 'Currency')], ['kw', L('打卡关键词', 'Punch keywords')], ['rules', L('考勤与异常规则', 'Attendance rules')], ['bot', L('Bot 设置', 'Bot Setting')], ['admins', L('管理员账号', 'Admin accounts')]]} value={s.tab} onChange={(tab) => set({ tab })} />
       {s.tab === 'shift3' && <Shift3 />}
       {s.tab === 'cur' && <Currencies />}
       {s.tab === 'kw' && <Keywords />}
       {s.tab === 'rules' && <Rules />}
       {s.tab === 'bot' && <Bots />}
+      {s.tab === 'admins' && <Admins />}
     </>
   );
 }
@@ -270,6 +271,75 @@ function BotModal({ b, onClose }: { b: BotView; onClose: () => void }) {
       )}
       <div style={{ marginTop: 8 }}><ErrBox error={err} /></div>
       <ModalActions onCancel={onClose} onOk={save} busy={busy} okLabel={L('保存并启动 Webhook', 'Save & start webhook')} />
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------- Admin accounts (D1 table admin_users)
+interface AdminRow { id: number; username: string; role: 'admin' | 'viewer'; is_active: number; last_login_at: number | null; locked_until: number | null; created_at: number }
+
+function Admins() {
+  const { L } = useI18n();
+  const { readOnly } = useData();
+  const { data, error, reload } = useApi<{ rows: AdminRow[]; me: number }>('/admins');
+  const [edit, setEdit] = useState<AdminRow | 'new' | null>(null);
+  return (
+    <div className="card"><h3>{L('管理员账号', 'Admin accounts')}</h3>
+      <ErrBox error={error} />
+      {data && (
+        <div className="tw"><table className="tpltbl"><thead><tr>
+          <th>{L('账号', 'Username')}</th><th>{L('权限', 'Role')}</th><th>{L('状态', 'Status')}</th><th>{L('最后登录', 'Last sign-in')}</th><th>{L('建立日期', 'Created')}</th><th className="c">{L('操作', 'Action')}</th>
+        </tr></thead><tbody>
+          {data.rows.map((a) => (
+            <tr key={a.id}>
+              <td><b>{a.username}</b>{a.id === data.me && <> <span className="b i">{L('你', 'you')}</span></>}</td>
+              <td>{a.role === 'admin' ? <span className="b v">{L('管理员', 'Admin')}</span> : <span className="b">{L('只读', 'Read-only')}</span>}</td>
+              <td>{!a.is_active ? <span className="b">{L('已停用', 'Disabled')}</span> : a.locked_until && a.locked_until > Date.now() ? <span className="b r">{L('暂时锁定', 'Locked')}</span> : <span className="b ok">{L('启用', 'Active')}</span>}</td>
+              <td>{a.last_login_at ? fmtDT(a.last_login_at) : <Mut />}</td><td>{fmtDT(a.created_at).slice(0, 10)}</td>
+              <td>{!readOnly && <button className="btn sm" onClick={() => setEdit(a)}>{L('编辑', 'Edit')}</button>}</td>
+            </tr>
+          ))}
+        </tbody></table></div>
+      )}
+      {!readOnly && <button className="btn p" style={{ marginTop: 10 }} onClick={() => setEdit('new')}>+ {L('新增账号', 'Add account')}</button>}
+      {edit && <AdminModal a={edit === 'new' ? null : edit} isMe={edit !== 'new' && edit.id === data?.me} onClose={() => { setEdit(null); void reload(); }} />}
+    </div>
+  );
+}
+
+function AdminModal({ a, isMe, onClose }: { a: AdminRow | null; isMe: boolean; onClose: () => void }) {
+  const { L } = useI18n();
+  const [username, setUsername] = useState(a?.username ?? '');
+  const [role, setRole] = useState<'admin' | 'viewer'>(a?.role ?? 'admin');
+  const [active, setActive] = useState(a ? !!a.is_active : true);
+  const [pw, setPw] = useState('');
+  const [pw2, setPw2] = useState('');
+  const [err, setErr] = useState<ApiErr | Error | null>(null);
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
+    if (!a && !/^[A-Za-z0-9_.@-]{3,64}$/.test(username.trim())) return setErr(new Error(L('账号需为 3–64 个英文字母、数字或 _ . @ -', 'Username: 3–64 letters, digits or _ . @ -')));
+    if ((!a || pw) && pw.length < 10) return setErr(new Error(L('密码至少 10 个字符', 'Password needs at least 10 characters')));
+    if (pw !== pw2) return setErr(new Error(L('两次输入的密码不同', 'The passwords do not match')));
+    setBusy(true);
+    try {
+      if (a) await api(`/admins/${a.id}`, { method: 'PUT', body: { role, isActive: active, password: pw } });
+      else await api('/admins', { method: 'POST', body: { username: username.trim(), password: pw, role } });
+      toast(L('账号已保存，并写入 Audit Log', 'Account saved and written to the audit log'));
+      onClose();
+    } catch (e) { setErr(e as ApiErr); } finally { setBusy(false); }
+  };
+  return (
+    <Modal onClose={onClose}>
+      <h3 style={{ marginTop: 0 }}>{a ? L('编辑账号 ', 'Edit account ') + a.username : L('新增账号', 'Add account')}</h3>
+      <div className="fg">
+        <div><label>{L('账号', 'Username')}</label><input type="text" value={username} disabled={!!a} autoComplete="off" onChange={(e) => setUsername(e.target.value)} /></div>
+        <div><label>{L('权限', 'Role')}</label><select value={role} disabled={isMe} onChange={(e) => setRole(e.target.value as 'admin' | 'viewer')}><option value="admin">{L('管理员（可修改）', 'Admin (can edit)')}</option><option value="viewer">{L('只读（只能查看）', 'Read-only (view only)')}</option></select></div>
+        {a && <div><label>{L('状态', 'Status')}</label><select value={active ? '1' : '0'} disabled={isMe} onChange={(e) => setActive(e.target.value === '1')}><option value="1">{L('启用', 'Active')}</option><option value="0">{L('停用', 'Disabled')}</option></select></div>}
+        <div><label>{a ? L('新密码（留空 = 不更改）', 'New password (empty = unchanged)') : L('密码（至少 10 个字符）', 'Password (min. 10 characters)')}</label><input type="password" autoComplete="new-password" value={pw} onChange={(e) => setPw(e.target.value)} /></div>
+        <div><label>{L('再次输入密码', 'Repeat password')}</label><input type="password" autoComplete="new-password" value={pw2} onChange={(e) => setPw2(e.target.value)} /></div>
+      </div>
+      <div style={{ marginTop: 8 }}><ErrBox error={err} /></div>
+      <ModalActions onCancel={onClose} onOk={save} busy={busy} />
     </Modal>
   );
 }

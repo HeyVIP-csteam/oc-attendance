@@ -1,7 +1,7 @@
 # 测试与验收
 
 ```bash
-npm test          # 78 个测试：test/engine.test.ts（纯计算）+ test/api.test.ts（整个 Worker）
+npm test          # 80 个测试：test/engine.test.ts（纯计算）+ test/api.test.ts（整个 Worker）
 ```
 
 集成测试直接呼叫真正的 Worker（Hono 路由、Webhook、重算、Cron），数据库是用 **真实 migration** 建立的 SQLite（`test/d1-shim.ts`，与 D1 一样强制外键、batch 原子执行，并可模拟写入失败）。Telegram API 以假服务器替代。时间以 `vi.setSystemTime` 控制。
@@ -26,7 +26,7 @@ npm test          # 78 个测试：test/engine.test.ts（纯计算）+ test/api.
 | 14 | 无效状态转换 | engine「state machine」；api「test 14」 |
 | 15 | 时区处理 | engine「time zones」（含夏令时时区） |
 | 16 | 管理员修正及审计 | api「admin corrections and audit」（含 Trigger 禁止改写原始资料） |
-| 17 | 未授权 API | api「security」（无 Session、只读账号、跨来源、登录锁定、Token 加密） |
+| 17 | 未授权 API | api「security」（无 Session、只读账号、跨来源、登录锁定、Token 加密）；api「admin accounts」（设置码、账号管理权限） |
 | 18 | 重复 Webhook 与写入失败 | api「test 18」、「recompute failure … healed by the cron job」 |
 
 ## 重要计算的输入与预期（摘自测试）
@@ -47,7 +47,7 @@ npm test          # 78 个测试：test/engine.test.ts（纯计算）+ test/api.
 
 ## 实际执行过的验证（制作时）
 
-- `npm test`：2 个文件、78 个测试全部通过
+- `npm test`：2 个文件、80 个测试全部通过
 - `npm run typecheck`、`npm run build`：通过
 - `wrangler dev`（真实 workerd + 本地 D1）：migration 套用成功（含 Trigger）；以 `npm run simulate -- --demo` 送入 899 个 Telegram update，全部 HTTP 200，正确分类（重复休息、休息中下班、General、未绑定 Topic、其他货币 Bot）；Cron 端点执行成功；管理员补录（`last_insert_rowid()` 在 D1 batch 内）与跨来源拒绝已验证
 - 无头 Chromium：中文 1440px 与英文 390px 下逐页浏览，无前端错误、无水平溢出（Google Fonts 在测试环境被挡，属正常）

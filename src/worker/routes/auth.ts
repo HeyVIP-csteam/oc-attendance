@@ -3,9 +3,9 @@ import { z } from 'zod';
 import type { AppBindings } from '../env';
 import { auditStmt } from '../lib/audit';
 import { clearSessionCookie, createSession, LOCK_MS, MAX_FAILED, requireSession } from '../lib/auth';
-import { hashPassword, verifyPassword } from '../lib/crypto';
+import { hashPassword, safeEqual, verifyPassword } from '../lib/crypto';
 import { first, stmt } from '../lib/db';
-import { ApiError, body, clientIp } from '../lib/http';
+import { ApiError, body, clientIp, conflict } from '../lib/http';
 
 export const authRoutes = new Hono<AppBindings>();
 
@@ -75,4 +75,39 @@ authRoutes.post('/password', requireSession, async (c) => {
     auditStmt(db, { actor: a.username, action: 'ADMIN_PASSWORD_CHANGED', entityType: 'admin_user', entityId: a.id, ip: clientIp(c), at: now }),
   ]);
   return c.json({ ok: true });
+});
+
+// ---------------------------------------------------------------- first-run setup (only while no admin exists)
+authRoutes.get('/setup-status', async (c) => {
+  const n = await first<{ n: number }>(c.env.DB, 'SELECT COUNT(*) AS n FROM admin_users');
+  return c.json({ needsSetup: (n?.n ?? 0) === 0, setupEnabled: !!c.env.SETUP_CODE });
+});
+
+export const UsernameSchema = z.string().trim().regex(/^[A-Za-z0-9_.@-]{3,64}$/, '3–64 letters, digits, _ . @ -');
+export const PasswordSchema = z.string().min(10).max(200);
+
+authRoutes.post('/setup', async (c) => {
+  const v = await body(c, z.object({ code: z.string().max(200), username: UsernameSchema, password: PasswordSchema }));
+  const db = c.env.DB;
+  const now = Date.now();
+  const ip = clientIp(c);
+  if (!c.env.SETUP_CODE) throw new ApiError(403, 'SETUP_DISABLED', { zh: '尚未设定 SETUP_CODE，无法在网页建立第一个管理员', en: 'SETUP_CODE is not configured; the first admin cannot be created from the web' });
+  const existing = await first<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM admin_users');
+  if ((existing?.n ?? 0) > 0) throw conflict('SETUP_DONE', '已经有管理员，请直接登录', 'An administrator already exists; please sign in');
+  if (!safeEqual(v.code.trim(), c.env.SETUP_CODE.trim())) {
+    await auditStmt(db, { actor: v.username, action: 'ADMIN_SETUP_FAILED', entityType: 'admin_user', note: 'wrong setup code', ip, at: now }).run();
+    throw new ApiError(401, 'BAD_SETUP_CODE', { zh: '设置码不正确', en: 'Incorrect setup code' });
+  }
+  try {
+    // the WHERE NOT EXISTS guard makes the insert a no-op if another request created an admin at the same moment
+    await db.batch([
+      stmt(db, `INSERT INTO admin_users (username, password_hash, role, is_active, last_login_at, created_at, updated_at)
+                SELECT ?, ?, 'admin', 1, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM admin_users)`, v.username, await hashPassword(v.password), now, now, now),
+      auditStmt(db, { actor: v.username, action: 'ADMIN_SETUP', entityType: 'admin_user', entityId: v.username, after: { role: 'admin' }, note: 'first administrator created from the setup page', ip, at: now }),
+    ]);
+  } catch { throw conflict('SETUP_DONE', '已经有管理员，请直接登录', 'An administrator already exists; please sign in'); }
+  const u = await first<{ id: number; username: string }>(db, 'SELECT id, username FROM admin_users WHERE username = ?', v.username);
+  if (!u) throw conflict('SETUP_DONE', '已经有管理员，请直接登录', 'An administrator already exists; please sign in');
+  await (await createSession(c, u.id, now)).run();
+  return c.json({ ok: true, user: { id: u.id, username: u.username, role: 'admin' } });
 });
