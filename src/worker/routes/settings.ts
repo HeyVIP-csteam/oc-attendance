@@ -156,6 +156,17 @@ async function registerWebhook(env: Env, bot: BotRow, token: string, url: string
   return tgCall<TgWebhookInfo>(token, 'getWebhookInfo');
 }
 
+/**
+ * Telegram's getWebhookInfo keeps returning its *last* delivery error long after the problem is gone
+ * (even across setWebhook). Errors older than `since` belong to an earlier configuration and are not shown.
+ */
+function webhookError(info: TgWebhookInfo, since: number | null): string | null {
+  if (!info.last_error_message) return null;
+  const errAt = info.last_error_date ? info.last_error_date * 1000 : null;
+  if (since != null && errAt != null && errAt < since) return null;
+  return `${info.last_error_message}${errAt ? ` @ ${new Date(errAt).toISOString()}` : ''}`;
+}
+
 const tgFail = (e: unknown) => new ApiError(502, 'TELEGRAM_ERROR', { zh: `Telegram 返回错误：${(e as Error).message}`, en: (e as Error).message });
 
 settingsRoutes.put('/bots/:code', async (c) => {
@@ -185,7 +196,7 @@ settingsRoutes.put('/bots/:code', async (c) => {
   await db.batch([
     stmt(db, `UPDATE telegram_bots SET bot_user_id = ?, username = ?, token_ciphertext = ?, token_last4 = ?, webhook_url = ?, status = 'ACTIVE', can_read_all_group_messages = ?,
               pending_update_count = ?, last_error = ?, last_checked_at = ?, updated_at = ? WHERE id = ?`,
-      me.id, me.username ?? null, cipher, token.slice(-4), v.webhookUrl, me.can_read_all_group_messages ? 1 : 0, info.pending_update_count ?? 0, info.last_error_message ?? null, now, now, bot.id),
+      me.id, me.username ?? null, cipher, token.slice(-4), v.webhookUrl, me.can_read_all_group_messages ? 1 : 0, info.pending_update_count ?? 0, webhookError(info, Math.floor(now / 1000) * 1000), now, now, bot.id),
     auditStmt(db, { actor: c.get('admin').username, action: 'BOT_WEBHOOK_SET', entityType: 'telegram_bot', entityId: code,
       before: { bot: bot.username, status: bot.status, url: bot.webhook_url },
       after: { bot: me.username, status: 'ACTIVE', url: v.webhookUrl, token: `••••${token.slice(-4)}`, allowed_updates: ALLOWED_UPDATES }, ip: clientIp(c), at: now }),
@@ -213,8 +224,7 @@ async function botAction(c: Context<AppBindings>, action: 'check' | 'stop' | 'st
       const errAt = info.last_error_date ? info.last_error_date * 1000 : null;
       const recovered = !!info.last_error_message && errAt != null && !info.pending_update_count &&
         !!(await first(db, 'SELECT id FROM telegram_messages WHERE bot_id = ? AND received_at > ? LIMIT 1', bot.id, errAt));
-      const lastErr = !urlOk ? `Webhook URL mismatch: Telegram has "${info.url || '(none)'}"`
-        : info.last_error_message && !recovered ? `${info.last_error_message}${errAt ? ` @ ${new Date(errAt).toISOString()}` : ''}` : null;
+      const lastErr = !urlOk ? `Webhook URL mismatch: Telegram has "${info.url || '(none)'}"` : recovered ? null : webhookError(info, null);
       await db.batch([stmt(db, `UPDATE telegram_bots SET can_read_all_group_messages = ?, pending_update_count = ?, last_error = ?, last_checked_at = ?, status = ?, updated_at = ? WHERE id = ?`,
         me.can_read_all_group_messages ? 1 : 0, info.pending_update_count, lastErr, now, bot.status === 'ACTIVE' && !urlOk ? 'ERROR' : bot.status, now, bot.id), bump(db, now)]);
       return c.json({ ok: true, pending: info.pending_update_count, url: info.url, canReadAllGroupMessages: !!me.can_read_all_group_messages, lastError: lastErr });
@@ -235,9 +245,15 @@ async function botAction(c: Context<AppBindings>, action: 'check' | 'stop' | 'st
       const salt = [...randomBytes(16)].map((x) => x.toString(16).padStart(2, '0')).join('');
       b = { ...bot, secret_salt: salt };
     }
-    const info = await registerWebhook(c.env, b, token, bot.webhook_url!);
+    if (b.secret_salt !== bot.secret_salt) await stmt(db, 'UPDATE telegram_bots SET secret_salt = ? WHERE id = ?', b.secret_salt, bot.id).run();
+    let info: TgWebhookInfo;
+    try { info = await registerWebhook(c.env, b, token, bot.webhook_url!); }
+    catch (e) {
+      if (b.secret_salt !== bot.secret_salt) await stmt(db, 'UPDATE telegram_bots SET secret_salt = ? WHERE id = ?', bot.secret_salt, bot.id).run();
+      throw e;
+    }
     await db.batch([
-      stmt(db, "UPDATE telegram_bots SET status = 'ACTIVE', secret_salt = ?, pending_update_count = ?, last_error = ?, last_checked_at = ?, updated_at = ? WHERE id = ?", b.secret_salt, info.pending_update_count ?? 0, info.last_error_message ?? null, now, now, bot.id),
+      stmt(db, "UPDATE telegram_bots SET status = 'ACTIVE', secret_salt = ?, pending_update_count = ?, last_error = ?, last_checked_at = ?, updated_at = ? WHERE id = ?", b.secret_salt, info.pending_update_count ?? 0, webhookError(info, Math.floor(now / 1000) * 1000), now, now, bot.id),
       auditStmt(db, { actor, action: action === 'rotate' ? 'BOT_SECRET_ROTATED' : 'BOT_WEBHOOK_SET', entityType: 'telegram_bot', entityId: code, before: { status: bot.status }, after: { status: 'ACTIVE' }, ip: clientIp(c), at: now }),
       bump(db, now),
     ]);
