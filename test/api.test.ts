@@ -1,7 +1,7 @@
 // Integration tests: the real Worker (Hono app, webhook, recompute, cron) against the real migrations in SQLite.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HOUR, MIN } from '../src/shared/time';
-import { CHAT, fixture, Harness, lk } from './helpers';
+import { CHAT, fixture, Harness, lk, TEST_KEYWORDS, TEST_PARSER } from './helpers';
 
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
@@ -304,11 +304,10 @@ describe('admin corrections and audit (test 16)', () => {
     expect(h.db.get('SELECT status, handled_by FROM attendance_exceptions WHERE id = ?', ex.id)).toEqual({ status: 'RESOLVED', handled_by: 'owner' });
   });
 
-  it('real-world messages: label lines skipped, break remark shown, bot says what it read; migration 0005 widened the defaults', async () => {
+  it('real-world messages with admin-entered keywords and reading rules: label lines skipped, break remark shown', async () => {
     const { h, e1 } = await fixture();
-    const kw = JSON.parse((h.db.get("SELECT value FROM system_settings WHERE key = 'keywords'") as { value: string }).value);
-    expect(kw.BREAK_START).toContain('WC');
-    expect(kw.CLOCK_OUT).toContain('DONE FOR THE DAY');
+    expect((await h.req('PUT', '/api/settings/keywords', { keywords: TEST_KEYWORDS })).status).toBe(200);
+    expect((await h.req('PUT', '/api/settings/parser', TEST_PARSER)).status).toBe(200);
     await h.roster(e1, D, 'A');
     const a = await h.send({ text: 'Clocked in\nAgent: Nimal\nDate: 15/10/2026', ts: lk(D, '06:58'), thread: 1001 });
     expect(a.json.status).toBe('PROCESSED');

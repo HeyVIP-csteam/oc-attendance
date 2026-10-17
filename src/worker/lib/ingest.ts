@@ -108,7 +108,7 @@ export async function ingestUpdate(env: Env, bot: BotRow, upd: TgUpdate, receive
     return { http: 200, status: 'IGNORED_OTHER_BOT', codes: [] };
   }
 
-  const idx = buildKeywordIndex(settings.keywords);
+  const idx = buildKeywordIndex(settings.keywords, settings.parser);
   const parsed = parseText(text, idx);
   const fromName = [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(' ').slice(0, 200) || null;
   const forwarded = msg.forward_origin || msg.forward_date ? 1 : 0;
@@ -216,7 +216,7 @@ export async function reparsePending(env: Env, actor: string, now: number): Prom
               FROM telegram_messages WHERE processing_status = 'PENDING_REVIEW' ORDER BY id LIMIT 200`),
   ]);
   const settings = parseSettings(setR.results as { key: string; value: string }[]);
-  const idx = buildKeywordIndex(settings.keywords);
+  const idx = buildKeywordIndex(settings.keywords, settings.parser);
   let n = 0;
   const keys: [number, string][] = [];
   for (const m of pendR.results as { id: number; chat_id: number; message_id: number; message_thread_id: number | null; raw_text: string; is_forwarded: number; telegram_message_ts: number; received_at: number }[]) {

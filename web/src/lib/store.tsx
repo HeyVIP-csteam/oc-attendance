@@ -11,6 +11,7 @@ export interface Meta {
   employees: MetaEmployee[];
   keywords: Record<'CLOCK_IN' | 'BREAK_START' | 'BREAK_END' | 'CLOCK_OUT', string[]>;
   rules: { windowHours: number; lateAsException: boolean; botReply: boolean; allowedChats: number[] };
+  parser?: { skipLabels: string[]; typoTolerance: boolean; ignoreBrackets: boolean; typedTimeReview: boolean };
   dataVersion: number;
 }
 

@@ -7,7 +7,7 @@
   → Telegram Bot（每个货币一个）→ Webhook POST /api/telegram/webhook/<货币>
   → Worker：验证 secret_token → 去重（update_id / chat_id+message_id）→ Chat 允许名单
   → 身份：只用 (chat_id, message_thread_id) 在「消息时间」有效的 Topic 绑定
-  → 关键词解析（跳过 Agent:/Name:/Date: 等资料行；长句优先匹配；容许拼错一个字母；含多个动作或自己写的时间 → 待检查）
+  → 关键词解析（关键词与读取规则都在 Settings → Punch keywords 设定：跳过指定的资料行；长句优先匹配；容许拼错一个字母；含多个动作或自己写的时间 → 待检查）
   → D1：原始消息 + 考勤事件（同一个原子 batch）
   → 归属考勤日 → 状态机 + 计算 → 写入 sessions / breaks / exceptions
   → Bot 在 Topic 回复确认（非同步，失败不影响资料）

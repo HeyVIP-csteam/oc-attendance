@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { EVENT_LABEL, EVENT_TYPES, type KeywordConfig } from '../../../src/shared/codes';
+import { DEFAULT_PARSER, EVENT_LABEL, EVENT_TYPES, type KeywordConfig, type ParserRules } from '../../../src/shared/codes';
 import { buildKeywordIndex, parseText } from '../../../src/shared/parser';
 import { toMin } from '../../../src/shared/time';
 import { Empty, ErrBox, Field, Modal, ModalActions, Mut, Tabs } from '../components/ui';
@@ -122,7 +122,20 @@ function Keywords() {
   const [err, setErr] = useState('');
   const onErr = useErr();
   const parsed = useMemo(() => Object.fromEntries(EVENT_TYPES.map((k) => [k, [...new Set(kw[k].split('\n').map((s) => s.trim()).filter(Boolean))]])) as unknown as KeywordConfig, [kw]);
-  const res = test ? parseText(test, buildKeywordIndex(parsed)) : null;
+  const [pr, setPr] = useState<ParserRules>(() => ({ ...DEFAULT_PARSER, ...meta.parser }));
+  const [labels, setLabels] = useState(() => (meta.parser?.skipLabels ?? []).join('\n'));
+  const rulesNow: ParserRules = useMemo(() => ({ ...pr, skipLabels: labels.split('\n').map((s) => s.trim()).filter(Boolean) }), [pr, labels]);
+  const res = test ? parseText(test, buildKeywordIndex(parsed, rulesNow)) : null;
+  const saveRules = async () => {
+    try { await api('/settings/parser', { method: 'PUT', body: rulesNow }); setErr(''); toast(L('读取规则已保存', 'Reading rules saved')); await reloadMeta(); }
+    catch (e) { setErr(dt((e as ApiErr).msg)); }
+  };
+  const sw = (k: 'typoTolerance' | 'ignoreBrackets' | 'typedTimeReview', zh: string, en: string, hint: string) => (
+    <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', marginBottom: 12, textAlign: 'left' }}>
+      <input id={`pr-${k}`} type="checkbox" checked={pr[k]} disabled={readOnly} onChange={(e) => setPr({ ...pr, [k]: e.target.checked })} style={{ width: 16, height: 16, minWidth: 16, flex: 'none', marginTop: 2 }} />
+      <div style={{ cursor: 'pointer' }} onClick={() => !readOnly && setPr({ ...pr, [k]: !pr[k] })}><b style={{ fontSize: 13.5 }}>{L(zh, en)}</b><div className="mut" style={{ fontSize: 12, marginTop: 2 }}>{hint}</div></div>
+    </div>
+  );
   const save = async () => {
     for (const k of EVENT_TYPES) if (!parsed[k].length) return setErr(L(`${k} 至少需要一个关键词`, `${k} needs at least one keyword`));
     try { await api('/settings/keywords', { method: 'PUT', body: { keywords: parsed } }); setErr(''); toast(L('关键词已保存', 'Keywords saved')); await reloadMeta(); }
@@ -133,6 +146,7 @@ function Keywords() {
     catch (e) { onErr(e); }
   };
   return (
+    <>
     <div className="card"><h3>{L('打卡关键词（每行一个，不区分大小写）', 'Punch keywords (one per line, case-insensitive)')}</h3>
       <div className="fg">{EVENT_TYPES.map((k) => <div key={k}><label>{k} · {dt(EVENT_LABEL[k])}</label><textarea rows={9} value={kw[k]} disabled={readOnly} onChange={(e) => setKw({ ...kw, [k]: e.target.value })} /></div>)}</div>
       <div className="row" style={{ marginTop: 8 }}>
@@ -144,6 +158,22 @@ function Keywords() {
       {err && <div className="err">{err}</div>}
       {!readOnly && <div className="row" style={{ marginTop: 12 }}><button className="btn p" onClick={save}>{L('保存关键词', 'Save keywords')}</button><button className="btn" onClick={reparse}>{L('用新关键词重新解析「待检查」消息', 'Re-parse pending messages with new keywords')}</button></div>}
     </div>
+    <div className="card"><h3>{L('消息读取规则', 'Message reading rules')}</h3>
+      <div className="fg">
+        <div><label>{L('跳过的资料行（每行一个标签）', 'Lines to skip (one label per line)')}</label>
+          <textarea rows={8} value={labels} disabled={readOnly} placeholder={'Agent\nName\nCS Name\nDate'} onChange={(e) => setLabels(e.target.value)} />
+          <div className="mut" style={{ fontSize: 12, marginTop: 4 }}>{L('以这些字开头、后面接「:」的整行会被忽略，例如 Agent: Nisha、Date: 16/10/2026。', 'A whole line starting with one of these followed by ":" is ignored, e.g. "Agent: Nisha", "Date: 16/10/2026".')}</div>
+        </div>
+        <div>
+          {sw('typoTolerance', '容许拼错', 'Typo tolerance', L('差一个字母或重复字母也算，例如 clok in、brek、innnn', 'One letter off or repeated letters count, e.g. clok in, brek, innnn'))}
+          {sw('ignoreBrackets', '忽略括号内容', 'Ignore brackets', L('例如 Taking Break ( David) 只读 Taking Break', 'e.g. "Taking Break ( David)" is read as "Taking Break"'))}
+          {sw('typedTimeReview', '有自己写的时间 → 待检查', 'Typed time → review', L('例如 IN 08:30 不直接打卡，交给管理员确认；关闭则照样打卡。打卡时间一律用 Telegram 消息时间', 'e.g. "IN 08:30" goes to review; when off it punches. The Telegram message time is always used'))}
+        </div>
+      </div>
+      <div className="mut" style={{ fontSize: 12 }}>{L('上方「测试解析」会同时套用这里尚未保存的设定。', 'The parser test above already uses these (unsaved) settings.')}</div>
+      {!readOnly && <div className="row" style={{ marginTop: 12 }}><button className="btn p" onClick={saveRules}>{L('保存读取规则', 'Save reading rules')}</button></div>}
+    </div>
+    </>
   );
 }
 

@@ -1,9 +1,9 @@
-import { DEFAULT_KEYWORDS, DEFAULT_RULES, type KeywordConfig, type Rules, BIZ_TZ_DEFAULT } from '../../shared/codes';
+import { DEFAULT_KEYWORDS, DEFAULT_PARSER, DEFAULT_RULES, type KeywordConfig, type ParserRules, type Rules, BIZ_TZ_DEFAULT } from '../../shared/codes';
 import type { Env } from '../env';
 
-export interface Settings { keywords: KeywordConfig; rules: Rules; dataVersion: number }
+export interface Settings { keywords: KeywordConfig; rules: Rules; parser: ParserRules; dataVersion: number }
 
-export const settingsStmt = (db: D1Database) => db.prepare("SELECT key, value FROM system_settings WHERE key IN ('keywords','rules','data_version')");
+export const settingsStmt = (db: D1Database) => db.prepare("SELECT key, value FROM system_settings WHERE key IN ('keywords','rules','parser','data_version')");
 
 export function parseSettings(rows: { key: string; value: string }[]): Settings {
   const m = new Map(rows.map((r) => [r.key, r.value]));
@@ -13,6 +13,7 @@ export function parseSettings(rows: { key: string; value: string }[]): Settings 
   return {
     keywords: safe<KeywordConfig>(m.get('keywords'), DEFAULT_KEYWORDS),
     rules,
+    parser: safe<ParserRules>(m.get('parser'), DEFAULT_PARSER),
     dataVersion: Number(m.get('data_version') ?? 0),
   };
 }

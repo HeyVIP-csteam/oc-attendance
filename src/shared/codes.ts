@@ -84,12 +84,23 @@ export const FIXED = {
   openSessionMaxHours: 20,  // a BREAK/RESUME/OUT is attached to an open session started within this many hours
 } as const;
 
+/** Fallback only — the real keyword list lives in the database (Settings → Punch keywords, seeded by migrations). */
 export const DEFAULT_KEYWORDS: KeywordConfig = {
-  CLOCK_IN: ['IN', 'CLOCK IN', 'CLOCKED IN', 'CHECK IN', 'CHECKED IN', 'LOG IN', 'LOGIN', 'LOGGED IN', 'LOG IN FOR THE DAY', 'START OF SHIFT', 'START SHIFT'],
-  BREAK_START: ['BREAK', 'BREAK START', 'BRAKE', 'SHORT BREAK', 'LUNCH BREAK', 'DINNER BREAK', 'TAKING BREAK', 'TAKING A BREAK', 'LUNCH', 'DINNER', 'WC', 'TOILET', 'CR', 'BRB'],
-  BREAK_END: ['RESUME', 'BREAK END', 'BACK', "I'M BACK", 'BACK FROM BREAK', 'BACK TO WORK', 'BREAK OVER', 'END BREAK'],
-  CLOCK_OUT: ['OUT', 'CLOCK OUT', 'CLOCKED OUT', 'CHECK OUT', 'CHECKED OUT', 'LOG OUT', 'LOGOUT', 'LOGGED OUT', 'DONE FOR THE DAY', 'END OF SHIFT'],
+  CLOCK_IN: ['IN'], BREAK_START: ['BREAK'], BREAK_END: ['RESUME'], CLOCK_OUT: ['OUT'],
 };
+
+/** How messages are read. Stored in the database (Settings → Punch keywords → Message reading rules). */
+export interface ParserRules {
+  /** Lines starting with one of these labels followed by ":" are information, never the action ("Agent: Nisha"). */
+  skipLabels: string[];
+  /** Accept one wrong / missing / swapped letter ("clok in", "brek") and repeated letters ("innnn"). */
+  typoTolerance: boolean;
+  /** Ignore text in brackets ("Taking Break ( David)"). */
+  ignoreBrackets: boolean;
+  /** A message with a typed clock time ("IN 08:30") goes to review instead of punching. The typed time is never used either way. */
+  typedTimeReview: boolean;
+}
+export const DEFAULT_PARSER: ParserRules = { skipLabels: [], typoTolerance: true, ignoreBrackets: true, typedTimeReview: true };
 export const DEFAULT_RULES: Rules = { windowHours: 4, lateAsException: false, botReply: true, allowedChats: [] };
 
 export const BIZ_TZ_DEFAULT = 'Asia/Colombo';

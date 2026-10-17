@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_KEYWORDS } from '../src/shared/codes';
 import { computeSession, type EngineEvent, type EngineInstance, runStateMachine } from '../src/shared/engine';
 import { buildKeywordIndex, normText, parseText, validateKeywords } from '../src/shared/parser';
+import { TEST_KEYWORDS, TEST_PARSER } from './helpers';
 import { addDays, HOUR, localDate, MIN, shiftWindow, zonedToUtc } from '../src/shared/time';
 
 const TZ = 'Asia/Colombo';
@@ -44,7 +45,7 @@ describe('time zones (test 15)', () => {
 });
 
 describe('keyword parser', () => {
-  const idx = buildKeywordIndex(DEFAULT_KEYWORDS);
+  const idx = buildKeywordIndex(TEST_KEYWORDS, TEST_PARSER);
   it.each([
     ['IN', 'CLOCK_IN'], ['in', 'CLOCK_IN'], ['  In. ', 'CLOCK_IN'], ['IN ✅', 'CLOCK_IN'], ['clock-in', 'CLOCK_IN'], ['Clock In!', 'CLOCK_IN'], ['/in@MyBot', 'CLOCK_IN'],
     ['BREAK', 'BREAK_START'], ['break start', 'BREAK_START'], ['RESUME', 'BREAK_END'], ['Break End', 'BREAK_END'], ['OUT 👋', 'CLOCK_OUT'], ['clock out', 'CLOCK_OUT'],
@@ -82,15 +83,28 @@ describe('keyword parser', () => {
     expect(parseText(text, idx).kind).toBe('NONE');
   });
   it('custom aliases including non-Latin keywords', () => {
-    const i2 = buildKeywordIndex({ ...DEFAULT_KEYWORDS, CLOCK_IN: ['IN', '上班'] });
+    const i2 = buildKeywordIndex({ ...TEST_KEYWORDS, CLOCK_IN: ['IN', '上班'] }, TEST_PARSER);
     expect(parseText('上班', i2)).toMatchObject({ kind: 'PUNCH', type: 'CLOCK_IN' });
     expect(parseText('上班了', i2)).toMatchObject({ kind: 'PUNCH', type: 'CLOCK_IN' });
     expect(parseText('今天上班的时候系统一直卡住很久', i2).kind).toBe('NONE');
+  });
+  it('reading rules come from settings: labels, typo tolerance, brackets, typed times', () => {
+    const msg = 'Agent: Out Smith\nClocked in';
+    expect(parseText(msg, buildKeywordIndex(TEST_KEYWORDS, TEST_PARSER))).toMatchObject({ kind: 'PUNCH', type: 'CLOCK_IN' });
+    expect(parseText(msg, buildKeywordIndex(TEST_KEYWORDS, { ...TEST_PARSER, skipLabels: [] })).kind).toBe('UNRECOGNIZED'); // "Out" in the name now counts
+    expect(parseText('brek', buildKeywordIndex(TEST_KEYWORDS, { ...TEST_PARSER, typoTolerance: false })).kind).not.toBe('PUNCH');
+    expect(parseText('IN 08:30', buildKeywordIndex(TEST_KEYWORDS, { ...TEST_PARSER, typedTimeReview: false }))).toMatchObject({ kind: 'PUNCH', type: 'CLOCK_IN' });
+    expect(parseText('Taking Break (back soon)', buildKeywordIndex(TEST_KEYWORDS, { ...TEST_PARSER, ignoreBrackets: false })).kind).toBe('UNRECOGNIZED');
+  });
+  it('code fallback is only the four basic keywords', () => {
+    expect(DEFAULT_KEYWORDS).toEqual({ CLOCK_IN: ['IN'], BREAK_START: ['BREAK'], BREAK_END: ['RESUME'], CLOCK_OUT: ['OUT'] });
+    expect(parseText('WC', buildKeywordIndex(DEFAULT_KEYWORDS)).kind).toBe('NONE'); // WC only works once an admin adds it
   });
   it('rejects ambiguous keyword configurations', () => {
     expect(validateKeywords({ ...DEFAULT_KEYWORDS, CLOCK_OUT: ['OUT', 'in'] })).not.toBeNull();
     expect(validateKeywords({ ...DEFAULT_KEYWORDS, BREAK_END: [] })).not.toBeNull();
     expect(validateKeywords(DEFAULT_KEYWORDS)).toBeNull();
+    expect(validateKeywords(TEST_KEYWORDS)).toBeNull();
   });
   it('normalises punctuation and case', () => expect(normText('  Clock_IN!! ')).toBe('clock in'));
 });

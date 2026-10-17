@@ -1,5 +1,7 @@
 // Plain-text punch parser. Deterministic: the same text and keyword list always give the same result.
 //
+// Nothing about wording is hard-coded: the keywords AND the reading rules (labels to skip, typo tolerance, brackets,
+// typed times) come from the database — Settings → Punch keywords. The examples below use the seeded defaults.
 // Each employee's topic is used only for punching, so the parser reads the way people actually write:
 //   "Clocked in\nAgent: Nisha\nDate: 16/10/2026"   → CLOCK_IN   (label lines such as Agent:/Name:/Date: are skipped)
 //   "Taking Break ( David)", "Lunch Break - 60 mins" → BREAK_START (text in brackets and durations are ignored)
@@ -8,7 +10,7 @@
 // Messages are UNRECOGNIZED (pending review, never a punch) when they mention two different actions, or contain a
 // clock time ("IN 08:30") — an employee-typed time is never trusted; the event time is always Telegram's message.date.
 
-import type { EventType, KeywordConfig } from './codes';
+import { DEFAULT_PARSER, type EventType, type KeywordConfig, type ParserRules } from './codes';
 
 export type ParseResult =
   | { kind: 'PUNCH'; type: EventType; norm: string; keyword: string; fuzzy: boolean; remark: string }
@@ -27,9 +29,10 @@ export function normText(t: string | null | undefined): string {
     .trim();
 }
 
-export interface KeywordIndex { map: Map<string, EventType>; sorted: string[]; tokens: Set<string> }
+export interface KeywordIndex { map: Map<string, EventType>; sorted: string[]; tokens: Set<string>; rules: ParserRules; label: RegExp | null }
 
-export function buildKeywordIndex(kw: KeywordConfig): KeywordIndex {
+export function buildKeywordIndex(kw: KeywordConfig, parser: Partial<ParserRules> = {}): KeywordIndex {
+  const rules: ParserRules = { ...DEFAULT_PARSER, ...parser };
   const map = new Map<string, EventType>();
   for (const [type, list] of Object.entries(kw) as [EventType, string[]][]) {
     for (const k of list) {
@@ -40,11 +43,12 @@ export function buildKeywordIndex(kw: KeywordConfig): KeywordIndex {
   const sorted = [...map.keys()].sort((a, b) => b.length - a.length); // longest phrase first
   const tokens = new Set<string>();
   for (const k of map.keys()) for (const w of k.split(' ')) tokens.add(w);
-  return { map, sorted, tokens };
+  const labels = (rules.skipLabels ?? []).map((l) => l.trim()).filter(Boolean).sort((a, b) => b.length - a.length)
+    .map((l) => l.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s*'));
+  const label = labels.length ? new RegExp(`^\\s*(${labels.join('|')})\\s*[:：]`, 'i') : null;
+  return { map, sorted, tokens, rules, label };
 }
 
-/** "Agent: Nisha", "CS Name: Joy Shah", "Date: 16/10/2026", "姓名：…" — information lines, never the action. */
-const LABEL_LINE = /^\s*(agent|agent name|name|cs name|cs|staff|staff name|employee|employee name|emp|id|psd id|date|time|day|shift|姓名|名字|名称|日期|时间|班次)\s*[:：]/i;
 /** A clock time typed by the employee: 08:30, 8.30, 9am, 9 pm. Durations ("60 mins", "30minute") are fine. */
 const TIME_RE = /(^|[^\d])\d{1,2}\s*[:：.]\s*\d{2}(?!\d)|(^|[^\d])\d{1,2}\s*(am|pm|a\.m|p\.m)\b/i;
 const MAX_LINE_WORDS = 12;   // longer lines are prose, not a punch
@@ -52,10 +56,10 @@ const SHORT_LINE_WORDS = 4;  // a single-word keyword ("in", "back") only counts
 const isLatin = (s: string) => !/[^\x00-\x7f]/.test(s);
 
 /** Splits the message into the lines that may carry the action (label lines and bracketed asides removed). */
-function actionLines(text: string): { raw: string; norm: string }[] {
+function actionLines(text: string, idx: KeywordIndex): { raw: string; norm: string }[] {
   return text.split(/\r?\n/)
-    .filter((l) => !LABEL_LINE.test(l))
-    .map((l) => ({ raw: l.trim(), norm: normText(l.replace(/[(（][^)）]*[)）]?/g, ' ')) }))
+    .filter((l) => !idx.label?.test(l))
+    .map((l) => ({ raw: l.trim(), norm: normText(idx.rules.ignoreBrackets ? l.replace(/[(（][^)）]*[)）]?/g, ' ') : l) }))
     .filter((l) => l.norm);
 }
 
@@ -121,9 +125,9 @@ function fuzzyHits(line: { raw: string; norm: string }, idx: KeywordIndex): Hit[
 export function parseText(text: string | null | undefined, idx: KeywordIndex): ParseResult {
   const n = normText(text);
   if (!n) return { kind: 'NONE', norm: n };
-  const lines = actionLines(text || '');
+  const lines = actionLines(text || '', idx);
   let hits = lines.flatMap((l) => exactHits(l, idx));
-  if (!hits.length) hits = lines.flatMap((l) => fuzzyHits(l, idx));
+  if (!hits.length && idx.rules.typoTolerance) hits = lines.flatMap((l) => fuzzyHits(l, idx));
   if (!hits.length) {
     // short message that shares a word with a keyword but is not one ("clock", "shift") → let an admin look at it
     const w = n.split(' ');
@@ -133,10 +137,10 @@ export function parseText(text: string | null | undefined, idx: KeywordIndex): P
   const types = [...new Set(hits.map((h) => h.type))];
   if (types.length > 1) return { kind: 'UNRECOGNIZED', norm: n, reason: 'CONFLICT', types };
   const actionText = lines.map((l) => l.raw).join(' ');
-  if (TIME_RE.test(actionText)) return { kind: 'UNRECOGNIZED', norm: n, reason: 'TIME', types };
+  if (idx.rules.typedTimeReview && TIME_RE.test(actionText)) return { kind: 'UNRECOGNIZED', norm: n, reason: 'TIME', types };
   const h = hits[0];
   // bracketed names are dropped ("Taking Break ( David)"), bracketed durations are kept ("Taking Break (30minute)")
-  const clean = (r: string) => r.replace(/\s*[(（][^)）\d]*[)）]/g, '').replace(/[\s.。]+$/, '').trim();
+  const clean = (r: string) => (idx.rules.ignoreBrackets ? r.replace(/\s*[(（][^)）\d]*[)）]/g, '') : r).replace(/[\s.。]+$/, '').trim();
   const remark = [...new Set(hits.map((x) => clean(x.raw)))].filter(Boolean).join(' · ').slice(0, 80);
   return { kind: 'PUNCH', type: h.type, norm: n, keyword: h.keyword, fuzzy: hits.every((x) => x.fuzzy), remark };
 }

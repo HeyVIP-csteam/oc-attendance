@@ -141,3 +141,12 @@ export async function fixture(nowMs = lk('2026-10-15', '05:00')) {
   const e2 = await h.employee('E002', 'Kasun Silva', 1002);
   return { h, e1, e2 };
 }
+
+/** What an admin might enter in Settings → Punch keywords (nothing like this is built into the code). */
+export const TEST_KEYWORDS = {
+  CLOCK_IN: ['IN', 'CLOCK IN', 'CLOCKED IN', 'CHECK IN', 'CHECKED IN', 'LOG IN', 'LOGIN', 'LOG IN FOR THE DAY', 'START OF SHIFT'],
+  BREAK_START: ['BREAK', 'BREAK START', 'SHORT BREAK', 'LUNCH BREAK', 'DINNER BREAK', 'TAKING BREAK', 'WC'],
+  BREAK_END: ['RESUME', 'BREAK END', 'BACK', 'BACK FROM BREAK'],
+  CLOCK_OUT: ['OUT', 'CLOCK OUT', 'CLOCKED OUT', 'CHECKED OUT', 'DONE FOR THE DAY'],
+};
+export const TEST_PARSER = { skipLabels: ['Agent', 'Name', 'CS Name', 'Date'], typoTolerance: true, ignoreBrackets: true, typedTimeReview: true };

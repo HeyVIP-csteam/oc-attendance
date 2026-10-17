@@ -64,7 +64,7 @@ exceptionRoutes.get('/exceptions/:id/fix', async (c) => {
   let type: EventType = EX_FIX[x.code] ?? 'CLOCK_IN';
   let ts = x.telegram_message_ts ?? x.occurred_at;
   if (x.code in EX_FIX && EX_FIX[x.code] == null) {
-    const idx = buildKeywordIndex(settings.keywords);
+    const idx = buildKeywordIndex(settings.keywords, settings.parser);
     const p = parseText(x.raw_text ?? '', idx);
     if (p.kind === 'PUNCH') type = p.type;
     else if (p.kind === 'UNRECOGNIZED' && p.types.length) type = p.types[0];

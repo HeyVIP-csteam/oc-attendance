@@ -215,7 +215,8 @@ const BREAK_TEXT = `(SELECT m.raw_text FROM attendance_events ev JOIN telegram_m
   ORDER BY ev.id LIMIT 1)`;
 async function withRemarks<T extends { start_text: string | null }>(db: D1Database, rows: T[]): Promise<(Omit<T, 'start_text'> & { remark: string | null })[]> {
   if (!rows.some((r) => r.start_text)) return rows.map(({ start_text: _t, ...r }) => ({ ...r, remark: null }));
-  const idx = buildKeywordIndex((await loadSettings(db)).keywords);
+  const st = await loadSettings(db);
+  const idx = buildKeywordIndex(st.keywords, st.parser);
   return rows.map(({ start_text, ...r }) => ({ ...r, remark: start_text ? punchRemark(start_text, idx) ?? start_text.split(/\r?\n/)[0].slice(0, 80) : null }));
 }
 

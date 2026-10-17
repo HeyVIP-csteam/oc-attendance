@@ -32,7 +32,7 @@ settingsRoutes.get('/meta', async (c) => {
   return c.json({
     user: c.get('admin'), tz, today: localDate(Date.now(), tz), now: Date.now(),
     currencies: cur.results, shifts: sh.results, employees: emps.results,
-    keywords: settings.keywords, rules: settings.rules, fixed: FIXED, dataVersion: settings.dataVersion,
+    keywords: settings.keywords, rules: settings.rules, parser: settings.parser, fixed: FIXED, dataVersion: settings.dataVersion,
   });
 });
 
@@ -42,7 +42,7 @@ settingsRoutes.get('/version', async (c) => {
 });
 
 // ---------------------------------------------------------------- keywords & rules
-const KwSchema = z.object(Object.fromEntries(EVENT_TYPES.map((k) => [k, z.array(z.string().trim().min(1).max(40)).min(1).max(20)])) as Record<(typeof EVENT_TYPES)[number], z.ZodArray<z.ZodString>>);
+const KwSchema = z.object(Object.fromEntries(EVENT_TYPES.map((k) => [k, z.array(z.string().trim().min(1).max(40)).min(1).max(60)])) as Record<(typeof EVENT_TYPES)[number], z.ZodArray<z.ZodString>>);
 
 settingsRoutes.put('/settings/keywords', async (c) => {
   requireAdminRole(c);
@@ -56,6 +56,30 @@ settingsRoutes.put('/settings/keywords', async (c) => {
   await db.batch([
     stmt(db, "UPDATE system_settings SET value = ?, updated_at = ?, updated_by = ? WHERE key = 'keywords'", JSON.stringify(kw), now, c.get('admin').username),
     auditStmt(db, { actor: c.get('admin').username, action: 'SETTINGS_UPDATED', entityType: 'system_settings', entityId: 'keywords', before: before.keywords, after: kw, ip: clientIp(c), at: now }),
+    bump(db, now),
+  ]);
+  return c.json({ ok: true });
+});
+
+const ParserSchema = z.object({
+  skipLabels: z.array(z.string().trim().min(1).max(30)).max(50),
+  typoTolerance: z.boolean(),
+  ignoreBrackets: z.boolean(),
+  typedTimeReview: z.boolean(),
+});
+
+settingsRoutes.put('/settings/parser', async (c) => {
+  requireAdminRole(c);
+  const v = await body(c, ParserSchema);
+  const parser = { ...v, skipLabels: [...new Set(v.skipLabels.map((l) => l.replace(/[:：]\s*$/, '').trim()).filter(Boolean))] };
+  const db = c.env.DB;
+  const now = Date.now();
+  const before = await loadSettings(db);
+  const actor = c.get('admin').username;
+  await db.batch([
+    stmt(db, `INSERT INTO system_settings (key, value, updated_at, updated_by) VALUES ('parser', ?, ?, ?)
+              ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, updated_by = excluded.updated_by`, JSON.stringify(parser), now, actor),
+    auditStmt(db, { actor, action: 'SETTINGS_UPDATED', entityType: 'system_settings', entityId: 'parser', before: before.parser, after: parser, ip: clientIp(c), at: now }),
     bump(db, now),
   ]);
   return c.json({ ok: true });
