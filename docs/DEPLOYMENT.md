@@ -89,17 +89,15 @@ npm run deploy
 
 > 备用方法（例如所有管理员都忘记密码）：`npm run admin:create -- --remote --username owner` 直接在 D1 建立或重设账号。
 
-## 6. 自动部署（二选一）
+## 6. 自动部署
 
-**A. Cloudflare Workers Builds（推荐）**
+**Cloudflare Workers Builds（自动部署）**
 Cloudflare Dashboard → Workers & Pages → `tg-attendance` → Settings → Builds → Connect → 选 GitHub repository：
 - Build command：`npm run build`
 - Deploy command：`npx wrangler deploy`
 - Production branch：`main`
 
 之后每次 `git push` 到 `main` 都会自动部署。**普通部署不会动数据库。**
-
-**B. GitHub Actions**：在 GitHub repo → Settings → Secrets 加入 `CLOUDFLARE_API_TOKEN`（权限：Workers Scripts Edit、D1 Edit）与 `CLOUDFLARE_ACCOUNT_ID`，到 Actions → Deploy → Run workflow 手动部署。`ci.yml` 会在每次 push / PR 自动跑测试。
 
 ## 7. 数据库 Migration 流程（生产）
 

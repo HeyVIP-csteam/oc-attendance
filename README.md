@@ -5,7 +5,7 @@
 - **后端**：Cloudflare Workers（Hono + Zod），Telegram Webhook，一个 Cron（每 15 分钟）
 - **数据库**：Cloudflare D1（SQLite），版本化 SQL Migration
 - **前端**：React + TypeScript（Vite），界面按已确认的 preview 制作，中文 / English
-- **部署**：一个 Worker 同时提供 `/api/*` 和静态网页；GitHub + Cloudflare Workers Builds（或 GitHub Actions）
+- **部署**：一个 Worker 同时提供 `/api/*` 和静态网页；GitHub + Cloudflare Workers Builds（push 到 main 自动部署）
 
 > 时间一律以 **斯里兰卡时间（Asia/Colombo）** 显示，数据库内以 UTC 毫秒保存。
 > 打卡时间 = Telegram 的 `message.date`；员工自己打的时间（例如 `IN 08:30`）不会被采用。
@@ -58,7 +58,6 @@ src/worker/            Cloudflare Worker
 web/                   React 管理后台（Vite）
 test/                  单元测试 + 集成测试（D1 适配器 test/d1-shim.ts）
 scripts/               create-admin、setup-local、demo-seed（本地）、simulate（本地）
-.github/workflows/     ci.yml（测试）、deploy.yml（可选，手动部署）
 ```
 
 ## 安全重点
