@@ -63,7 +63,7 @@ function Shift3() {
             <td><span className={`chip cell ${s.code}`}>{s.code}</span></td>
             <td><input type="text" style={{ width: 110 }} value={v[s.code].name} disabled={readOnly} onChange={(e) => setV({ ...v, [s.code]: { ...v[s.code], name: e.target.value } })} /></td>
             <td><div className="tz">COLOMBO · LK</div><input type="time" value={v[s.code].start} disabled={readOnly} onChange={(e) => setV({ ...v, [s.code]: { ...v[s.code], start: e.target.value } })} /> – <input type="time" value={v[s.code].end} disabled={readOnly} onChange={(e) => setV({ ...v, [s.code]: { ...v[s.code], end: e.target.value } })} /></td>
-            <td className="mut">{len(s.code)}{g(s.code).e <= g(s.code).s && <> <span className="b v">{L('跨午夜', 'Overnight')}</span></>}</td>
+            <td className="mut">{len(s.code)}</td>
           </tr>
         ))}
       </tbody></table></div>
