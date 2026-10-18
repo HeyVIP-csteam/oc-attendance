@@ -37,6 +37,7 @@ export const EXCEPTIONS = {
   BREAK_NOT_ENDED: { label: bi('休息未结束', 'Break not ended'), sev: 'MEDIUM' },
   UNSCHEDULED_PUNCH: { label: bi('未排班打卡', 'Unscheduled punch'), sev: 'LOW' },
   DELAYED_DELIVERY: { label: bi('消息延迟送达', 'Delayed delivery'), sev: 'LOW' },
+  TYPED_TIME: { label: bi('员工自填时间', 'Typed time'), sev: 'LOW' },
   OUT_OF_ORDER: { label: bi('消息乱序到达', 'Out-of-order message'), sev: 'LOW' },
   INVALID_TIME_ORDER: { label: bi('时间顺序无效', 'Invalid time order'), sev: 'MEDIUM' },
   BREAK_LIMIT_EXCEEDED: { label: bi('超过休息规则', 'Break limit exceeded'), sev: 'LOW' },

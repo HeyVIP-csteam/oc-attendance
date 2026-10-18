@@ -13,7 +13,7 @@
 import { DEFAULT_PARSER, type EventType, type KeywordConfig, type ParserRules } from './codes';
 
 export type ParseResult =
-  | { kind: 'PUNCH'; type: EventType; norm: string; keyword: string; fuzzy: boolean; remark: string }
+  | { kind: 'PUNCH'; type: EventType; norm: string; keyword: string; fuzzy: boolean; remark: string; typedTime?: string }
   | { kind: 'UNRECOGNIZED'; norm: string; reason: 'CONFLICT' | 'TIME' | 'NEAR'; types: EventType[] }
   | { kind: 'NONE'; norm: string };
 
@@ -137,12 +137,15 @@ export function parseText(text: string | null | undefined, idx: KeywordIndex): P
   const types = [...new Set(hits.map((h) => h.type))];
   if (types.length > 1) return { kind: 'UNRECOGNIZED', norm: n, reason: 'CONFLICT', types };
   const actionText = lines.map((l) => l.raw).join(' ');
-  if (idx.rules.typedTimeReview && TIME_RE.test(actionText)) return { kind: 'UNRECOGNIZED', norm: n, reason: 'TIME', types };
+  const tm = actionText.match(TIME_RE);
+  if (idx.rules.typedTimeReview && tm) return { kind: 'UNRECOGNIZED', norm: n, reason: 'TIME', types };
   const h = hits[0];
   // bracketed names are dropped ("Taking Break ( David)"), bracketed durations are kept ("Taking Break (30minute)")
   const clean = (r: string) => (idx.rules.ignoreBrackets ? r.replace(/\s*[(（][^)）\d]*[)）]/g, '') : r).replace(/[\s.。]+$/, '').trim();
   const remark = [...new Set(hits.map((x) => clean(x.raw)))].filter(Boolean).join(' · ').slice(0, 80);
-  return { kind: 'PUNCH', type: h.type, norm: n, keyword: h.keyword, fuzzy: hits.every((x) => x.fuzzy), remark };
+  // typed time accepted (rule off): the punch still uses Telegram's time; the typed time is reported for follow-up
+  const typedTime = tm ? tm[0].replace(/^[^\d]/, '').trim() : undefined;
+  return { kind: 'PUNCH', type: h.type, norm: n, keyword: h.keyword, fuzzy: hits.every((x) => x.fuzzy), remark, ...(typedTime ? { typedTime } : {}) };
 }
 
 /** The employee's own words for a punch, e.g. "Lunch Break - 60 mins", "WC" — shown as a remark on breaks. */

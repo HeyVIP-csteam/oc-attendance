@@ -358,6 +358,23 @@ describe('admin corrections and audit (test 16)', () => {
     expect(t.json.status).toBe('PENDING_REVIEW');
   });
 
+  it('typed time accepted when the review rule is off: Telegram time is recorded, the typed time is listed for follow-up', async () => {
+    const { h, e1 } = await fixture();
+    expect((await h.req('PUT', '/api/settings/keywords', { keywords: TEST_KEYWORDS })).status).toBe(200);
+    const pr = await h.req('PUT', '/api/settings/parser', { ...TEST_PARSER, typedTimeReview: false });
+    expect(pr.json).toEqual({ ok: true });
+    await h.roster(e1, D, 'A');
+    const r = await h.send({ text: 'clock in\nAgent: Test-02\nTime:12.15', ts: lk(D, '07:03'), thread: 1001 });
+    expect(r.json.status).toBe('PROCESSED');
+    await h.flush();
+    expect((await h.session(e1, D))!.actual_in_at).toBe(lk(D, '07:03'));
+    const ex = h.db.get<{ code: string; detail: string }>("SELECT code, detail FROM attendance_exceptions WHERE code = 'TYPED_TIME'")!;
+    expect(JSON.parse(ex.detail).zh).toContain('12.15');
+    const reply = h.tg.filter((t) => t.method === 'sendMessage').pop()!.body as { text: string };
+    expect(reply.text).toContain('07:03');
+    expect(reply.text).toContain('12.15');
+  });
+
   it('re-parses pending messages after the keyword list changes', async () => {
     const { h, e1 } = await fixture();
     await h.roster(e1, D, 'A');

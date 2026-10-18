@@ -60,10 +60,10 @@ export const mappingSql = `SELECT m.employee_id, e.employee_code, e.name, e.curr
 
 const tzLabel = 'Sri Lanka time';
 
-export function replyText(kind: 'ok' | 'sm' | 'unrec' | 'id', data: { type?: EventType; code?: string; ts?: number; tz: string; keywords?: string[]; readAs?: string; reason?: string }): string {
+export function replyText(kind: 'ok' | 'sm' | 'unrec' | 'id', data: { type?: EventType; code?: string; ts?: number; tz: string; keywords?: string[]; readAs?: string; reason?: string; typedTime?: string }): string {
   const label = (c?: string) => (c && (EXCEPTIONS as Record<string, { label: Bi }>)[c]?.label.en) || c || '';
   switch (kind) {
-    case 'ok': return `✅ ${EVENT_LABEL[data.type!].en} recorded · ${fmtTime(data.ts!, data.tz)} (${tzLabel})${data.readAs ? `\nRead from: "${data.readAs}"` : ''}`;
+    case 'ok': return `✅ ${EVENT_LABEL[data.type!].en} recorded · ${fmtTime(data.ts!, data.tz)} (${tzLabel})${data.readAs ? `\nRead from: "${data.readAs}"` : ''}${data.typedTime ? `\nNote: the time you wrote (${data.typedTime}) is not used — the Telegram time is recorded.` : ''}`;
     case 'sm': return `⚠️ ${EVENT_LABEL[data.type!].en} not counted: ${label(data.code)}`;
     case 'unrec':
       if (data.reason === 'TIME') return '⚠️ Not counted: the message contains a time. The punch time is taken from Telegram automatically — please send it again without the time. An admin has been notified.';
@@ -95,7 +95,7 @@ export async function ingestUpdate(env: Env, bot: BotRow, upd: TgUpdate, receive
     edited
       ? stmt(db, 'SELECT id FROM telegram_messages WHERE (bot_id = ? AND update_id = ?) OR (chat_id = ? AND message_id = ? AND is_edit = 1 AND edit_ts IS ?) LIMIT 1', bot.id, upd.update_id, chatId, msg.message_id, editTs)
       : stmt(db, 'SELECT id FROM telegram_messages WHERE (bot_id = ? AND update_id = ?) OR (chat_id = ? AND message_id = ? AND is_edit = 0) LIMIT 1', bot.id, upd.update_id, chatId, msg.message_id),
-    stmt(db, "SELECT key, value FROM system_settings WHERE key IN ('keywords','rules')"),
+    stmt(db, "SELECT key, value FROM system_settings WHERE key IN ('keywords','rules','parser')"),
     stmt(db, mappingSql, chatId, threadId ?? -1, tgTs, tgTs),
     stmt(db, 'SELECT 1 AS ok FROM telegram_topic_mappings WHERE chat_id = ? LIMIT 1', chatId),
   ]);
@@ -193,6 +193,8 @@ export async function ingestUpdate(env: Env, bot: BotRow, upd: TgUpdate, receive
     rawInsert('PROCESSED', null, empId, parsed.type),
     stmt(db, `INSERT INTO attendance_events (message_id, employee_id, work_date, event_type, event_ts, tg_message_id, received_at, source, created_at)
               VALUES (${rawRef}, ?, ?, ?, ?, ?, ?, 'TELEGRAM', ?)`, empId, workDate, parsed.type, tgTs, msg.message_id, receivedAt, receivedAt),
+    // the employee wrote a time: the punch uses Telegram's time, the typed one is listed for the admin to follow up
+    ...(parsed.typedTime ? [exInsert('TYPED_TIME', empId, bi(`员工写的时间「${parsed.typedTime}」未采用，打卡时间按 Telegram 消息时间 ${fmtTime(tgTs, tz)}`, `Typed time "${parsed.typedTime}" not used; punch recorded at the Telegram message time ${fmtTime(tgTs, tz)}`))] : []),
   ]);
   if (r === 'dup') return { http: 200, status: 'DUPLICATE', codes: [] };
 
@@ -208,7 +210,7 @@ export async function ingestUpdate(env: Env, bot: BotRow, upd: TgUpdate, receive
   const accepted = code === null || code === 'CLOCK_OUT_DURING_BREAK';
   return {
     http: 200, status: 'PROCESSED', codes: code ? [code] : [], event: parsed.type,
-    reply: rules.botReply ? (accepted ? replyText('ok', { type: parsed.type, ts: tgTs, tz, readAs: parsed.norm === parsed.keyword ? undefined : parsed.remark }) : replyText('sm', { type: parsed.type, code: code!, tz })) : null,
+    reply: rules.botReply ? (accepted ? replyText('ok', { type: parsed.type, ts: tgTs, tz, readAs: parsed.norm === parsed.keyword ? undefined : parsed.remark, typedTime: parsed.typedTime }) : replyText('sm', { type: parsed.type, code: code!, tz })) : null,
   };
 }
 
@@ -217,7 +219,7 @@ export async function reparsePending(env: Env, actor: string, now: number): Prom
   const db = env.DB;
   const tz = env.BIZ_TZ || 'Asia/Colombo';
   const [setR, pendR] = await db.batch([
-    stmt(db, "SELECT key, value FROM system_settings WHERE key IN ('keywords','rules')"),
+    stmt(db, "SELECT key, value FROM system_settings WHERE key IN ('keywords','rules','parser')"),
     stmt(db, `SELECT id, chat_id, message_id, message_thread_id, raw_text, is_forwarded, telegram_message_ts, received_at
               FROM telegram_messages WHERE processing_status = 'PENDING_REVIEW' ORDER BY id LIMIT 200`),
   ]);

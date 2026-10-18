@@ -153,7 +153,7 @@ function Keywords() {
         <div>
           {sw('typoTolerance', '容许拼错', 'Typo tolerance', L('差一个字母或重复字母也算，例如 clok in、brek、innnn', 'One letter off or repeated letters count, e.g. clok in, brek, innnn'))}
           {sw('ignoreBrackets', '忽略括号内容', 'Ignore brackets', L('例如 Taking Break ( David) 只读 Taking Break', 'e.g. "Taking Break ( David)" is read as "Taking Break"'))}
-          {sw('typedTimeReview', '有自己写的时间 → 待检查', 'Typed time → review', L('例如 IN 08:30 不直接打卡，交给管理员确认；关闭则照样打卡。打卡时间一律用 Telegram 消息时间', 'e.g. "IN 08:30" goes to review; when off it punches. The Telegram message time is always used'))}
+          {sw('typedTimeReview', '有自己写的时间 → 待检查', 'Typed time → review', L('开启：例如 IN 08:30 不打卡，交给管理员确认。关闭：照样打卡，时间用 Telegram 消息时间，员工写的时间列在「异常 → 员工自填时间」供你跟进。', 'On: e.g. "IN 08:30" is not counted and goes to review. Off: it is counted at the Telegram message time and the typed time is listed under Exceptions → Typed time for follow-up.'))}
         </div>
       </div>
       {!readOnly && <div className="row" style={{ marginTop: 12 }}><button className="btn p" onClick={saveRules}>{L('保存读取规则', 'Save reading rules')}</button></div>}
