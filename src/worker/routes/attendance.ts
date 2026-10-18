@@ -256,7 +256,7 @@ attendanceRoutes.get('/reports', async (c) => {
                   SUM(s.late_min > 0) AS late_times, SUM(COALESCE(s.late_min, 0)) AS late_min, SUM(s.early_min > 0) AS early_times, SUM(COALESCE(s.early_min, 0)) AS early_min,
                   SUM(s.break_count) AS breaks, SUM(s.total_break_ms) AS break_ms,
                   SUM(CASE WHEN s.net_worked_ms IS NOT NULL THEN s.shift_duration_ms ELSE 0 END) AS shift_ms, SUM(s.exception_count) AS exceptions
-                ${FROM} WHERE ${w.sql} GROUP BY e.id ORDER BY e.employee_code LIMIT ? OFFSET ?`, ...w.params, f.size, (f.page - 1) * f.size),
+                ${FROM} WHERE ${w.sql} GROUP BY e.id ORDER BY COALESCE(e.sort_order, 1000000000), e.employee_code LIMIT ? OFFSET ?`, ...w.params, f.size, (f.page - 1) * f.size),
     ]);
     return c.json({ mode: 'summary', total: (cnt.results[0] as { n: number }).n, rows: rows.results });
   }

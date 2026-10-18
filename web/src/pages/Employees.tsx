@@ -187,7 +187,7 @@ function ImportModal({ grid, file, plan, onClose }: { grid: (string | number | n
       )}
       <p className="mut" style={{ fontSize: 12 }}>{L('栏位：PSD ID、Employee Name、Currency、Chat ID、Thread ID。已有的员工：留空的栏位保持不变；Status 栏只供参考，不会改变在职/停用。', 'Columns: PSD ID, Employee Name, Currency, Chat ID, Thread ID. For existing employees an empty cell keeps the current value; the Status column is for reference only and does not activate / deactivate anyone.')}</p>
       <ErrBox error={err} />
-      <ModalActions onCancel={onClose} onOk={n > 0 ? apply : undefined} busy={busy} okLabel={L(`确认导入 ${n} 名员工`, `Import ${n} employees`)} />
+      <ModalActions onCancel={onClose} onOk={n > 0 || plan.unchanged > 0 ? apply : undefined} busy={busy} okLabel={n > 0 ? L(`确认导入 ${n} 名员工`, `Import ${n} employees`) : L('只更新排列顺序', 'Update the row order only')} />
     </Modal>
   );
 }

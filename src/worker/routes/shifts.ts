@@ -122,7 +122,7 @@ shiftRoutes.get('/roster', async (c) => {
   const p = f.cur ? [f.cur] : [];
   const [cnt, emps, per] = await db.batch([
     stmt(db, `SELECT COUNT(*) AS n FROM employees ${cond}`, ...p),
-    stmt(db, `SELECT id, employee_code, name, currency_code, employment_status FROM employees ${cond} ORDER BY employee_code LIMIT ? OFFSET ?`, ...p, f.size, (f.page - 1) * f.size),
+    stmt(db, `SELECT id, employee_code, name, currency_code, employment_status FROM employees ${cond} ORDER BY COALESCE(sort_order, 1000000000), employee_code LIMIT ? OFFSET ?`, ...p, f.size, (f.page - 1) * f.size),
     stmt(db, "SELECT currency_code AS code, COUNT(*) AS n FROM employees WHERE employment_status = 'ACTIVE' GROUP BY currency_code"),
   ]);
   const counts = Object.fromEntries((per.results as { code: string | null; n: number }[]).map((r) => [r.code ?? '', r.n]));
@@ -156,7 +156,7 @@ shiftRoutes.get('/roster/export', async (c) => {
   const cond = f.cur ? 'AND e.currency_code = ?' : '';
   const p = f.cur ? [f.cur] : [];
   const [emps, inst, marks] = await db.batch([
-    stmt(db, `SELECT id, employee_code, name, currency_code FROM employees e WHERE e.employment_status = 'ACTIVE' ${cond} ORDER BY employee_code`, ...p),
+    stmt(db, `SELECT id, employee_code, name, currency_code FROM employees e WHERE e.employment_status = 'ACTIVE' ${cond} ORDER BY COALESCE(e.sort_order, 1000000000), e.employee_code`, ...p),
     stmt(db, `SELECT i.employee_id, i.shift_date, i.shift_code FROM shift_instances i JOIN employees e ON e.id = i.employee_id
               WHERE i.shift_date BETWEEN ? AND ? AND i.adjustment_status <> 'CANCELLED' AND e.employment_status = 'ACTIVE' ${cond}`, from, to, ...p),
     stmt(db, `SELECT r.employee_id, r.mark_date, r.code FROM roster_marks r JOIN employees e ON e.id = r.employee_id
@@ -252,6 +252,7 @@ shiftRoutes.post('/roster/import', async (c) => {
   let unchanged = 0;
   let cells = 0;
   let skipped = 0; // rows of another currency (import into one currency)
+  const fileOrder: number[] = []; // employees in the file's row order → their display order
   const head = v.grid[0].map((x) => String(x ?? '').trim());
   let idCol = head.findIndex((x) => /^(psd\s*id|employee\s*id|员工编号|id)$/i.test(x));
   if (idCol < 0) idCol = 0;
@@ -280,6 +281,7 @@ shiftRoutes.post('/roster/import', async (c) => {
       errs.push({ where: `Row ${r + 1} · ${e.employee_code}`, msg: { zh: `属于 ${e.currency_code ?? '—'}，不是 ${v.currency}，已跳过`, en: `belongs to ${e.currency_code ?? '—'}, not ${v.currency} — skipped` } });
       continue;
     }
+    if (!fileOrder.includes(e.id)) fileOrder.push(e.id);
     for (const { i, d } of dateCols) {
       const val = String(v.grid[r][i] ?? '').trim().toUpperCase();
       if (!val) continue;
@@ -313,6 +315,8 @@ shiftRoutes.post('/roster/import', async (c) => {
     if (!ch.template) removed++; else if (!tpls.has(ch.from)) added++; else changed++;
   }
   statements.push(auditStmt(db, { actor, action: 'ROSTER_IMPORTED', entityType: 'shift_instance', entityId: v.fileName, after: { changes: changes.length, added, changed, removed, skipped_errors: errs.length, ...(v.currency ? { currency: v.currency } : {}) }, note: v.reason, ip, at: now }));
+  // rows are shown in the same order as in the file
+  fileOrder.forEach((id, k) => statements.push(stmt(db, 'UPDATE employees SET sort_order = ? WHERE id = ?', k + 1, id)));
   statements.push(bump(db, now));
   for (const ch of chunk(statements, 90)) await db.batch(ch);
   const settings = await loadSettings(db);

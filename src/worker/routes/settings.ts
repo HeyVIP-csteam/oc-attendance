@@ -26,7 +26,7 @@ settingsRoutes.get('/meta', async (c) => {
               FROM currencies c ORDER BY c.code`),
     stmt(db, 'SELECT * FROM shift_templates ORDER BY code'),
     stmt(db, `SELECT e.id, e.employee_code AS code, e.name, e.currency_code AS currency, e.employment_status AS status, m.message_thread_id AS thread
-              FROM employees e LEFT JOIN telegram_topic_mappings m ON m.employee_id = e.id AND m.is_active = 1 ORDER BY e.employee_code`),
+              FROM employees e LEFT JOIN telegram_topic_mappings m ON m.employee_id = e.id AND m.is_active = 1 ORDER BY COALESCE(e.sort_order, 1000000000), e.employee_code`),
   ]);
   const settings = await loadSettings(db);
   return c.json({

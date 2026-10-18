@@ -923,6 +923,20 @@ describe('telegram history import', () => {
   });
 });
 
+describe('employee order follows the uploaded file', () => {
+  it('roster and employee imports keep the file row order; new employees go last', async () => {
+    const { h } = await fixture();
+    await h.employee('E003', 'Aaron', 1003);
+    const order = async () => (await h.req('GET', `/api/roster?from=${D}&to=${D}`)).json.employees.map((e: any) => e.employee_code);
+    await h.req('POST', '/api/roster/import', { grid: [['PSD ID', D], ['E003', 'A'], ['E001', 'B'], ['E002', 'C']], fileName: 'r.xlsx', apply: true, reason: 'October roster' });
+    expect(await order()).toEqual(['E003', 'E001', 'E002']);
+    await h.req('POST', '/api/employees/import', { grid: [['PSD ID', 'Employee Name'], ['E002', 'Kasun Silva'], ['E003', 'Aaron'], ['E001', 'Nimal Perera']], apply: true });
+    expect((await h.req('GET', '/api/employees?status=ACTIVE')).json.rows.map((e: any) => e.employee_code)).toEqual(['E002', 'E003', 'E001']);
+    await h.employee('A000', 'Zed', 1004);
+    expect(await order()).toEqual(['E002', 'E003', 'E001', 'A000']);
+  });
+});
+
 describe('roster history', () => {
   it('lists manual shift changes and one row per roster import, with who, when and why', async () => {
     const { h, e1 } = await fixture();

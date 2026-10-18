@@ -30,7 +30,7 @@ employeeRoutes.get('/employees', async (c) => {
     stmt(db, `SELECT COUNT(*) AS n ${FROM} WHERE ${cond.join(' AND ')}`, ...p),
     stmt(db, `SELECT e.id, e.employee_code, e.name, e.currency_code, e.employment_status, e.default_shift_id, e.timezone, e.deactivated_at,
                 m.chat_id, m.message_thread_id, (SELECT COUNT(*) FROM telegram_topic_mappings h WHERE h.employee_id = e.id) AS mapping_count
-              ${FROM} WHERE ${cond.join(' AND ')} ORDER BY e.employee_code LIMIT ? OFFSET ?`, ...p, f.size, (f.page - 1) * f.size),
+              ${FROM} WHERE ${cond.join(' AND ')} ORDER BY COALESCE(e.sort_order, 1000000000), e.employee_code LIMIT ? OFFSET ?`, ...p, f.size, (f.page - 1) * f.size),
   ]);
   return c.json({ total: (cnt.results[0] as { n: number }).n, rows: rows.results });
 });
@@ -100,8 +100,9 @@ async function saveEmployee(c: Context<AppBindings>, id: number | null) {
   const statements: D1PreparedStatement[] = [];
   const after = { code: v.code, name: v.name, currency: v.currency || null, default_shift_id: v.defaultShiftId ?? null, timezone: v.timezone, topic: threadId };
   if (!id) {
-    statements.push(stmt(db, `INSERT INTO employees (employee_code, name, currency_code, employment_status, default_shift_id, timezone, created_at, updated_at)
-                              VALUES (?,?,?,?,?,?,?,?)`, v.code, v.name, v.currency || null, 'ACTIVE', v.defaultShiftId ?? null, v.timezone, now, now));
+    // a new employee goes to the end of the list
+    statements.push(stmt(db, `INSERT INTO employees (employee_code, name, currency_code, employment_status, default_shift_id, timezone, created_at, updated_at, sort_order)
+                              VALUES (?,?,?,?,?,?,?,?,(SELECT MAX(sort_order) + 1 FROM employees))`, v.code, v.name, v.currency || null, 'ACTIVE', v.defaultShiftId ?? null, v.timezone, now, now));
   } else {
     statements.push(stmt(db, 'UPDATE employees SET employee_code = ?, name = ?, currency_code = ?, default_shift_id = ?, timezone = ?, updated_at = ? WHERE id = ?',
       v.code, v.name, v.currency || null, v.defaultShiftId ?? null, v.timezone, now, id));
@@ -261,7 +262,7 @@ employeeRoutes.get('/export/employees', async (c) => {
   if (f.q) { cond.push("(e.employee_code LIKE ? ESCAPE '\\' OR e.name LIKE ? ESCAPE '\\')"); p.push(likeEsc(f.q), likeEsc(f.q)); }
   const rows = await all(c.env.DB, `SELECT e.employee_code, e.name, e.currency_code, e.employment_status, m.chat_id, m.message_thread_id
     FROM employees e LEFT JOIN telegram_topic_mappings m ON m.employee_id = e.id AND m.is_active = 1
-    WHERE ${cond.join(' AND ')} ORDER BY e.employee_code`, ...p);
+    WHERE ${cond.join(' AND ')} ORDER BY COALESCE(e.sort_order, 1000000000), e.employee_code`, ...p);
   return c.json({ rows });
 });
 
@@ -399,6 +400,8 @@ employeeRoutes.post('/employees/import', async (c) => {
       before: old ? { name: old.name, currency: old.currency_code, topic: x.oldMap?.message_thread_id ?? null } : null,
       after: { name: x.name, currency: x.currency, topic: x.topicGiven ? x.threadId : x.oldMap?.message_thread_id ?? null }, note: `Import ${v.fileName}`, ip, at: now }));
   }
+  // employees are shown in the same order as in the file
+  ok.forEach((x, k) => writes.push(stmt(db, 'UPDATE employees SET sort_order = ? WHERE employee_code = ?', k + 1, x.code)));
   writes.push(auditStmt(db, { actor, action: 'EMPLOYEES_IMPORTED', entityType: 'employee', entityId: v.fileName, after: { added: plan.newCount, updated: plan.updateCount, skipped_errors: errs.length }, ip, at: now }));
   writes.push(stmt(db, "UPDATE system_settings SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT), updated_at = ? WHERE key = 'data_version'", now));
   try {

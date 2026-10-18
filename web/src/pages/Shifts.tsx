@@ -3,7 +3,7 @@ import { addDays, dayDiff, monthEnd, monthStart, weekday } from '../../../src/sh
 import { Cnt, CurrencyOptions, EmpSearch, useRosterCode, ErrBox, Field, Modal, ModalActions, Pager, Tabs, TblTop } from '../components/ui';
 import { api, type ApiErr, qs } from '../lib/api';
 import { exportXLSX, readGrid } from '../lib/files';
-import { fmtDT, fmtDur, fmtT, today } from '../lib/format';
+import { fmtDT, fmtDur, fmtMDT, fmtMine, fmtT, mineLabel, today } from '../lib/format';
 import { useI18n } from '../lib/i18n';
 import { type MetaShift, rulesOf, toast, useApi, useData, usePageState } from '../lib/store';
 
@@ -40,6 +40,17 @@ function Roster({ f, set }: { f: { from: string; to: string; cur: string; page: 
   const otKey = new Map((data?.ot ?? []).map((o) => [`${o.employee_id}|${o.work_date}`, o]));
   const markKey = new Map((data?.marks ?? []).map((m) => [`${m.employee_id}|${m.mark_date}`, m.code]));
   const rc = useRosterCode();
+  // OT tooltip: dates and times in Sri Lanka time, plus the same moments in the viewer's own time zone (e.g. GMT+8, as Telegram shows them)
+  const otText = (ot: NonNullable<RosterData['ot']>[number], cur: string | null, long: boolean) => {
+    const span = (a: number, b: number | null) => `${fmtMDT(a)} – ${b != null ? fmtMDT(b) : L('未下班', 'not clocked out')}`;
+    const mine = fmtMine(ot.actual_in_at);
+    const mineSpan = mine ? `\n${mineLabel(ot.actual_in_at)}: ${mine} – ${ot.actual_out_at != null ? fmtMine(ot.actual_out_at) : L('未下班', 'not clocked out')}` : '';
+    const dur = ot.actual_out_at != null ? fmtDur(ot.actual_out_at - ot.actual_in_at) : '';
+    const thr = rulesOf(meta, cur).otHours ?? 9;
+    return long && ot.kind === 'LONG'
+      ? L(`OT：实际 ${span(ot.actual_in_at, ot.actual_out_at)} (LK)，在班 ${dur}（超过 ${thr} 小时）`, `OT: actual ${span(ot.actual_in_at, ot.actual_out_at)} (LK), on shift ${dur} (over ${thr} h)`) + mineSpan
+      : L(`休息日上班（OT）：${span(ot.actual_in_at, ot.actual_out_at)} (LK)`, `Worked on a day off (OT): ${span(ot.actual_in_at, ot.actual_out_at)} (LK)`) + mineSpan;
+  };
   const doExport = async () => {
     try {
       const r = await api<{ from: string; to: string; employees: { id: number; employee_code: string; name: string; currency_code: string | null }[]; instances: { employee_id: number; shift_date: string; shift_code: string }[]; marks?: { employee_id: number; mark_date: string; code: string }[] }>(`/roster/export?${qs({ from: f.from, to: f.to, cur: f.cur })}`);
@@ -108,9 +119,8 @@ function Roster({ f, set }: { f: { from: string; to: string; cur: string; page: 
                   const mk = i ? null : markKey.get(`${e.id}|${d}`) ?? null;
                   const mc = rc(mk);
                   return (
-                    <td key={d}><span className={`cell ${i ? i.shift_code : mk ? 'mark' : 'none'}`} style={{ ...(mc?.style ?? {}), ...(readOnly ? { cursor: 'default' } : {}) }} title={i ? `${i.shift_name} ${fmtT(i.scheduled_start_at)}–${fmtT(i.scheduled_end_at)} (LK)${ot?.kind === 'LONG' && ot.actual_out_at
-                        ? L(`\nOT：实际 ${fmtT(ot.actual_in_at)} – ${fmtT(ot.actual_out_at)}，在班 ${fmtDur(ot.actual_out_at - ot.actual_in_at)}（超过 ${rulesOf(meta, e.currency_code).otHours ?? 9} 小时）`, `\nOT: actual ${fmtT(ot.actual_in_at)} – ${fmtT(ot.actual_out_at)}, on shift ${fmtDur(ot.actual_out_at - ot.actual_in_at)} (over ${rulesOf(meta, e.currency_code).otHours ?? 9} h)`) : ''}`
-                      : ot ? L(`休息日上班（OT）：${fmtT(ot.actual_in_at)} – ${ot.actual_out_at ? fmtT(ot.actual_out_at) : '未下班'}`, `Worked on a day off (OT): ${fmtT(ot.actual_in_at)} – ${ot.actual_out_at ? fmtT(ot.actual_out_at) : 'not clocked out'}`) : mk ? `${mk} · ${mc?.name ?? ''}` : L('未排班', 'Not scheduled')}
+                    <td key={d}><span className={`cell ${i ? i.shift_code : mk ? 'mark' : 'none'}`} style={{ ...(mc?.style ?? {}), ...(readOnly ? { cursor: 'default' } : {}) }} title={i ? `${i.shift_name} ${fmtT(i.scheduled_start_at)}–${fmtT(i.scheduled_end_at)} (LK)${ot ? '\n' + otText(ot, e.currency_code, true) : ''}`
+                      : ot ? otText(ot, e.currency_code, false) : mk ? `${mk} · ${mc?.name ?? ''}` : L('未排班', 'Not scheduled')}
                       onClick={() => !readOnly && setCell({ emp: e, date: d, inst: i, cancelled, mark: mk })}>
                       {i ? (compact ? i.shift_code : <>{i.shift_code}<br /><span style={{ fontWeight: 400 }}>{fmtT(i.scheduled_start_at)}</span></>) : (mk ?? '–')}
                       {ot && (!i || ot.kind === 'LONG') && <span className="ot">OT</span>}
@@ -205,9 +215,9 @@ function ImportModal({ grid, file, plan, currency, onClose }: { grid: (string | 
           {plan.errors.map((x: any, i: number) => <tr key={i}><td>{x.where}</td><td style={{ color: 'var(--bad)' }}>{dt(x.msg)}</td></tr>)}
         </tbody></table></div>
       )}
-      {plan.changeCount > 0 && <div style={{ marginTop: 12 }}><label className="mut" style={{ fontSize: 12 }}>{L('原因（必填）', 'Reason (required)')}</label><textarea rows={2} value={reason} onChange={(e) => setReason(e.target.value)} /></div>}
+      {(plan.changeCount > 0 || plan.unchanged > 0) && <div style={{ marginTop: 12 }}><label className="mut" style={{ fontSize: 12 }}>{L('原因（必填）', 'Reason (required)')}</label><textarea rows={2} value={reason} onChange={(e) => setReason(e.target.value)} /></div>}
       <div style={{ marginTop: 8 }}><ErrBox error={err} /></div>
-      <ModalActions onCancel={onClose} onOk={plan.changeCount > 0 ? apply : undefined} busy={busy} okLabel={L(`确认导入 ${plan.changeCount} 项`, `Import ${plan.changeCount} changes`)} />
+      <ModalActions onCancel={onClose} onOk={plan.changeCount > 0 || plan.unchanged > 0 ? apply : undefined} busy={busy} okLabel={plan.changeCount > 0 ? L(`确认导入 ${plan.changeCount} 项`, `Import ${plan.changeCount} changes`) : L('只更新排列顺序', 'Update the row order only')} />
     </Modal>
   );
 }
