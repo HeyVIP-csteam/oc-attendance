@@ -10,7 +10,7 @@ interface EmpRow { id: number; employee_code: string; name: string; currency_cod
 
 export function Employees() {
   const { L } = useI18n();
-  const { readOnly, reloadMeta, refresh } = useData();
+  const { readOnly, reloadMeta, refresh, meta } = useData();
   const [f, set] = usePageState('em', () => ({ q: '', status: 'ACTIVE', page: 1, size: 10 }));
   const { data, error } = useApi<{ total: number; rows: EmpRow[] }>(`/employees?${qs(f)}`);
   const [edit, setEdit] = useState<number | 'new' | null>(null);
@@ -24,6 +24,18 @@ export function Employees() {
         r.rows.map((e) => [e.employee_code, e.name, e.currency_code ?? '', e.chat_id != null ? String(e.chat_id) : '', e.message_thread_id ?? '', e.employment_status]));
       toast(L(`已导出 ${r.rows.length} 名员工`, `Exported ${r.rows.length} employees`));
     } catch (e) { toast(L('导出失败', 'Export failed') + ': ' + (e as Error).message); }
+  };
+  // empty file in the import format: fill in new employees (or changes) and import it
+  const doTemplate = async () => {
+    await exportXLSX('employees_template', ['PSD ID', 'Employee Name', 'Currency', 'Chat ID', 'Thread ID'], [], [
+      ['How to use', 'One employee per row, then Employees → Import'],
+      ['PSD ID', 'Required. Letters, digits and _ . - (no spaces). An existing PSD ID updates that employee'],
+      ['Employee Name', 'Required for a new employee'],
+      ['Currency', `Required for a new employee: ${meta.currencies.map((c) => c.code).join(' / ')}`],
+      ['Chat ID', 'Group id, e.g. -1003959204082 (or 3959204082 from the topic link)'],
+      ['Thread ID', 'Topic number, e.g. 28. Leave Chat ID and Thread ID empty to bind the topic later'],
+      ['Empty cell', 'For an existing employee an empty cell keeps the current value'],
+    ]);
   };
   const doImport = async (file: File) => {
     try {
@@ -47,6 +59,7 @@ export function Employees() {
         <div className="rowact">
           {!readOnly && <button className="btn" onClick={() => { if (fileRef.current) { fileRef.current.value = ''; fileRef.current.click(); } }}>{L('导入', 'Import')}</button>}
           <button className="btn" onClick={doExport}>{L('导出', 'Export')}</button>
+          <button className="btn" onClick={doTemplate}>{L('导出模板', 'Export template')}</button>
           <input ref={fileRef} type="file" accept=".csv,.xlsx" hidden onChange={(e) => { const x = e.target.files?.[0]; if (x) void doImport(x); }} />
         </div>
       </div></div>

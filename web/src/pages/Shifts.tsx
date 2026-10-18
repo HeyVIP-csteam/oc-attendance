@@ -48,6 +48,22 @@ function Roster({ f, set }: { f: { from: string; to: string; cur: string; page: 
       toast(L(`已导出 ${r.employees.length} 名员工的排班`, `Exported the roster of ${r.employees.length} employees`));
     } catch (e) { toast(L('导出失败', 'Export failed') + ': ' + (e as Error).message); }
   };
+  // the import format with the selected dates and the employees of the selected currency, every shift cell empty
+  const doTemplate = async () => {
+    try {
+      const r = await api<{ from: string; to: string; employees: { id: number; employee_code: string; name: string; currency_code: string | null }[] }>(`/roster/export?${qs({ from: f.from, to: f.to, cur: f.cur })}`);
+      const ds: string[] = [];
+      for (let d = r.from; d <= r.to; d = addDays(d, 1)) ds.push(d);
+      await exportXLSX(`roster_template_${r.from}_${r.to}${f.cur ? '_' + f.cur : ''}`, ['PSD ID', 'Employee Name', 'Currency', ...ds],
+        r.employees.map((e) => [e.employee_code, e.name, e.currency_code ?? '', ...ds.map(() => '')]), [
+          ['How to use', `Fill in the shift codes, then Shifts & Roster → Import${f.cur ? ' ' + f.cur : ''}`],
+          ['Shift codes', `${meta.shifts.filter((s) => s.is_active).map((s) => s.code).join(' / ')} / OFF`],
+          ['Empty cell', 'An empty cell leaves that day unchanged'],
+          ['Dates', 'Each column header is a date (YYYY-MM-DD). You can add or remove date columns'],
+          ['Employees', 'Rows can be added or removed; only the PSD ID column is used to find the employee'],
+        ]);
+    } catch (e) { toast(L('导出失败', 'Export failed') + ': ' + (e as Error).message); }
+  };
   const doImport = async (file: File) => {
     try {
       const grid = await readGrid(file);
@@ -61,8 +77,9 @@ function Roster({ f, set }: { f: { from: string; to: string; cur: string; page: 
         <Field label={L('开始', 'From')}><input type="date" value={f.from} onChange={(e) => set({ from: e.target.value || t, page: 1 })} /></Field>
         <Field label={L('结束', 'To')}><input type="date" value={f.to} onChange={(e) => set({ to: e.target.value || t, page: 1 })} /></Field>
         <div className="rowact">
-          {!readOnly && <button className="btn" onClick={() => { if (fileRef.current) { fileRef.current.value = ''; fileRef.current.click(); } }}>{f.cur ? L(`导入 ${f.cur} 排班`, `Import ${f.cur}`) : L('导入排班', 'Import roster')}</button>}
-          <button className="btn" onClick={doExport}>{f.cur ? L(`导出 ${f.cur}`, `Export ${f.cur}`) : L('导出全部', 'Export all')}</button>
+          {!readOnly && <button className="btn" onClick={() => { if (fileRef.current) { fileRef.current.value = ''; fileRef.current.click(); } }}>{L('导入', 'Import')}</button>}
+          <button className="btn" onClick={doExport}>{L('导出', 'Export')}</button>
+          <button className="btn" onClick={doTemplate}>{L('导出模板', 'Export template')}</button>
           <input ref={fileRef} type="file" accept=".csv,.xlsx" hidden onChange={(e) => { const x = e.target.files?.[0]; if (x) void doImport(x); }} />
         </div>
         {capped && <span className="b w">{L('最多显示 31 天', 'Shows at most 31 days')}</span>}
