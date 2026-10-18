@@ -671,6 +671,22 @@ describe('one bot for several currencies', () => {
   });
 });
 
+describe('roster hides deactivated employees', () => {
+  it('a deactivated employee disappears from the roster and its export, but keeps attendance history', async () => {
+    const { h, e1, e2 } = await fixture();
+    await h.roster(e1, D, 'A');
+    await h.send({ text: 'IN', ts: lk(D, '07:00'), thread: 1001 });
+    const before = await h.req('GET', `/api/roster?from=${D}&to=${D}`);
+    expect(before.json.employees.map((e: any) => e.employee_code)).toEqual(['E001', 'E002']);
+    expect((await h.req('POST', `/api/employees/${e1}/deactivate`, { reason: 'Resigned' })).status).toBe(200);
+    const after = await h.req('GET', `/api/roster?from=${D}&to=${D}`);
+    expect(after.json.total).toBe(1);
+    expect(after.json.employees.map((e: any) => e.id)).toEqual([e2]);
+    expect((await h.req('GET', `/api/roster/export?from=${D}&to=${D}`)).json.employees.map((e: any) => e.id)).toEqual([e2]);
+    expect((await h.session(e1, D))!.actual_in_at).toBe(lk(D, '07:00'));
+  });
+});
+
 describe('roster history', () => {
   it('lists manual shift changes and one row per roster import, with who, when and why', async () => {
     const { h, e1 } = await fixture();

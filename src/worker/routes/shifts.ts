@@ -117,7 +117,8 @@ shiftRoutes.get('/roster', async (c) => {
   const f = query(c, RosterQ);
   const [from, to] = rosterRange(f.from, f.to);
   const db = c.env.DB;
-  const cond = f.cur ? 'WHERE currency_code = ?' : '';
+  // deactivated employees are not shown in the roster (their attendance history stays in Attendance / Reports)
+  const cond = `WHERE employment_status = 'ACTIVE'${f.cur ? ' AND currency_code = ?' : ''}`;
   const p = f.cur ? [f.cur] : [];
   const [cnt, emps] = await db.batch([
     stmt(db, `SELECT COUNT(*) AS n FROM employees ${cond}`, ...p),
@@ -136,9 +137,9 @@ shiftRoutes.get('/roster/export', async (c) => {
   const cond = f.cur ? 'AND e.currency_code = ?' : '';
   const p = f.cur ? [f.cur] : [];
   const [emps, inst] = await db.batch([
-    stmt(db, `SELECT id, employee_code, name, currency_code FROM employees e WHERE 1 = 1 ${cond} ORDER BY employee_code`, ...p),
+    stmt(db, `SELECT id, employee_code, name, currency_code FROM employees e WHERE e.employment_status = 'ACTIVE' ${cond} ORDER BY employee_code`, ...p),
     stmt(db, `SELECT i.employee_id, i.shift_date, i.shift_code FROM shift_instances i JOIN employees e ON e.id = i.employee_id
-              WHERE i.shift_date BETWEEN ? AND ? AND i.adjustment_status <> 'CANCELLED' ${cond}`, from, to, ...p),
+              WHERE i.shift_date BETWEEN ? AND ? AND i.adjustment_status <> 'CANCELLED' AND e.employment_status = 'ACTIVE' ${cond}`, from, to, ...p),
   ]);
   return c.json({ from, to, employees: emps.results, instances: inst.results });
 });

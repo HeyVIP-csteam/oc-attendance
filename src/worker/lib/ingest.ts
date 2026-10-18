@@ -60,12 +60,15 @@ export const mappingSql = `SELECT m.employee_id, e.employee_code, e.name, e.curr
 
 const tzLabel = 'Sri Lanka time';
 
-export function replyText(kind: 'ok' | 'sm' | 'unrec' | 'id', data: { type?: EventType; code?: string; ts?: number; tz: string; keywords?: string[]; readAs?: string }): string {
+export function replyText(kind: 'ok' | 'sm' | 'unrec' | 'id', data: { type?: EventType; code?: string; ts?: number; tz: string; keywords?: string[]; readAs?: string; reason?: string }): string {
   const label = (c?: string) => (c && (EXCEPTIONS as Record<string, { label: Bi }>)[c]?.label.en) || c || '';
   switch (kind) {
     case 'ok': return `✅ ${EVENT_LABEL[data.type!].en} recorded · ${fmtTime(data.ts!, data.tz)} (${tzLabel})${data.readAs ? `\nRead from: "${data.readAs}"` : ''}`;
     case 'sm': return `⚠️ ${EVENT_LABEL[data.type!].en} not counted: ${label(data.code)}`;
-    case 'unrec': return `⚠️ Not recognised. Please send only ${(data.keywords ?? ['IN', 'BREAK', 'RESUME', 'OUT']).join(' / ')}`;
+    case 'unrec':
+      if (data.reason === 'TIME') return '⚠️ Not counted: the message contains a time. The punch time is taken from Telegram automatically — please send it again without the time. An admin has been notified.';
+      if (data.reason === 'CONFLICT') return '⚠️ Not counted: the message contains more than one action. Please send one action per message. An admin has been notified.';
+      return `⚠️ Not recognised. Please send only ${(data.keywords ?? ['IN', 'BREAK', 'RESUME', 'OUT']).join(' / ')}`;
     case 'id': return `⚠️ Not counted: ${label(data.code)}. The admin has been notified.`;
   }
 }
@@ -170,7 +173,7 @@ export async function ingestUpdate(env: Env, bot: BotRow, upd: TgUpdate, receive
           : bi(`「${text}」接近打卡关键词但不完全匹配`, `"${text}" looks like a punch but does not match a keyword`)),
     ]);
     if (r === 'dup') return { http: 200, status: 'DUPLICATE', codes: [] };
-    return { http: 200, status: 'PENDING_REVIEW', codes: ['UNRECOGNIZED'], reply: rules.botReply ? replyText('unrec', { tz, keywords: primaryKeywords(settings.keywords) }) : null };
+    return { http: 200, status: 'PENDING_REVIEW', codes: ['UNRECOGNIZED'], reply: rules.botReply ? replyText('unrec', { tz, keywords: primaryKeywords(settings.keywords), reason: parsed.reason }) : null };
   }
 
   // ---------------------------------------------------------------- punch: identity
