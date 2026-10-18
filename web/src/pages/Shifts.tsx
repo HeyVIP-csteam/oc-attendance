@@ -1,14 +1,14 @@
 import { useRef, useState } from 'react';
 import { addDays, dayDiff, monthEnd, monthStart, weekday } from '../../../src/shared/time';
-import { Cnt, CurrencyOptions, EmpSearch, ErrBox, Field, Modal, ModalActions, Pager, Tabs, TblTop } from '../components/ui';
+import { Cnt, CurSeg, EmpSearch, ErrBox, Field, Modal, ModalActions, Pager, Tabs, TblTop } from '../components/ui';
 import { api, type ApiErr, qs } from '../lib/api';
 import { exportXLSX, readGrid } from '../lib/files';
 import { fmtDT, fmtDur, fmtT, today } from '../lib/format';
 import { useI18n } from '../lib/i18n';
-import { type MetaShift, toast, useApi, useData, usePageState } from '../lib/store';
+import { type MetaShift, rulesOf, toast, useApi, useData, usePageState } from '../lib/store';
 
 interface Inst { employee_id: number; shift_date: string; shift_id: number; shift_code: string; shift_name: string; scheduled_start_at: number; scheduled_end_at: number; adjustment_status: string; source: string }
-interface RosterData { ot?: { employee_id: number; work_date: string; actual_in_at: number; actual_out_at: number | null; kind: 'OFF' | 'LONG' }[]; from: string; to: string; total: number; employees: { id: number; employee_code: string; name: string; currency_code: string | null; employment_status: string }[]; instances: Inst[] }
+interface RosterData { counts?: Record<string, number>; ot?: { employee_id: number; work_date: string; actual_in_at: number; actual_out_at: number | null; kind: 'OFF' | 'LONG' }[]; from: string; to: string; total: number; employees: { id: number; employee_code: string; name: string; currency_code: string | null; employment_status: string }[]; instances: Inst[] }
 
 export function Shifts() {
   const { L } = useI18n();
@@ -17,7 +17,7 @@ export function Shifts() {
   return (
     <>
       <Tabs items={[['roster', L('排班表（Shift Instances）', 'Roster (shift instances)')], ['history', L('历史记录', 'History')], ['tpl', L('班次模板', 'Shift templates')]]} value={f.tab} onChange={(tab) => set({ tab })} />
-      {f.tab === 'tpl' ? <Templates /> : f.tab === 'history' ? <History q={f.cq} from={f.hfrom} to={f.hto} page={f.cpage} size={f.size} set={(p) => set(p)} /> : <Roster f={f} set={set} />}
+      {f.tab === 'tpl' ? <Templates /> : f.tab === 'history' ? <History q={f.cq} cur={f.cur} from={f.hfrom} to={f.hto} page={f.cpage} size={f.size} set={(p) => set(p)} /> : <Roster f={f} set={set} />}
     </>
   );
 }
@@ -28,7 +28,7 @@ function Roster({ f, set }: { f: { from: string; to: string; cur: string; page: 
   const t = today();
   const { data, error } = useApi<RosterData>(`/roster?${qs({ from: f.from, to: f.to, cur: f.cur, page: f.page, size: f.size })}`);
   const [cell, setCell] = useState<{ emp: RosterData['employees'][number]; date: string; inst: Inst | undefined; cancelled: boolean } | null>(null);
-  const [plan, setPlan] = useState<{ grid: (string | number | null)[][]; file: string; plan: any } | null>(null);
+  const [plan, setPlan] = useState<{ grid: (string | number | null)[][]; file: string; plan: any; currency: string } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const days: string[] = [];
   if (data) for (let d = data.from; d <= data.to; d = addDays(d, 1)) days.push(d);
@@ -51,8 +51,8 @@ function Roster({ f, set }: { f: { from: string; to: string; cur: string; page: 
   const doImport = async (file: File) => {
     try {
       const grid = await readGrid(file);
-      const r = await api<{ plan: any }>('/roster/import', { method: 'POST', body: { grid, fileName: file.name } });
-      setPlan({ grid, file: file.name, plan: r.plan });
+      const r = await api<{ plan: any }>('/roster/import', { method: 'POST', body: { grid, fileName: file.name, currency: f.cur } });
+      setPlan({ grid, file: file.name, plan: r.plan, currency: f.cur });
     } catch (e) { toast(L('无法读取文件', 'Could not read the file') + ': ' + ((e as ApiErr).msg ? L((e as ApiErr).msg.zh, (e as ApiErr).msg.en) : (e as Error).message)); }
   };
   return (
@@ -60,25 +60,25 @@ function Roster({ f, set }: { f: { from: string; to: string; cur: string; page: 
       <div className="card"><div className="row">
         <Field label={L('开始', 'From')}><input type="date" value={f.from} onChange={(e) => set({ from: e.target.value || t, page: 1 })} /></Field>
         <Field label={L('结束', 'To')}><input type="date" value={f.to} onChange={(e) => set({ to: e.target.value || t, page: 1 })} /></Field>
-        <Field label={L('货币', 'Currency')}><select value={f.cur} onChange={(e) => set({ cur: e.target.value, page: 1 })}><CurrencyOptions all={L('全部货币', 'All currencies')} /></select></Field>
         <div className="rowact">
-          {!readOnly && <button className="btn" onClick={() => { if (fileRef.current) { fileRef.current.value = ''; fileRef.current.click(); } }}>{L('导入排班', 'Import roster')}</button>}
-          <button className="btn" onClick={doExport}>{L('导出', 'Export')}</button>
+          {!readOnly && <button className="btn" onClick={() => { if (fileRef.current) { fileRef.current.value = ''; fileRef.current.click(); } }}>{f.cur ? L(`导入 ${f.cur} 排班`, `Import ${f.cur}`) : L('导入排班', 'Import roster')}</button>}
+          <button className="btn" onClick={doExport}>{f.cur ? L(`导出 ${f.cur}`, `Export ${f.cur}`) : L('导出全部', 'Export all')}</button>
           <input ref={fileRef} type="file" accept=".csv,.xlsx" hidden onChange={(e) => { const x = e.target.files?.[0]; if (x) void doImport(x); }} />
         </div>
         {capped && <span className="b w">{L('最多显示 31 天', 'Shows at most 31 days')}</span>}
       </div></div>
+      <div className="rbar"><CurSeg value={f.cur} onChange={(cur) => set({ cur, page: 1 })} all={L('全部货币', 'All currencies')} counts={data?.counts} /></div>
       <ErrBox error={error} />
       {data && (
         <>
           <TblTop left={<Cnt n={data.total} />} size={f.size} onSize={(size) => set({ size, page: 1 })} />
           <div className={`tw roster ${compact ? 'compact' : ''}`}><table><thead><tr>
-            <th className="rid">{L('PSD ID', 'PSD ID')}</th><th className="rname">{L('员工姓名', 'Employee Name')}</th>
+            <th className="rid">{L('PSD ID', 'PSD ID')}</th><th className="rname">{L('员工姓名', 'Employee Name')}</th>{!f.cur && <th>{L('货币', 'Currency')}</th>}
             {days.map((d) => <th key={d} className={`${d === t ? 'today' : ''} ${[0, 6].includes(weekday(d)) ? 'wkend' : ''}`}>{compact ? <><span className="dw">{wd(d)}</span>{Number(d.slice(8))}</> : `${wd(d)} ${d.slice(5)}`}</th>)}
           </tr></thead><tbody>
             {data.employees.map((e) => (
               <tr key={e.id}>
-                <td className="rid"><b>{e.employee_code}</b></td><td className="rname">{e.name}{e.employment_status !== 'ACTIVE' && <> <span className="b">{L('停用', 'Inactive')}</span></>}</td>
+                <td className="rid"><b>{e.employee_code}</b></td><td className="rname">{e.name}{e.employment_status !== 'ACTIVE' && <> <span className="b">{L('停用', 'Inactive')}</span></>}</td>{!f.cur && <td><span className="b">{e.currency_code ?? '—'}</span></td>}
                 {days.map((d) => {
                   const raw = byKey.get(`${e.id}|${d}`);
                   const i = raw && raw.adjustment_status !== 'CANCELLED' ? raw : undefined;
@@ -86,7 +86,7 @@ function Roster({ f, set }: { f: { from: string; to: string; cur: string; page: 
                   const ot = otKey.get(`${e.id}|${d}`);
                   return (
                     <td key={d}><span className={`cell ${i ? i.shift_code : 'OFF'}`} title={i ? `${i.shift_name} ${fmtT(i.scheduled_start_at)}–${fmtT(i.scheduled_end_at)} (LK)${ot?.kind === 'LONG' && ot.actual_out_at
-                        ? L(`\nOT：实际 ${fmtT(ot.actual_in_at)} – ${fmtT(ot.actual_out_at)}，在班 ${fmtDur(ot.actual_out_at - ot.actual_in_at)}（超过 ${meta.rules.otHours ?? 9} 小时）`, `\nOT: actual ${fmtT(ot.actual_in_at)} – ${fmtT(ot.actual_out_at)}, on shift ${fmtDur(ot.actual_out_at - ot.actual_in_at)} (over ${meta.rules.otHours ?? 9} h)`) : ''}`
+                        ? L(`\nOT：实际 ${fmtT(ot.actual_in_at)} – ${fmtT(ot.actual_out_at)}，在班 ${fmtDur(ot.actual_out_at - ot.actual_in_at)}（超过 ${rulesOf(meta, e.currency_code).otHours ?? 9} 小时）`, `\nOT: actual ${fmtT(ot.actual_in_at)} – ${fmtT(ot.actual_out_at)}, on shift ${fmtDur(ot.actual_out_at - ot.actual_in_at)} (over ${rulesOf(meta, e.currency_code).otHours ?? 9} h)`) : ''}`
                       : ot ? L(`休息日上班（OT）：${fmtT(ot.actual_in_at)} – ${ot.actual_out_at ? fmtT(ot.actual_out_at) : '未下班'}`, `Worked on a day off (OT): ${fmtT(ot.actual_in_at)} – ${ot.actual_out_at ? fmtT(ot.actual_out_at) : 'not clocked out'}`) : L('休息', 'Off')}
                       onClick={() => !readOnly && setCell({ emp: e, date: d, inst: i, cancelled })} style={readOnly ? { cursor: 'default' } : undefined}>
                       {i ? (compact ? i.shift_code : <>{i.shift_code}<br /><span style={{ fontWeight: 400 }}>{fmtT(i.scheduled_start_at)}</span></>) : (compact ? '–' : 'OFF')}
@@ -141,7 +141,7 @@ function CellModal({ emp, date, inst, onClose }: { emp: { id: number; employee_c
   );
 }
 
-function ImportModal({ grid, file, plan, onClose }: { grid: (string | number | null)[][]; file: string; plan: any; onClose: () => void }) {
+function ImportModal({ grid, file, plan, currency, onClose }: { grid: (string | number | null)[][]; file: string; plan: any; currency: string; onClose: () => void }) {
   const { L, dt } = useI18n();
   const { refresh } = useData();
   const t = today();
@@ -153,7 +153,7 @@ function ImportModal({ grid, file, plan, onClose }: { grid: (string | number | n
     if (reason.trim().length < 4) return setErr(new Error(L('请填写原因（至少 4 个字）', 'Please give a reason (at least 4 characters)')));
     setBusy(true);
     try {
-      const r = await api<{ applied: { added: number; changed: number; removed: number } }>('/roster/import', { method: 'POST', body: { grid, fileName: file, apply: true, reason } });
+      const r = await api<{ applied: { added: number; changed: number; removed: number } }>('/roster/import', { method: 'POST', body: { grid, fileName: file, apply: true, reason, currency } });
       toast(L(`已导入 ${plan.changeCount} 项排班，考勤已重算`, `Imported ${plan.changeCount} roster changes; attendance recalculated`) + ` (+${r.applied.added} / ~${r.applied.changed} / −${r.applied.removed})`);
       refresh();
       onClose();
@@ -161,11 +161,12 @@ function ImportModal({ grid, file, plan, onClose }: { grid: (string | number | n
   };
   return (
     <Modal onClose={onClose} wide>
-      <h3 style={{ marginTop: 0 }}>{L('导入排班', 'Import roster')} · {file}</h3>
+      <h3 style={{ marginTop: 0 }}>{L('导入排班', 'Import roster')}{currency ? ` · ${currency}` : ''} · {file}</h3>
       <div className="kv">
         <div><span>{L('读取格子', 'Cells read')}</span><b>{plan.cells}</b></div><div><span>{L('将修改', 'Changes')}</span><b>{plan.changeCount}</b></div>
         <div><span>{L('不变', 'Unchanged')}</span><b>{plan.unchanged}</b></div>
-        <div><span>{L('错误（跳过）', 'Errors (skipped)')}</span><b style={{ color: plan.errorCount ? 'var(--bad)' : 'inherit' }}>{plan.errorCount}</b></div>
+        {currency && <div><span>{L(`非 ${currency} 员工（跳过）`, `Not ${currency} (skipped)`)}</span><b style={{ color: plan.skipped ? 'var(--warn)' : 'inherit' }}>{plan.skipped ?? 0}</b></div>}
+        <div><span>{L('错误（跳过）', 'Errors (skipped)')}</span><b style={{ color: plan.errorCount - (plan.skipped ?? 0) ? 'var(--bad)' : 'inherit' }}>{plan.errorCount - (plan.skipped ?? 0)}</b></div>
         <div><span>{L('今天及以前', 'Today or earlier')}</span><b style={{ color: plan.pastCount ? 'var(--warn)' : 'inherit' }}>{plan.pastCount}</b></div>
       </div>
       {plan.changes.length > 0 && (
@@ -254,9 +255,9 @@ function ShiftModal({ s, onClose }: { s: MetaShift | null; onClose: () => void }
 // ---------------------------------------------------------------- roster history: manual shift changes + roster imports
 interface HistRow { id: number; created_at: number; actor: string; action: string; entity_id: string; before_json: string | null; after_json: string | null; note: string | null; employee_code: string | null; name: string | null }
 
-function History({ q, from, to, page, size, set }: { q: string; from: string; to: string; page: number; size: number; set: (p: { cq?: string; hfrom?: string; hto?: string; cpage?: number; size?: number }) => void }) {
+function History({ q, cur, from, to, page, size, set }: { q: string; cur: string; from: string; to: string; page: number; size: number; set: (p: { cur?: string; cq?: string; hfrom?: string; hto?: string; cpage?: number; size?: number }) => void }) {
   const { L } = useI18n();
-  const { data, error } = useApi<{ total: number; rows: HistRow[] }>(`/roster/history-log?${qs({ q, from, to, page, size })}`);
+  const { data, error } = useApi<{ total: number; rows: HistRow[] }>(`/roster/history-log?${qs({ q, cur, from, to, page, size })}`);
   const t = today();
   const parse = (s: string | null) => { try { return s ? JSON.parse(s) : {}; } catch { return {}; } };
   const chip = (c: string | undefined) => <span className={`cell ${c ?? 'OFF'}`} style={{ display: 'inline-block', minWidth: 40, padding: '1px 6px' }}>{c ?? '—'}</span>;
@@ -267,6 +268,7 @@ function History({ q, from, to, page, size, set }: { q: string; from: string; to
         <Field label={L('结束', 'To')}><input type="date" value={to} max={t} onChange={(e) => set({ hto: e.target.value || t, cpage: 1 })} /></Field>
         <Field label={L('员工', 'Employee')}><EmpSearch value={q} onChange={(v) => set({ cq: v, cpage: 1 })} /></Field>
       </div></div>
+      <div className="rbar"><CurSeg value={cur} onChange={(c) => set({ cur: c, cpage: 1 })} all={L('全部货币', 'All currencies')} /></div>
       <ErrBox error={error} />
       {data && (data.rows.length === 0 ? <div className="card empty">{L('这段期间没有记录', 'No history in this period')}</div> : (
         <>

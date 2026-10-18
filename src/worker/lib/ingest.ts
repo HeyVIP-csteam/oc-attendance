@@ -18,7 +18,7 @@ import type { Env } from '../env';
 import { log } from './audit';
 import { isConstraintError, stmt } from './db';
 import { assignmentContext, chooseWorkDate, keyStr, recomputeMany } from './sessions';
-import { parseSettings } from './settings';
+import { parseSettings, rulesFor } from './settings';
 import { type BotRow } from './telegram';
 
 export interface TgMessage {
@@ -95,14 +95,15 @@ export async function ingestUpdate(env: Env, bot: BotRow, upd: TgUpdate, receive
     edited
       ? stmt(db, 'SELECT id FROM telegram_messages WHERE (bot_id = ? AND update_id = ?) OR (chat_id = ? AND message_id = ? AND is_edit = 1 AND edit_ts IS ?) LIMIT 1', bot.id, upd.update_id, chatId, msg.message_id, editTs)
       : stmt(db, 'SELECT id FROM telegram_messages WHERE (bot_id = ? AND update_id = ?) OR (chat_id = ? AND message_id = ? AND is_edit = 0) LIMIT 1', bot.id, upd.update_id, chatId, msg.message_id),
-    stmt(db, "SELECT key, value FROM system_settings WHERE key IN ('keywords','rules','parser')"),
+    stmt(db, "SELECT key, value FROM system_settings WHERE key IN ('keywords','rules','rules_cur','parser')"),
     stmt(db, mappingSql, chatId, threadId ?? -1, tgTs, tgTs),
     stmt(db, 'SELECT 1 AS ok FROM telegram_topic_mappings WHERE chat_id = ? LIMIT 1', chatId),
   ]);
   if (dupR.results.length) return { http: 200, status: 'DUPLICATE', codes: [] };
   const settings = parseSettings(setR.results as { key: string; value: string }[]);
-  const rules: Rules = settings.rules;
   const mapping = threadId != null ? ((mapR.results[0] as unknown as MappingRow) ?? null) : null;
+  // each currency has its own attendance rules (bot reply, matching window, …): use the topic owner's currency
+  const rules: Rules = rulesFor(settings, mapping?.currency_code ?? bot.currency_code);
   const allowed = allowR.results.length > 0; // only groups where at least one employee topic is bound
   if (!allowed) return { http: 200, status: 'IGNORED_CHAT', codes: [] };
 
@@ -219,7 +220,7 @@ export async function reparsePending(env: Env, actor: string, now: number): Prom
   const db = env.DB;
   const tz = env.BIZ_TZ || 'Asia/Colombo';
   const [setR, pendR] = await db.batch([
-    stmt(db, "SELECT key, value FROM system_settings WHERE key IN ('keywords','rules','parser')"),
+    stmt(db, "SELECT key, value FROM system_settings WHERE key IN ('keywords','rules','rules_cur','parser')"),
     stmt(db, `SELECT id, chat_id, message_id, message_thread_id, raw_text, is_forwarded, telegram_message_ts, received_at
               FROM telegram_messages WHERE processing_status = 'PENDING_REVIEW' ORDER BY id LIMIT 200`),
   ]);
@@ -249,7 +250,7 @@ export async function reparsePending(env: Env, actor: string, now: number): Prom
       continue;
     }
     const { ctx, instances } = await assignmentContext(db, id.employeeId, m.telegram_message_ts);
-    const workDate = chooseWorkDate({ type: p.type, ts: m.telegram_message_ts }, ctx, instances, settings.rules.windowHours, tz);
+    const workDate = chooseWorkDate({ type: p.type, ts: m.telegram_message_ts }, ctx, instances, rulesFor(settings, mapping?.currency_code).windowHours, tz);
     await db.batch([
       stmt(db, "UPDATE telegram_messages SET processing_status = 'REPARSED', error_code = NULL, parsed_event_type = ?, employee_id = ?, processed_at = ? WHERE id = ?", p.type, id.employeeId, now, m.id),
       stmt(db, `INSERT INTO attendance_events (message_id, employee_id, work_date, event_type, event_ts, tg_message_id, received_at, source, created_at)
@@ -259,6 +260,6 @@ export async function reparsePending(env: Env, actor: string, now: number): Prom
     keys.push([id.employeeId, workDate]);
     n++;
   }
-  if (keys.length) await recomputeMany(db, keys, { now, tz, rules: settings.rules });
+  if (keys.length) await recomputeMany(db, keys, { now, tz, rules: settings.rules, byCur: settings.rulesCur });
   return n;
 }

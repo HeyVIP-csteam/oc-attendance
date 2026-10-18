@@ -8,7 +8,7 @@ import { auditStmt } from '../lib/audit';
 import { first, stmt } from '../lib/db';
 import { bad, body, clientIp, intParam, notFound, query, requireAdminRole } from '../lib/http';
 import { assignmentContext, chooseWorkDate } from '../lib/sessions';
-import { bizTz, loadSettings } from '../lib/settings';
+import { bizTz, loadSettings, rulesFor } from '../lib/settings';
 import { applyAdjustment } from './attendance';
 
 export const exceptionRoutes = new Hono<AppBindings>();
@@ -57,7 +57,8 @@ exceptionRoutes.get('/exceptions/:id/fix', async (c) => {
   let workDate = x.work_date;
   if (x.source === 'INGEST') {
     const { ctx, instances } = await assignmentContext(db, x.employee_id, x.telegram_message_ts ?? x.occurred_at);
-    workDate = chooseWorkDate({ type: 'CLOCK_OUT', ts: x.telegram_message_ts ?? x.occurred_at }, ctx, instances, settings.rules.windowHours, tz);
+    const emp = await first<{ currency_code: string | null }>(db, 'SELECT currency_code FROM employees WHERE id = ?', x.employee_id);
+    workDate = chooseWorkDate({ type: 'CLOCK_OUT', ts: x.telegram_message_ts ?? x.occurred_at }, ctx, instances, rulesFor(settings, emp?.currency_code).windowHours, tz);
   }
   const s = await first<{ scheduled_start_at: number | null; scheduled_end_at: number | null; actual_out_at: number | null; id: number }>(db,
     'SELECT id, scheduled_start_at, scheduled_end_at, actual_out_at FROM attendance_sessions WHERE employee_id = ? AND work_date = ?', x.employee_id, workDate);

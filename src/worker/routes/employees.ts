@@ -173,6 +173,6 @@ employeeRoutes.post('/employees/:id/deactivate', async (c) => {
     stmt(db, "UPDATE system_settings SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT), updated_at = ? WHERE key = 'data_version'", now),
   ]);
   const settings = await loadSettings(db);
-  await afterInstancesChanged(db, future.map((f) => [id, f.shift_date] as Key), { now, tz, rules: settings.rules });
+  await afterInstancesChanged(db, future.map((f) => [id, f.shift_date] as Key), { now, tz, rules: settings.rules, byCur: settings.rulesCur });
   return c.json({ ok: true });
 });

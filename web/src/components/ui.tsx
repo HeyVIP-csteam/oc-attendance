@@ -190,6 +190,22 @@ export function EmpSearch({ value, onChange }: { value: string; onChange: (v: st
   );
 }
 
+// ---------------------------------------------------------------- currency switch (segmented)
+export function CurSeg({ value, onChange, all, counts }: { value: string; onChange: (c: string) => void; all?: string; counts?: Record<string, number> }) {
+  const { meta } = useData();
+  const items: [string, string][] = [...(all != null ? [['', all] as [string, string]] : []), ...meta.currencies.map((c) => [c.code, c.code] as [string, string])];
+  const total = counts ? Object.values(counts).reduce((a, b) => a + b, 0) : 0;
+  return (
+    <div className="seg" role="tablist">
+      {items.map(([code, label]) => (
+        <button key={code || 'all'} type="button" role="tab" aria-selected={value === code} className={value === code ? 'on' : ''} onClick={() => onChange(code)}>
+          {label}{counts && <span className="dot">{code ? counts[code] ?? 0 : total}</span>}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------- shared select options
 export function CurrencyOptions({ all }: { all?: string }) {
   const { meta } = useData();

@@ -6,7 +6,7 @@ import { api, type ApiErr, qs } from '../lib/api';
 import { exportCSV, exportXLSX } from '../lib/files';
 import { fmtDT, fmtDur, fmtMin, fmtT, fromLocalInput, hrs, LATE_RED, toLocalInput, today, TZ } from '../lib/format';
 import { parseBi, useI18n } from '../lib/i18n';
-import { toast, useApi, useData, usePageState } from '../lib/store';
+import { rulesOf, toast, useApi, useData, usePageState } from '../lib/store';
 
 export interface AttRow {
   employee_id: number; work_date: string; employee_code: string; name: string; currency_code: string | null; shift_id: number | null; shift_code: string | null; shift_name: string | null;
@@ -147,7 +147,8 @@ export function SessionDrawer({ emp, date, onClose }: { emp: number; date: strin
   const adjById = new Map((data?.adjustments ?? []).map((a) => [a.id, a]));
   // an ADD adjustment that points at an older punch is the second half of an "edit"
   const editedIds = new Set((data?.adjustments ?? []).filter((a) => a.action === 'ADD_EVENT' && a.target_event_id).map((a) => a.target_event_id!));
-  const breakQuota = meta.rules.breakMinutes !== undefined ? meta.rules.breakMinutes : inst?.break_minutes ?? null;
+  const empRules = rulesOf(meta, meta.employees.find((x) => x.id === emp)?.currency);
+  const breakQuota = empRules.breakMinutes !== undefined ? empRules.breakMinutes : inst?.break_minutes ?? null;
   const live = (data?.events ?? []).filter((e) => !e.is_voided).length;
   const gone = (data?.events ?? []).filter((e) => e.is_voided).length;
 

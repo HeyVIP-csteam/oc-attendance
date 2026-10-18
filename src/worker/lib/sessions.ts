@@ -87,7 +87,8 @@ export async function assignmentContext(db: D1Database, employeeId: number, ts: 
  * Re-assigns Telegram events of the given employees between two business dates (after a roster change) and returns
  * the event updates plus every session key that has to be recomputed.
  */
-export async function reassignEvents(db: D1Database, employeeIds: number[], fromDate: string, toDate: string, windowHours: number, tz: string): Promise<{ updates: D1PreparedStatement[]; keys: Key[] }> {
+export async function reassignEvents(db: D1Database, employeeIds: number[], fromDate: string, toDate: string, o: { rules: Rules; byCur?: Record<string, Rules> }, tz: string): Promise<{ updates: D1PreparedStatement[]; keys: Key[] }> {
+  const rulesOf = await rulesLookup(db, employeeIds, o);
   const updates: D1PreparedStatement[] = [];
   const keys = new Map<string, Key>();
   const add = (k: Key) => keys.set(keyStr(k), k);
@@ -110,7 +111,7 @@ export async function reassignEvents(db: D1Database, employeeIds: number[], from
       const ctx: CtxEvent[] = [];
       for (const e of evs) {
         let d = e.work_date;
-        if (e.source === 'TELEGRAM') d = chooseWorkDate({ type: e.event_type, ts: e.event_ts }, ctx, instByEmp.get(empId) ?? [], windowHours, tz);
+        if (e.source === 'TELEGRAM') d = chooseWorkDate({ type: e.event_type, ts: e.event_ts }, ctx, instByEmp.get(empId) ?? [], rulesOf(empId).windowHours, tz);
         ctx.push({ id: e.id, type: e.event_type, ts: e.event_ts, tgMessageId: e.tg_message_id, workDate: d, source: e.source });
         if (d !== e.work_date) {
           updates.push(stmt(db, 'UPDATE attendance_events SET work_date = ? WHERE id = ?', d, e.id));
@@ -123,7 +124,25 @@ export async function reassignEvents(db: D1Database, employeeIds: number[], from
   return { updates, keys: [...keys.values()] };
 }
 
-export interface RecomputeOpts { now: number; tz: string; rules: Rules }
+/** rules = fallback; byCur = per-currency rules (each employee is computed with the rules of their currency). */
+export interface RecomputeOpts { now: number; tz: string; rules: Rules; byCur?: Record<string, Rules> }
+
+/** Employee id → currency, for the employees given. */
+export async function empCurrencies(db: D1Database, ids: number[]): Promise<Map<number, string | null>> {
+  const out = new Map<number, string | null>();
+  for (const part of chunk([...new Set(ids)], 90)) {
+    const r = await all<{ id: number; currency_code: string | null }>(db, `SELECT id, currency_code FROM employees WHERE id IN (${part.map(() => '?').join(',')})`, ...part);
+    for (const e of r) out.set(e.id, e.currency_code);
+  }
+  return out;
+}
+
+/** Returns a lookup employee id → rules (the rules of the employee's currency). */
+export async function rulesLookup(db: D1Database, ids: number[], o: { rules: Rules; byCur?: Record<string, Rules> }): Promise<(empId: number) => Rules> {
+  if (!o.byCur || !Object.keys(o.byCur).length || !ids.length) return () => o.rules;
+  const cur = await empCurrencies(db, ids);
+  return (id) => { const c = cur.get(id); return (c && o.byCur![c]) || o.rules; };
+}
 
 interface EvRow { id: number; employee_id: number; work_date: string; event_type: EventType; event_ts: number; tg_message_id: number | null; received_at: number; source: 'TELEGRAM' | 'ADMIN'; is_voided: number; sm_result: string | null; message_id: number | null }
 interface ExRow { id: number; employee_id: number; work_date: string; dedupe_key: string; status: string; occurred_at: number; detail: string | null }
@@ -138,6 +157,7 @@ export interface Recomputed { key: Key; summary: SessionSummary | null; instance
 export async function recomputeMany(db: D1Database, keys: Key[], o: RecomputeOpts): Promise<Map<string, Recomputed>> {
   const out = new Map<string, Recomputed>();
   const uniq = [...new Map(keys.map((k) => [keyStr(k), k])).values()];
+  const rulesOf = await rulesLookup(db, uniq.map((k) => k[0]), o);
   for (const part of chunk(uniq, 40)) {
     const w = pairsWhere(part);
     const wi = pairsWhere(part, 'employee_id', 'shift_date');
@@ -170,7 +190,7 @@ export async function recomputeMany(db: D1Database, keys: Key[], o: RecomputeOpt
       const inst = insts.get(ks)?.[0] ?? null;
       const evRows = evs.get(ks) ?? [];
       const engineEvents: EngineEvent[] = evRows.map((e) => ({ id: e.id, type: e.event_type, ts: e.event_ts, tgMessageId: e.tg_message_id, receivedAt: e.received_at, source: e.source, voided: e.is_voided === 1 }));
-      const summary = computeSession({ events: engineEvents, instance: inst ? toEngineInstance(inst) : null, now: o.now, rules: o.rules, tz: o.tz });
+      const summary = computeSession({ events: engineEvents, instance: inst ? toEngineInstance(inst) : null, now: o.now, rules: rulesOf(empId), tz: o.tz });
       out.set(ks, { key, summary, instance: inst });
       const existingEx = exs.get(ks) ?? [];
 

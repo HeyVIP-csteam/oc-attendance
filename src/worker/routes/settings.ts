@@ -1,6 +1,6 @@
 import { type Context, Hono } from 'hono';
 import { z } from 'zod';
-import { EVENT_TYPES, FIXED, type KeywordConfig } from '../../shared/codes';
+import { EVENT_TYPES, FIXED, type KeywordConfig, type Rules } from '../../shared/codes';
 import { validateKeywords } from '../../shared/parser';
 import { addDays, localDate } from '../../shared/time';
 import type { AppBindings, Env } from '../env';
@@ -9,7 +9,7 @@ import { encryptString, randomBytes, webhookSecret } from '../lib/crypto';
 import { all, first, stmt } from '../lib/db';
 import { ApiError, bad, body, clientIp, conflict, notFound, requireAdminRole } from '../lib/http';
 import { reparsePending } from '../lib/ingest';
-import { bizTz, loadSettings } from '../lib/settings';
+import { bizTz, loadSettings, rulesFor } from '../lib/settings';
 import { ALLOWED_UPDATES, type BotRow, botToken, hasSecretToken, loadBot, TelegramError, tgCall, type TgUser, type TgWebhookInfo, TOKEN_RE } from '../lib/telegram';
 
 export const settingsRoutes = new Hono<AppBindings>();
@@ -32,7 +32,8 @@ settingsRoutes.get('/meta', async (c) => {
   return c.json({
     user: c.get('admin'), tz, today: localDate(Date.now(), tz), now: Date.now(),
     currencies: cur.results, shifts: sh.results, employees: emps.results,
-    keywords: settings.keywords, rules: settings.rules, parser: settings.parser, fixed: FIXED, dataVersion: settings.dataVersion,
+    keywords: settings.keywords, rules: settings.rules, parser: settings.parser,
+    rulesCur: Object.fromEntries((cur.results as { code: string }[]).map((x) => [x.code, rulesFor(settings, x.code)])), fixed: FIXED, dataVersion: settings.dataVersion,
   });
 });
 
@@ -93,23 +94,39 @@ const RulesSchema = z.object({
   otHours: z.number().min(1).max(24).optional().default(9),
   breakMinutes: z.number().int().min(0).max(1440).nullable().optional().default(90),
   breakUnit: z.enum(['h', 'm']).optional().default('m'),
+  currency: z.string().trim().toUpperCase().max(10).optional(), // set → these are that currency's own rules
 });
 
 settingsRoutes.put('/settings/rules', async (c) => {
   requireAdminRole(c);
-  const v = await body(c, RulesSchema);
-  const rules = { ...v };
+  const { currency, ...rules } = await body(c, RulesSchema);
   const db = c.env.DB;
   const now = Date.now();
+  const actor = c.get('admin').username;
   const before = await loadSettings(db);
-  const statements = [
-    stmt(db, "UPDATE system_settings SET value = ?, updated_at = ?, updated_by = ? WHERE key = 'rules'", JSON.stringify(rules), now, c.get('admin').username),
-    auditStmt(db, { actor: c.get('admin').username, action: 'SETTINGS_UPDATED', entityType: 'system_settings', entityId: 'rules', before: before.rules, after: rules, ip: clientIp(c), at: now }),
-    bump(db, now),
-  ];
-  // rules that change computed results → re-evaluate the last 31 days in the background (cron, 200 sessions per run)
-  if (before.rules.lateAsException !== rules.lateAsException || before.rules.windowHours !== rules.windowHours || before.rules.breakMinutes !== rules.breakMinutes) {
-    statements.push(stmt(db, 'UPDATE attendance_sessions SET next_check_at = 0 WHERE work_date >= ?', addDays(localDate(now, bizTz(c.env)), -31)));
+  const since = addDays(localDate(now, bizTz(c.env)), -31);
+  const changed = (a: Pick<Rules, 'lateAsException' | 'windowHours' | 'breakMinutes'>, b: typeof a) => a.lateAsException !== b.lateAsException || a.windowHours !== b.windowHours || a.breakMinutes !== b.breakMinutes;
+  const statements: D1PreparedStatement[] = [];
+  if (currency) {
+    // one currency's own rules (each currency is set on its own)
+    if (!(await first(db, 'SELECT code FROM currencies WHERE code = ?', currency))) throw notFound();
+    const prev = rulesFor(before, currency);
+    const all = { ...before.rulesCur, [currency]: rules };
+    statements.push(
+      stmt(db, `INSERT INTO system_settings (key, value, updated_at, updated_by) VALUES ('rules_cur', ?, ?, ?)
+                ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, updated_by = excluded.updated_by`, JSON.stringify(all), now, actor),
+      auditStmt(db, { actor, action: 'SETTINGS_UPDATED', entityType: 'system_settings', entityId: `rules:${currency}`, before: prev, after: rules, ip: clientIp(c), at: now }),
+      bump(db, now),
+    );
+    // only this currency's employees are re-evaluated (last 31 days, in the background: cron, 200 sessions per run)
+    if (changed(prev, rules)) statements.push(stmt(db, 'UPDATE attendance_sessions SET next_check_at = 0 WHERE work_date >= ? AND employee_id IN (SELECT id FROM employees WHERE currency_code = ?)', since, currency));
+  } else {
+    statements.push(
+      stmt(db, "UPDATE system_settings SET value = ?, updated_at = ?, updated_by = ? WHERE key = 'rules'", JSON.stringify(rules), now, actor),
+      auditStmt(db, { actor, action: 'SETTINGS_UPDATED', entityType: 'system_settings', entityId: 'rules', before: before.rules, after: rules, ip: clientIp(c), at: now }),
+      bump(db, now),
+    );
+    if (changed(before.rules, rules)) statements.push(stmt(db, 'UPDATE attendance_sessions SET next_check_at = 0 WHERE work_date >= ?', since));
   }
   await db.batch(statements);
   return c.json({ ok: true });

@@ -3,6 +3,9 @@ import { api, type ApiErr } from './api';
 
 export interface MetaEmployee { id: number; code: string; name: string; currency: string | null; status: string; thread: number | null }
 export interface MetaShift { id: number; code: string; name: string; start_time: string; end_time: string; late_grace_min: number; early_grace_min: number; break_minutes: number | null; is_active: number; created_at: number; timezone: string }
+export interface MetaRules { windowHours: number; windowUnit?: 'h' | 'm'; breakMinutes?: number | null; breakUnit?: 'h' | 'm'; lateAsException: boolean; botReply: boolean; otHours?: number }
+/** The attendance rules of one currency. */
+export const rulesOf = (m: Pick<Meta, 'rules' | 'rulesCur'>, cur: string | null | undefined): MetaRules => (cur && m.rulesCur?.[cur]) || m.rules;
 export interface Meta {
   user: { id: number; username: string; role: 'admin' | 'viewer' };
   tz: string; today: string;
@@ -10,7 +13,8 @@ export interface Meta {
   shifts: MetaShift[];
   employees: MetaEmployee[];
   keywords: Record<'CLOCK_IN' | 'BREAK_START' | 'BREAK_END' | 'CLOCK_OUT', string[]>;
-  rules: { windowHours: number; windowUnit?: 'h' | 'm'; breakMinutes?: number | null; breakUnit?: 'h' | 'm'; lateAsException: boolean; botReply: boolean; otHours?: number };
+  rules: MetaRules;
+  rulesCur?: Record<string, MetaRules>; // each currency's own attendance rules
   parser?: { skipLabels: string[]; typoTolerance: boolean; ignoreBrackets: boolean; typedTimeReview: boolean };
   dataVersion: number;
 }

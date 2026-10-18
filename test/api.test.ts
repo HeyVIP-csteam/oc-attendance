@@ -748,6 +748,48 @@ describe('daily break allowance (Attendance rules)', () => {
   });
 });
 
+describe('rules and roster per currency', () => {
+  it('each currency has its own rules; saving one currency does not touch another', async () => {
+    const { h, e1 } = await fixture();
+    await h.req('POST', '/api/currencies', { code: 'PHP' });
+    await h.roster(e1, D, 'A');
+    await h.send({ text: 'IN', ts: lk(D, '07:00'), thread: 1001 });
+    await h.send({ text: 'BREAK', ts: lk(D, '10:00'), thread: 1001 });
+    await h.send({ text: 'RESUME', ts: lk(D, '11:00'), thread: 1001 }); // 60 min
+    const ex = async () => (await h.session(e1, D))!.break_exceeded;
+    const base = { windowHours: 4, lateAsException: false, botReply: true };
+    expect((await h.req('PUT', '/api/settings/rules', { ...base, currency: 'PHP', breakMinutes: 30 })).status).toBe(200);
+    await h.cron(lk(D, '12:00'));
+    expect(await ex()).toBe(0); // LKR still 90 min
+    await h.req('PUT', '/api/settings/rules', { ...base, currency: 'LKR', breakMinutes: 45, otHours: 10 });
+    await h.cron(lk(D, '12:01'));
+    expect(await ex()).toBe(1);
+    const m = (await h.req('GET', '/api/meta')).json;
+    expect(m.rulesCur.PHP).toMatchObject({ breakMinutes: 30 });
+    expect(m.rulesCur.LKR).toMatchObject({ breakMinutes: 45, otHours: 10 });
+    expect((await h.req('PUT', '/api/settings/rules', { ...base, currency: 'XXX' })).status).toBe(404);
+  });
+
+  it('roster counts, import into one currency skips other currencies, history follows the currency', async () => {
+    const { h, e1 } = await fixture();
+    await h.req('POST', '/api/currencies', { code: 'PHP' });
+    await h.employee('P001', 'Maria', null, 'PHP');
+    const r = await h.req('GET', `/api/roster?from=${D}&to=${D}&cur=PHP`);
+    expect(r.json.counts).toMatchObject({ LKR: 2, PHP: 1 });
+    expect(r.json.employees.map((e: any) => e.employee_code)).toEqual(['P001']);
+    const grid = [['PSD ID', '2026-10-21'], ['E001', 'A'], ['P001', 'B']];
+    const plan = (await h.req('POST', '/api/roster/import', { grid, fileName: 'lkr.csv', currency: 'LKR' })).json.plan;
+    expect(plan).toMatchObject({ changeCount: 1, skipped: 1 });
+    await h.req('POST', '/api/roster/import', { grid, fileName: 'lkr.csv', currency: 'LKR', apply: true, reason: 'LKR week' });
+    expect(h.db.get<any>("SELECT COUNT(*) AS n FROM shift_instances WHERE shift_date = '2026-10-21'").n).toBe(1);
+    await h.roster(e1, '2026-10-22', 'A');
+    const lkr = (await h.req('GET', '/api/roster/history-log?cur=LKR')).json;
+    const php = (await h.req('GET', '/api/roster/history-log?cur=PHP')).json;
+    expect(lkr.total).toBe(2); // the LKR import + E001's change
+    expect(php.total).toBe(0);
+  });
+});
+
 describe('roster history', () => {
   it('lists manual shift changes and one row per roster import, with who, when and why', async () => {
     const { h, e1 } = await fixture();

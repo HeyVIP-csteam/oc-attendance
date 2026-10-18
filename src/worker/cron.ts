@@ -34,7 +34,7 @@ export async function runCron(env: Env, now = Date.now()): Promise<{ materialise
         AND NOT EXISTS (SELECT 1 FROM attendance_sessions s WHERE s.employee_id = i.employee_id AND s.work_date = i.shift_date)`, addDays(today, -1), today).run();
 
   const keys = await dueSessionKeys(db, now, 200);
-  if (keys.length) await recomputeMany(db, keys, { now, tz, rules: settings.rules });
+  if (keys.length) await recomputeMany(db, keys, { now, tz, rules: settings.rules, byCur: settings.rulesCur });
 
   const res = { materialised: mat.meta.changes ?? 0, recomputed: keys.length, generated };
   log('info', 'cron', res);

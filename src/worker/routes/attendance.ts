@@ -163,7 +163,7 @@ export async function applyAdjustment(env: AppBindings['Bindings'], actor: strin
   const employee = await first<{ id: number; employee_code: string }>(db, 'SELECT id, employee_code FROM employees WHERE id = ?', emp);
   if (!employee) throw notFound('Employee not found');
   const settings = await loadSettings(db);
-  const before = (await recomputeMany(db, [[emp, date]], { now, tz, rules: settings.rules })).get(keyStr([emp, date]))?.summary ?? null;
+  const before = (await recomputeMany(db, [[emp, date]], { now, tz, rules: settings.rules, byCur: settings.rulesCur })).get(keyStr([emp, date]))?.summary ?? null;
   const ins = `INSERT INTO attendance_adjustments (employee_id, work_date, action, event_type, event_ts, target_event_id, reason, before_json, created_by, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)`;
   const beforeSnap = snapshot(before, tz);
   const statements: D1PreparedStatement[] = [];
@@ -208,7 +208,7 @@ export async function applyAdjustment(env: AppBindings['Bindings'], actor: strin
     );
   }
   await db.batch(statements);
-  const after = (await recomputeMany(db, [[emp, date]], { now: Date.now(), tz, rules: settings.rules })).get(keyStr([emp, date]))?.summary ?? null;
+  const after = (await recomputeMany(db, [[emp, date]], { now: Date.now(), tz, rules: settings.rules, byCur: settings.rulesCur })).get(keyStr([emp, date]))?.summary ?? null;
   const afterSnap = snapshot(after, tz);
   const what = a.action === 'ADD_EVENT' ? `Added ${a.eventType} @ ${fmtDateTime(a.ts!, tz)}`
     : a.action === 'EDIT_EVENT' ? `Edited event #${a.targetEventId} → ${a.eventType} @ ${fmtDateTime(a.ts!, tz)}` : `Deleted (voided) event #${a.targetEventId}`;

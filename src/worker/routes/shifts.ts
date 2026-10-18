@@ -7,7 +7,7 @@ import { all, chunk, first, stmt } from '../lib/db';
 import { bad, body, clientIp, conflict, intParam, notFound, query, requireAdminRole } from '../lib/http';
 import { afterInstancesChanged, cancelInstanceStmt, loadTemplates, type ShiftTemplate, upsertInstanceStmt } from '../lib/roster';
 import type { Key } from '../lib/sessions';
-import { bizTz, loadSettings } from '../lib/settings';
+import { bizTz, loadSettings, rulesFor } from '../lib/settings';
 
 export const shiftRoutes = new Hono<AppBindings>();
 
@@ -74,7 +74,7 @@ async function saveTemplate(c: Context<AppBindings>, id: number | null, v: z.inf
   const t = (await first<ShiftTemplate>(db, 'SELECT * FROM shift_templates WHERE id = ?', id))!;
   const r = await applyTemplateToFuture(db, t, now, tz, actor);
   const settings = await loadSettings(db);
-  await afterInstancesChanged(db, r.pairs, { now, tz, rules: settings.rules });
+  await afterInstancesChanged(db, r.pairs, { now, tz, rules: settings.rules, byCur: settings.rulesCur });
   return { count: r.count };
 }
 
@@ -120,24 +120,32 @@ shiftRoutes.get('/roster', async (c) => {
   // deactivated employees are not shown in the roster (their attendance history stays in Attendance / Reports)
   const cond = `WHERE employment_status = 'ACTIVE'${f.cur ? ' AND currency_code = ?' : ''}`;
   const p = f.cur ? [f.cur] : [];
-  const [cnt, emps] = await db.batch([
+  const [cnt, emps, per] = await db.batch([
     stmt(db, `SELECT COUNT(*) AS n FROM employees ${cond}`, ...p),
     stmt(db, `SELECT id, employee_code, name, currency_code, employment_status FROM employees ${cond} ORDER BY employee_code LIMIT ? OFFSET ?`, ...p, f.size, (f.page - 1) * f.size),
+    stmt(db, "SELECT currency_code AS code, COUNT(*) AS n FROM employees WHERE employment_status = 'ACTIVE' GROUP BY currency_code"),
   ]);
+  const counts = Object.fromEntries((per.results as { code: string | null; n: number }[]).map((r) => [r.code ?? '', r.n]));
   const ids = (emps.results as { id: number }[]).map((e) => e.id);
   const inList = ids.map(() => '?').join(',');
+  // each currency has its own OT threshold
+  const settings = await loadSettings(db);
+  const curs = [...new Set((emps.results as { currency_code: string | null }[]).map((e) => e.currency_code ?? ''))];
+  const otMs = (cur: string) => Math.round(rulesFor(settings, cur).otHours * 3_600_000);
+  const otCase = `CASE e.currency_code ${curs.map(() => 'WHEN ? THEN ?').join(' ')} ELSE ? END`;
+  const otParams = [...curs.flatMap((cu) => [cu, otMs(cu)]), otMs('')];
   const [instances, ot] = ids.length ? await Promise.all([
     all(db, `SELECT employee_id, shift_date, shift_id, shift_code, shift_name, scheduled_start_at, scheduled_end_at, adjustment_status, source
       FROM shift_instances WHERE employee_id IN (${inList}) AND shift_date BETWEEN ? AND ?`, ...ids, from, to),
     // OT on the roster: worked on a day off (no active shift), or on shift longer than the OT threshold (clock in → out)
     all(db, `SELECT s.employee_id, s.work_date, s.actual_in_at, s.actual_out_at, s.shift_duration_ms,
         CASE WHEN s.shift_instance_id IS NULL OR i.adjustment_status = 'CANCELLED' THEN 'OFF' ELSE 'LONG' END AS kind
-      FROM attendance_sessions s LEFT JOIN shift_instances i ON i.id = s.shift_instance_id
+      FROM attendance_sessions s LEFT JOIN shift_instances i ON i.id = s.shift_instance_id JOIN employees e ON e.id = s.employee_id
       WHERE s.employee_id IN (${inList}) AND s.work_date BETWEEN ? AND ? AND s.actual_in_at IS NOT NULL
-        AND (s.shift_instance_id IS NULL OR i.adjustment_status = 'CANCELLED' OR (s.actual_out_at IS NOT NULL AND s.actual_out_at - s.actual_in_at > ?))`,
-      ...ids, from, to, Math.round((await loadSettings(db)).rules.otHours * 3_600_000)),
+        AND (s.shift_instance_id IS NULL OR i.adjustment_status = 'CANCELLED' OR (s.actual_out_at IS NOT NULL AND s.actual_out_at - s.actual_in_at > ${otCase}))`,
+      ...ids, from, to, ...otParams),
   ]) : [[], []];
-  return c.json({ from, to, total: (cnt.results[0] as { n: number }).n, employees: emps.results, instances, ot });
+  return c.json({ from, to, total: (cnt.results[0] as { n: number }).n, counts, employees: emps.results, instances, ot });
 });
 
 shiftRoutes.get('/roster/export', async (c) => {
@@ -197,7 +205,7 @@ shiftRoutes.put('/roster/cell', async (c) => {
   if (fromCode === toCode) return c.json({ ok: true, unchanged: true });
   await db.batch([...instanceChangeStmts(db, { employeeId: v.employeeId, code: e.employee_code, date: v.date, from: fromCode, to: toCode, template: t }, cur, 'MANUAL', actor, v.reason, clientIp(c), now, tz), bump(db, now)]);
   const settings = await loadSettings(db);
-  await afterInstancesChanged(db, [[v.employeeId, v.date]], { now, tz, rules: settings.rules });
+  await afterInstancesChanged(db, [[v.employeeId, v.date]], { now, tz, rules: settings.rules, byCur: settings.rulesCur });
   return c.json({ ok: true });
 });
 
@@ -214,6 +222,7 @@ const ImportSchema = z.object({
   fileName: z.string().max(200).default('roster'),
   apply: z.boolean().default(false),
   reason: z.string().trim().max(300).optional().default(''),
+  currency: z.string().trim().toUpperCase().max(10).optional().default(''), // set → only that currency's employees are updated
 });
 
 shiftRoutes.post('/roster/import', async (c) => {
@@ -227,6 +236,7 @@ shiftRoutes.post('/roster/import', async (c) => {
   const changes: Change[] = [];
   let unchanged = 0;
   let cells = 0;
+  let skipped = 0; // rows of another currency (import into one currency)
   const head = v.grid[0].map((x) => String(x ?? '').trim());
   let idCol = head.findIndex((x) => /^(psd\s*id|employee\s*id|员工编号|id)$/i.test(x));
   if (idCol < 0) idCol = 0;
@@ -235,11 +245,11 @@ shiftRoutes.post('/roster/import', async (c) => {
   const dates = dateCols.map((x) => x.d).sort();
   if (dates.length && dayDiff(dates[dates.length - 1], dates[0]) > 62) throw bad('RANGE', '一次最多导入 62 天', 'At most 62 days per import');
   const [empR, tplR, instR] = await db.batch([
-    stmt(db, 'SELECT id, employee_code, name, employment_status, deactivated_at FROM employees'),
+    stmt(db, 'SELECT id, employee_code, name, employment_status, deactivated_at, currency_code FROM employees'),
     stmt(db, 'SELECT * FROM shift_templates WHERE is_active = 1'),
     stmt(db, 'SELECT employee_id, shift_date, shift_code, adjustment_status FROM shift_instances WHERE shift_date BETWEEN ? AND ?', dates[0] ?? today, dates[dates.length - 1] ?? today),
   ]);
-  const emps = new Map((empR.results as { id: number; employee_code: string; name: string; employment_status: string; deactivated_at: number | null }[]).map((e) => [e.employee_code.toLowerCase(), e]));
+  const emps = new Map((empR.results as { id: number; employee_code: string; name: string; employment_status: string; deactivated_at: number | null; currency_code: string | null }[]).map((e) => [e.employee_code.toLowerCase(), e]));
   const tpls = new Map((tplR.results as unknown as ShiftTemplate[]).map((t) => [t.code.toUpperCase(), t]));
   const inst = new Map((instR.results as { employee_id: number; shift_date: string; shift_code: string; adjustment_status: string }[]).map((i) => [`${i.employee_id}|${i.shift_date}`, i]));
   for (let r = 1; r < v.grid.length; r++) {
@@ -247,6 +257,11 @@ shiftRoutes.post('/roster/import', async (c) => {
     if (!raw) continue;
     const e = emps.get(raw.toLowerCase());
     if (!e) { errs.push({ where: `Row ${r + 1}`, msg: { zh: `找不到员工 ${raw}`, en: `Unknown employee ${raw}` } }); continue; }
+    if (v.currency && e.currency_code !== v.currency) {
+      skipped++;
+      errs.push({ where: `Row ${r + 1} · ${e.employee_code}`, msg: { zh: `属于 ${e.currency_code ?? '—'}，不是 ${v.currency}，已跳过`, en: `belongs to ${e.currency_code ?? '—'}, not ${v.currency} — skipped` } });
+      continue;
+    }
     for (const { i, d } of dateCols) {
       const val = String(v.grid[r][i] ?? '').trim().toUpperCase();
       if (!val) continue;
@@ -264,7 +279,7 @@ shiftRoutes.post('/roster/import', async (c) => {
     }
   }
   const plan = {
-    cells, unchanged, errors: errs.slice(0, 200), errorCount: errs.length, pastCount: changes.filter((x) => x.date <= today).length,
+    cells, unchanged, skipped, currency: v.currency || null, errors: errs.slice(0, 200), errorCount: errs.length, pastCount: changes.filter((x) => x.date <= today).length,
     changes: changes.slice(0, 300).map((x) => ({ employeeId: x.employeeId, code: x.code, name: (emps.get(x.code.toLowerCase())?.name) ?? '', date: x.date, from: x.from, to: x.to })),
     changeCount: changes.length,
   };
@@ -278,11 +293,11 @@ shiftRoutes.post('/roster/import', async (c) => {
     statements.push(...instanceChangeStmts(db, ch, inst.get(`${ch.employeeId}|${ch.date}`) ?? null, 'ROSTER_IMPORT', actor, v.reason, ip, now, tz));
     if (ch.to === 'OFF') removed++; else if (ch.from === 'OFF') added++; else changed++;
   }
-  statements.push(auditStmt(db, { actor, action: 'ROSTER_IMPORTED', entityType: 'shift_instance', entityId: v.fileName, after: { changes: changes.length, added, changed, removed, skipped_errors: errs.length }, note: v.reason, ip, at: now }));
+  statements.push(auditStmt(db, { actor, action: 'ROSTER_IMPORTED', entityType: 'shift_instance', entityId: v.fileName, after: { changes: changes.length, added, changed, removed, skipped_errors: errs.length, ...(v.currency ? { currency: v.currency } : {}) }, note: v.reason, ip, at: now }));
   statements.push(bump(db, now));
   for (const ch of chunk(statements, 90)) await db.batch(ch);
   const settings = await loadSettings(db);
-  const r = await afterInstancesChanged(db, changes.map((x) => [x.employeeId, x.date] as Key), { now, tz, rules: settings.rules });
+  const r = await afterInstancesChanged(db, changes.map((x) => [x.employeeId, x.date] as Key), { now, tz, rules: settings.rules, byCur: settings.rulesCur });
   return c.json({ plan, applied: { added, changed, removed, recomputed: r.inline, deferred: r.deferred } });
 });
 
@@ -290,6 +305,7 @@ shiftRoutes.post('/roster/import', async (c) => {
 shiftRoutes.get('/roster/history-log', async (c) => {
   const f = query(c, z.object({
     q: z.string().max(80).optional().default(''),
+    cur: z.string().trim().toUpperCase().max(10).optional().default(''),
     from: z.string().refine(isDate).optional(), to: z.string().refine(isDate).optional(), // custom date range (Sri Lanka dates of the change)
     page: z.coerce.number().int().min(1).default(1), size: z.coerce.number().int().refine((n) => [10, 20, 30, 50, 100].includes(n)).default(10),
   }));
@@ -302,6 +318,11 @@ shiftRoutes.get('/roster/history-log', async (c) => {
   const [d1, d2] = f.from && f.to && f.from > f.to ? [f.to, f.from] : [f.from, f.to];
   if (d1) { cond.push('a.created_at >= ?'); p.push(zonedToUtc(d1, '00:00', tz)); }
   if (d2) { cond.push('a.created_at < ?'); p.push(zonedToUtc(addDays(d2, 1), '00:00', tz)); }
+  if (f.cur) {
+    // a shift change of that currency's employee, or an import made for that currency (or for all currencies)
+    cond.push(`((a.action = 'ROSTER_IMPORTED' AND (COALESCE(a.after_json, '') LIKE ? OR COALESCE(a.after_json, '') NOT LIKE '%"currency":%')) OR (a.action <> 'ROSTER_IMPORTED' AND e.currency_code = ?))`);
+    p.push(`%"currency":"${f.cur.replace(/[^A-Z0-9]/g, '')}"%`, f.cur);
+  }
   if (f.q) { cond.push("(e.employee_code LIKE ? ESCAPE '\\' OR e.name LIKE ? ESCAPE '\\')"); const like = `%${f.q.replace(/[\\%_]/g, (m) => '\\' + m)}%`; p.push(like, like); }
   const FROM = `FROM audit_logs a LEFT JOIN employees e ON e.employee_code = substr(a.entity_id, 1, instr(a.entity_id, '@') - 1)`;
   const [cnt, rows] = await db.batch([

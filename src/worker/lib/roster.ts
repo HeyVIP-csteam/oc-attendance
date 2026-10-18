@@ -71,12 +71,12 @@ export async function generateFromAssignments(db: D1Database, fromDate: string, 
  * After roster changes: re-assign events around the changed dates and recompute every affected session that is not in
  * the future (future dates have no events; their sessions are materialised by the cron job when they start).
  */
-export async function afterInstancesChanged(db: D1Database, pairs: Key[], o: { now: number; tz: string; rules: Rules }): Promise<{ inline: number; deferred: number }> {
+export async function afterInstancesChanged(db: D1Database, pairs: Key[], o: { now: number; tz: string; rules: Rules; byCur?: Record<string, Rules> }): Promise<{ inline: number; deferred: number }> {
   const today = localDate(o.now, o.tz);
   const relevant = pairs.filter(([, d]) => d <= addDays(today, 1));
   if (!relevant.length) return { inline: 0, deferred: 0 };
   const dates = relevant.map(([, d]) => d).sort();
-  const { updates, keys } = await reassignEvents(db, relevant.map(([e]) => e), dates[0], dates[dates.length - 1], o.rules.windowHours, o.tz);
+  const { updates, keys } = await reassignEvents(db, relevant.map(([e]) => e), dates[0], dates[dates.length - 1], o, o.tz);
   for (const c of chunk(updates, 90)) await db.batch(c);
   return recomputeOrDefer(db, [...relevant, ...keys], o);
 }

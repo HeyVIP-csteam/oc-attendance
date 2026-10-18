@@ -1,11 +1,11 @@
 import { useMemo, useState } from 'react';
 import { DEFAULT_PARSER, EVENT_LABEL, EVENT_TYPES, type KeywordConfig, type ParserRules } from '../../../src/shared/codes';
 import { toMin } from '../../../src/shared/time';
-import { Empty, ErrBox, Field, Modal, ModalActions, Mut, Tabs } from '../components/ui';
+import { CurSeg, Empty, ErrBox, Field, Modal, ModalActions, Mut, Tabs } from '../components/ui';
 import { api, ApiErr } from '../lib/api';
 import { fmtDT } from '../lib/format';
 import { useI18n } from '../lib/i18n';
-import { toast, useApi, useData, usePageState } from '../lib/store';
+import { type MetaRules, rulesOf, toast, useApi, useData, usePageState } from '../lib/store';
 
 type Tab = 'shift3' | 'cur' | 'kw' | 'rules' | 'bot' | 'admins';
 
@@ -165,11 +165,46 @@ function Keywords() {
 // ---------------------------------------------------------------- Rules
 function Rules() {
   const { L } = useI18n();
+  const { meta } = useData();
+  const [st, setSt] = usePageState('st-rules', () => ({ cur: meta.currencies[0]?.code ?? '' }));
+  const cur = meta.currencies.some((c) => c.code === st.cur) ? st.cur : meta.currencies[0]?.code ?? '';
+  const fmtMin = (m: number | null | undefined, u?: 'h' | 'm') => (m == null ? L('不限', 'No limit') : u === 'h' ? `${Math.round((m / 60) * 100) / 100} h` : `${m} min`);
+  const rows: [string, (r: MetaRules) => string][] = [
+    [L('班次匹配窗口', 'Shift matching window'), (r) => (r.windowUnit === 'm' || !Number.isInteger(r.windowHours) ? `${Math.round(r.windowHours * 60)} min` : `${r.windowHours} h`)],
+    [L('每日休息时间', 'Break time per day'), (r) => fmtMin(r.breakMinutes === undefined ? 90 : r.breakMinutes, r.breakUnit)],
+    [L('迟到/早退列为异常', 'Late / early leave as exceptions'), (r) => (r.lateAsException ? L('是', 'Yes') : L('否', 'No'))],
+    [L('Bot 回复', 'Bot replies'), (r) => (r.botReply ? L('开启', 'On') : L('关闭', 'Off'))],
+    [L('OT 门槛', 'OT threshold'), (r) => `${r.otHours ?? 9} h`],
+  ];
+  if (!cur) return <div className="card empty">{L('请先在「货币」新增货币', 'Add a currency first (Currency tab)')}</div>;
+  return (
+    <>
+      <div className="card"><h3>{L('考勤与异常规则', 'Attendance & exception rules')}</h3>
+        <div style={{ marginBottom: 12 }}><CurSeg value={cur} onChange={(c) => setSt({ cur: c })} /></div>
+        <div className="rnote">{L(`只套用在 ${cur} 员工；每个货币各自设定。`, `Rules for ${cur} employees only. Each currency is set on its own.`)}</div>
+        <RulesForm key={cur + JSON.stringify(rulesOf(meta, cur))} cur={cur} />
+      </div>
+      {meta.currencies.length > 1 && (
+        <div className="cmp tw"><table><thead><tr><th>{L('规则', 'Rule')}</th>{meta.currencies.map((c) => <th key={c.code}>{c.code}</th>)}</tr></thead><tbody>
+          {rows.map(([label, f]) => {
+            const vals = meta.currencies.map((c) => f(rulesOf(meta, c.code)));
+            const diff = new Set(vals).size > 1;
+            return <tr key={label}><td>{label}</td>{vals.map((x, i) => <td key={i} className={diff ? 'cx' : ''}>{x}</td>)}</tr>;
+          })}
+        </tbody></table></div>
+      )}
+    </>
+  );
+}
+
+function RulesForm({ cur }: { cur: string }) {
+  const { L } = useI18n();
   const { meta, reloadMeta, readOnly } = useData();
-  const brMin0 = meta.rules.breakMinutes === undefined ? 90 : meta.rules.breakMinutes;
-  const brUnit0: 'h' | 'm' = meta.rules.breakUnit ?? 'm';
-  const unit0: 'h' | 'm' = meta.rules.windowUnit ?? (Number.isInteger(meta.rules.windowHours) ? 'h' : 'm');
-  const [v, setV] = useState({ unit: unit0, win: String(unit0 === 'm' ? Math.round(meta.rules.windowHours * 60) : meta.rules.windowHours), bunit: brUnit0, br: brMin0 == null ? '' : String(brUnit0 === 'h' ? Math.round((brMin0 / 60) * 100) / 100 : brMin0), lx: meta.rules.lateAsException ? '1' : '0', bot: meta.rules.botReply ? '1' : '0', ot: String(meta.rules.otHours ?? 9) });
+  const r0 = rulesOf(meta, cur);
+  const brMin0 = r0.breakMinutes === undefined ? 90 : r0.breakMinutes;
+  const brUnit0: 'h' | 'm' = r0.breakUnit ?? 'm';
+  const unit0: 'h' | 'm' = r0.windowUnit ?? (Number.isInteger(r0.windowHours) ? 'h' : 'm');
+  const [v, setV] = useState({ unit: unit0, win: String(unit0 === 'm' ? Math.round(r0.windowHours * 60) : r0.windowHours), bunit: brUnit0, br: brMin0 == null ? '' : String(brUnit0 === 'h' ? Math.round((brMin0 / 60) * 100) / 100 : brMin0), lx: r0.lateAsException ? '1' : '0', bot: r0.botReply ? '1' : '0', ot: String(r0.otHours ?? 9) });
   const onErr = useErr();
   const winH = () => {
     const n = Number(v.win) || 0;
@@ -180,22 +215,22 @@ function Rules() {
   const conv = (val: string, u: 'h' | 'm') => { if (val.trim() === '') return ''; const n = Number(val) || 0; return String(u === 'm' ? Math.round(n * 60) : Math.round((n / 60) * 100) / 100); };
   const save = async () => {
     try {
-      await api('/settings/rules', { method: 'PUT', body: { windowHours: winH(), windowUnit: v.unit, breakMinutes: brMin(), breakUnit: v.bunit, lateAsException: v.lx === '1', botReply: v.bot === '1', otHours: Math.min(24, Math.max(1, Number(v.ot) || 9)) } });
-      toast(L('设置已保存，计算已更新', 'Settings saved; results updated'));
+      await api('/settings/rules', { method: 'PUT', body: { currency: cur, windowHours: winH(), windowUnit: v.unit, breakMinutes: brMin(), breakUnit: v.bunit, lateAsException: v.lx === '1', botReply: v.bot === '1', otHours: Math.min(24, Math.max(1, Number(v.ot) || 9)) } });
+      toast(L(`${cur} 规则已保存，${cur} 员工的考勤会重新计算`, `${cur} rules saved; ${cur} attendance is being recalculated`));
       await reloadMeta();
     } catch (e) { onErr(e); }
   };
   return (
-    <div className="card"><h3>{L('考勤与异常规则', 'Attendance & exception rules')}</h3>
+    <>
       <div className="setlist">
-        <div className="setrow"><label htmlFor="stWin">{L('班次匹配窗口（排班前后）', 'Shift matching window (before/after the shift)')}</label><div className="setctl unitctl"><input id="stWin" type="number" min={v.unit === 'm' ? 5 : 1} max={v.unit === 'm' ? 480 : 8} step={v.unit === 'm' ? 5 : 0.5} value={v.win} disabled={readOnly} onChange={(e) => setV({ ...v, win: e.target.value })} /><select aria-label={L('单位', 'Unit')} value={v.unit} disabled={readOnly} onChange={(e) => { const u = e.target.value as 'h' | 'm'; const n = Number(v.win) || 0; setV({ ...v, unit: u, win: String(u === 'm' ? Math.round(n * 60) : Math.round((n / 60) * 100) / 100) }); }}><option value="h">{L('小时', 'Hours')}</option><option value="m">{L('分钟', 'Minutes')}</option></select></div></div>
+        <div className="setrow"><label htmlFor="stWin">{L('班次匹配窗口（排班前后）', 'Shift matching window (before/after the shift)')}</label><div className="setctl unitctl"><input id="stWin" type="number" min={v.unit === 'm' ? 5 : 1} max={v.unit === 'm' ? 480 : 8} step={v.unit === 'm' ? 5 : 0.5} value={v.win} disabled={readOnly} onChange={(e) => setV({ ...v, win: e.target.value })} /><select aria-label={L('单位', 'Unit')} value={v.unit} disabled={readOnly} onChange={(e) => { const u = e.target.value as 'h' | 'm'; setV({ ...v, unit: u, win: conv(v.win, u) || v.win }); }}><option value="h">{L('小时', 'Hours')}</option><option value="m">{L('分钟', 'Minutes')}</option></select></div></div>
         <div className="setrow"><label htmlFor="stBr">{L('每日休息时间（总计；留空 = 不限）', 'Break time per day (total; empty = no limit)')}</label><div className="setctl unitctl"><input id="stBr" type="number" min={0} step={v.bunit === 'm' ? 5 : 0.25} placeholder={L('不限', 'No limit')} value={v.br} disabled={readOnly} onChange={(e) => setV({ ...v, br: e.target.value })} /><select aria-label={L('单位', 'Unit')} value={v.bunit} disabled={readOnly} onChange={(e) => { const u = e.target.value as 'h' | 'm'; setV({ ...v, bunit: u, br: conv(v.br, u) }); }}><option value="h">{L('小时', 'Hours')}</option><option value="m">{L('分钟', 'Minutes')}</option></select></div></div>
         <div className="setrow"><label htmlFor="stLx">{L('迟到/早退是否也列为异常', 'Also list late / early leave as exceptions')}</label><div className="setctl"><select id="stLx" value={v.lx} disabled={readOnly} onChange={(e) => setV({ ...v, lx: e.target.value })}><option value="0">{L('否，只显示状态', 'No, status only')}</option><option value="1">{L('是', 'Yes')}</option></select></div></div>
         <div className="setrow"><label htmlFor="stBot">{L('Bot 在 Topic 回复确认', 'Bot replies in the topic')}</label><div className="setctl"><select id="stBot" value={v.bot} disabled={readOnly} onChange={(e) => setV({ ...v, bot: e.target.value })}><option value="1">{L('开启', 'On')}</option><option value="0">{L('关闭', 'Off')}</option></select></div></div>
         <div className="setrow"><label htmlFor="stOt">{L('OT 门槛：上班到下班超过几小时，排班表标示 OT', 'OT threshold: hours from clock in to clock out before the roster shows OT')}</label><div className="setctl"><input id="stOt" type="number" min={1} max={24} step={0.5} value={v.ot} disabled={readOnly} onChange={(e) => setV({ ...v, ot: e.target.value })} /></div></div>
       </div>
-      {!readOnly && <div className="setfoot"><button className="btn p" onClick={save}>{L('保存规则', 'Save rules')}</button></div>}
-    </div>
+      {!readOnly && <div className="setfoot"><button className="btn p" onClick={save}>{L(`保存 ${cur} 规则`, `Save ${cur} rules`)}</button></div>}
+    </>
   );
 }
 

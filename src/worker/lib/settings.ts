@@ -1,9 +1,15 @@
 import { DEFAULT_KEYWORDS, DEFAULT_PARSER, DEFAULT_RULES, type KeywordConfig, type ParserRules, type Rules, BIZ_TZ_DEFAULT } from '../../shared/codes';
 import type { Env } from '../env';
 
-export interface Settings { keywords: KeywordConfig; rules: Rules; parser: ParserRules; dataVersion: number }
+/** rules = the base set (also used for a currency that was never saved); rulesCur = each saved currency's own complete set. */
+export interface Settings { keywords: KeywordConfig; rules: Rules; rulesCur: Record<string, Rules>; parser: ParserRules; dataVersion: number }
 
-export const settingsStmt = (db: D1Database) => db.prepare("SELECT key, value FROM system_settings WHERE key IN ('keywords','rules','parser','data_version')");
+/** The attendance rules of one currency (every currency has its own set; an unsaved currency starts from the base set). */
+export function rulesFor(s: Pick<Settings, 'rules' | 'rulesCur'>, cur: string | null | undefined): Rules {
+  return (cur && s.rulesCur[cur]) || s.rules;
+}
+
+export const settingsStmt = (db: D1Database) => db.prepare("SELECT key, value FROM system_settings WHERE key IN ('keywords','rules','rules_cur','parser','data_version')");
 
 export function parseSettings(rows: { key: string; value: string }[]): Settings {
   const m = new Map(rows.map((r) => [r.key, r.value]));
@@ -11,9 +17,17 @@ export function parseSettings(rows: { key: string; value: string }[]): Settings 
   const rules = safe<Rules>(m.get('rules'), DEFAULT_RULES);
   if (!(Number(rules.otHours) > 0)) rules.otHours = DEFAULT_RULES.otHours;
   delete (rules as { allowedChats?: unknown }).allowedChats; // retired setting: a group is accepted once an employee topic is bound in it
+  const rulesCur: Record<string, Rules> = {};
+  for (const [cur, r] of Object.entries(safe<Record<string, Partial<Rules>>>(m.get('rules_cur'), {}))) {
+    if (!r || typeof r !== 'object') continue;
+    const x = { ...rules, ...r } as Rules;
+    if (!(Number(x.otHours) > 0)) x.otHours = rules.otHours;
+    rulesCur[cur] = x;
+  }
   return {
     keywords: safe<KeywordConfig>(m.get('keywords'), DEFAULT_KEYWORDS),
     rules,
+    rulesCur,
     parser: safe<ParserRules>(m.get('parser'), DEFAULT_PARSER),
     dataVersion: Number(m.get('data_version') ?? 0),
   };
