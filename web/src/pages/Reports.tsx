@@ -1,5 +1,4 @@
 import { STATUSES } from '../../../src/shared/codes';
-import { addDays } from '../../../src/shared/time';
 import { CurrencyOptions, EmpSearch, ErrBox, Field, Pager, ShiftOptions, StatusOptions, TblTop } from '../components/ui';
 import { qs } from '../lib/api';
 import { fmtMin, hrs, today } from '../lib/format';
@@ -13,17 +12,12 @@ interface SummaryRow { employee_id: number; employee_code: string; name: string;
 export function Reports() {
   const { L, dt } = useI18n();
   const t = today();
-  const [f, set] = usePageState('rp', () => ({ period: 'today', from: t, to: t, cur: '', shift: '', status: '', q: '', page: 1, size: 10 }));
+  const [f, set] = usePageState('rp', () => ({ from: t, to: t, cur: '', shift: '', status: '', q: '', page: 1, size: 10 }));
   const [from, to] = f.from <= f.to ? [f.from, f.to] : [f.to, f.from];
-  const { period: _p, ...query } = { ...f, from, to };
+  const query = { ...f, from, to };
   const { data, error } = useApi<{ mode: 'summary' | 'detail'; total: number; rows: (SummaryRow | AttRow)[] }>(`/reports?${qs(query)}`);
   const ex = useDetailExport();
   const setF = (p: Partial<typeof f>) => set({ ...p, page: 1 });
-  const applyPeriod = (period: string) => {
-    if (period === 'today') setF({ period, from: t, to: t });
-    else if (period === 'weekly') setF({ period, from: addDays(t, -6), to: t });
-    else if (period === 'monthly') setF({ period, from: t.slice(0, 8) + '01', to: t });
-  };
   let cols: string[] = [];
   let rows: (string | number)[][] = [];
   const left: number[] = [0]; // PSD ID
@@ -37,12 +31,8 @@ export function Reports() {
   return (
     <>
       <div className="card"><div className="row">
-        <Field label={L('期间', 'Period')}><select value={f.period} onChange={(e) => applyPeriod(e.target.value)}>
-          {!f.period && <option value="">—</option>}
-          <option value="today">{L('今天', 'Today')}</option><option value="weekly">{L('每周（7 天）', 'Weekly (7 days)')}</option><option value="monthly">{L('每月（月初至今）', 'Monthly (month to date)')}</option>
-        </select></Field>
-        <Field label={L('开始', 'From')}><input type="date" value={f.from} onChange={(e) => setF({ from: e.target.value || t, period: '' })} /></Field>
-        <Field label={L('结束', 'To')}><input type="date" value={f.to} onChange={(e) => setF({ to: e.target.value || t, period: '' })} /></Field>
+        <Field label={L('开始', 'From')}><input type="date" value={f.from} onChange={(e) => setF({ from: e.target.value || t })} /></Field>
+        <Field label={L('结束', 'To')}><input type="date" value={f.to} onChange={(e) => setF({ to: e.target.value || t })} /></Field>
         <Field label={L('货币', 'Currency')}><select value={f.cur} onChange={(e) => setF({ cur: e.target.value })}><CurrencyOptions all={L('全部货币', 'All currencies')} /></select></Field>
         <Field label={L('班次', 'Shift')}><select value={f.shift} onChange={(e) => setF({ shift: e.target.value })}><ShiftOptions withNone /></select></Field>
         <Field label={L('状态', 'Status')}><select value={f.status} onChange={(e) => setF({ status: e.target.value })}><StatusOptions all={L('全部', 'All')} /></select></Field>

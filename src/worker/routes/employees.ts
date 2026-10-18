@@ -16,12 +16,13 @@ const likeEsc = (q: string) => `%${q.replace(/[\\%_]/g, (m) => '\\' + m)}%`;
 
 employeeRoutes.get('/employees', async (c) => {
   const f = query(c, z.object({
-    q: z.string().max(80).optional().default(''), status: z.enum(['', 'ACTIVE', 'INACTIVE']).optional().default(''),
+    q: z.string().max(80).optional().default(''), cur: z.string().trim().toUpperCase().max(10).optional().default(''), status: z.enum(['', 'ACTIVE', 'INACTIVE']).optional().default(''),
     page: z.coerce.number().int().min(1).default(1), size: z.coerce.number().int().refine((n) => [10, 20, 30, 50, 100].includes(n)).default(10),
   }));
   const cond: string[] = ['1 = 1'];
   const p: unknown[] = [];
   if (f.status) { cond.push('e.employment_status = ?'); p.push(f.status); }
+  if (f.cur) { cond.push('e.currency_code = ?'); p.push(f.cur); }
   if (f.q) { cond.push("(e.employee_code LIKE ? ESCAPE '\\' OR e.name LIKE ? ESCAPE '\\' OR CAST(m.message_thread_id AS TEXT) LIKE ? ESCAPE '\\')"); p.push(likeEsc(f.q), likeEsc(f.q), likeEsc(f.q)); }
   const FROM = 'FROM employees e LEFT JOIN telegram_topic_mappings m ON m.employee_id = e.id AND m.is_active = 1';
   const db = c.env.DB;
@@ -179,10 +180,11 @@ employeeRoutes.post('/employees/:id/deactivate', async (c) => {
 
 // ---------------------------------------------------------------- export / import (PSD ID, Employee Name, Currency, Chat ID, Thread ID)
 employeeRoutes.get('/export/employees', async (c) => {
-  const f = query(c, z.object({ q: z.string().max(80).optional().default(''), status: z.enum(['', 'ACTIVE', 'INACTIVE']).optional().default('') }));
+  const f = query(c, z.object({ q: z.string().max(80).optional().default(''), cur: z.string().trim().toUpperCase().max(10).optional().default(''), status: z.enum(['', 'ACTIVE', 'INACTIVE']).optional().default('') }));
   const cond: string[] = ['1 = 1'];
   const p: unknown[] = [];
   if (f.status) { cond.push('e.employment_status = ?'); p.push(f.status); }
+  if (f.cur) { cond.push('e.currency_code = ?'); p.push(f.cur); }
   if (f.q) { cond.push("(e.employee_code LIKE ? ESCAPE '\\' OR e.name LIKE ? ESCAPE '\\')"); p.push(likeEsc(f.q), likeEsc(f.q)); }
   const rows = await all(c.env.DB, `SELECT e.employee_code, e.name, e.currency_code, e.employment_status, m.chat_id, m.message_thread_id
     FROM employees e LEFT JOIN telegram_topic_mappings m ON m.employee_id = e.id AND m.is_active = 1

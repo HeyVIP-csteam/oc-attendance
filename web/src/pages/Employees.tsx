@@ -11,7 +11,7 @@ interface EmpRow { id: number; employee_code: string; name: string; currency_cod
 export function Employees() {
   const { L } = useI18n();
   const { readOnly, reloadMeta, refresh, meta } = useData();
-  const [f, set] = usePageState('em', () => ({ q: '', status: 'ACTIVE', page: 1, size: 10 }));
+  const [f, set] = usePageState('em', () => ({ q: '', cur: '', status: 'ACTIVE', page: 1, size: 10 }));
   const { data, error } = useApi<{ total: number; rows: EmpRow[] }>(`/employees?${qs(f)}`);
   const [edit, setEdit] = useState<number | 'new' | null>(null);
   const [hist, setHist] = useState<number | null>(null);
@@ -19,8 +19,8 @@ export function Employees() {
   const fileRef = useRef<HTMLInputElement>(null);
   const doExport = async () => {
     try {
-      const r = await api<{ rows: { employee_code: string; name: string; currency_code: string | null; employment_status: string; chat_id: number | null; message_thread_id: number | null }[] }>(`/export/employees?${qs({ q: f.q, status: f.status })}`);
-      await exportXLSX(`employees${f.status ? '_' + f.status.toLowerCase() : ''}`, ['PSD ID', 'Employee Name', 'Currency', 'Chat ID', 'Thread ID', 'Status'],
+      const r = await api<{ rows: { employee_code: string; name: string; currency_code: string | null; employment_status: string; chat_id: number | null; message_thread_id: number | null }[] }>(`/export/employees?${qs({ q: f.q, cur: f.cur, status: f.status })}`);
+      await exportXLSX(`employees${f.cur ? '_' + f.cur : ''}${f.status ? '_' + f.status.toLowerCase() : ''}`, ['PSD ID', 'Employee Name', 'Currency', 'Chat ID', 'Thread ID', 'Status'],
         r.rows.map((e) => [e.employee_code, e.name, e.currency_code ?? '', e.chat_id != null ? String(e.chat_id) : '', e.message_thread_id ?? '', e.employment_status]));
       toast(L(`已导出 ${r.rows.length} 名员工`, `Exported ${r.rows.length} employees`));
     } catch (e) { toast(L('导出失败', 'Export failed') + ': ' + (e as Error).message); }
@@ -53,8 +53,9 @@ export function Employees() {
   return (
     <>
       <div className="card"><div className="row">
-        <Field label={L('搜索', 'Search')}><EmpSearch value={f.q} onChange={(q) => set({ q, page: 1 })} /></Field>
+        <Field label={L('货币', 'Currency')}><select value={f.cur} onChange={(e) => set({ cur: e.target.value, page: 1 })}><CurrencyOptions all={L('全部货币', 'All currencies')} /></select></Field>
         <Field label={L('状态', 'Status')}><select value={f.status} onChange={(e) => set({ status: e.target.value, page: 1 })}><option value="">{L('全部', 'All')}</option><option value="ACTIVE">{L('在职', 'Active')}</option><option value="INACTIVE">{L('停用', 'Inactive')}</option></select></Field>
+        <Field label={L('搜索', 'Search')}><EmpSearch value={f.q} onChange={(q) => set({ q, page: 1 })} /></Field>
         {!readOnly && <button className="btn p" onClick={() => setEdit('new')}>+ {L('新增员工', 'Add employee')}</button>}
         <div className="rowact">
           {!readOnly && <button className="btn" onClick={() => { if (fileRef.current) { fileRef.current.value = ''; fileRef.current.click(); } }}>{L('导入', 'Import')}</button>}

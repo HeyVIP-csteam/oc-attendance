@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { addDays, dayDiff, monthEnd, monthStart, weekday } from '../../../src/shared/time';
-import { Cnt, CurSeg, EmpSearch, ErrBox, Field, Modal, ModalActions, Pager, Tabs, TblTop } from '../components/ui';
+import { Cnt, CurrencyOptions, EmpSearch, ErrBox, Field, Modal, ModalActions, Pager, Tabs, TblTop } from '../components/ui';
 import { api, type ApiErr, qs } from '../lib/api';
 import { exportXLSX, readGrid } from '../lib/files';
 import { fmtDT, fmtDur, fmtT, today } from '../lib/format';
@@ -56,7 +56,7 @@ function Roster({ f, set }: { f: { from: string; to: string; cur: string; page: 
       for (let d = r.from; d <= r.to; d = addDays(d, 1)) ds.push(d);
       await exportXLSX(`roster_template_${r.from}_${r.to}${f.cur ? '_' + f.cur : ''}`, ['PSD ID', 'Employee Name', 'Currency', ...ds],
         r.employees.map((e) => [e.employee_code, e.name, e.currency_code ?? '', ...ds.map(() => '')]), [
-          ['How to use', `Fill in the shift codes, then Shifts & Roster → Import${f.cur ? ' ' + f.cur : ''}`],
+          ['How to use', 'Fill in the shift codes, then Shifts & Roster → Import'],
           ['Shift codes', `${meta.shifts.filter((s) => s.is_active).map((s) => s.code).join(' / ')} / OFF`],
           ['Empty cell', 'An empty cell leaves that day unchanged'],
           ['Dates', 'Each column header is a date (YYYY-MM-DD). You can add or remove date columns'],
@@ -76,6 +76,7 @@ function Roster({ f, set }: { f: { from: string; to: string; cur: string; page: 
       <div className="card"><div className="row">
         <Field label={L('开始', 'From')}><input type="date" value={f.from} onChange={(e) => set({ from: e.target.value || t, page: 1 })} /></Field>
         <Field label={L('结束', 'To')}><input type="date" value={f.to} onChange={(e) => set({ to: e.target.value || t, page: 1 })} /></Field>
+        <Field label={L('货币', 'Currency')}><select value={f.cur} onChange={(e) => set({ cur: e.target.value, page: 1 })}><CurrencyOptions all={L('全部货币', 'All currencies')} /></select></Field>
         <div className="rowact">
           {!readOnly && <button className="btn" onClick={() => { if (fileRef.current) { fileRef.current.value = ''; fileRef.current.click(); } }}>{L('导入', 'Import')}</button>}
           <button className="btn" onClick={doExport}>{L('导出', 'Export')}</button>
@@ -84,7 +85,6 @@ function Roster({ f, set }: { f: { from: string; to: string; cur: string; page: 
         </div>
         {capped && <span className="b w">{L('最多显示 31 天', 'Shows at most 31 days')}</span>}
       </div></div>
-      <div className="rbar"><CurSeg value={f.cur} onChange={(cur) => set({ cur, page: 1 })} all={L('全部货币', 'All currencies')} counts={data?.counts} /></div>
       <ErrBox error={error} />
       {data && (
         <>
@@ -283,9 +283,9 @@ function History({ q, cur, from, to, page, size, set }: { q: string; cur: string
       <div className="card"><div className="row">
         <Field label={L('开始', 'From')}><input type="date" value={from} max={t} onChange={(e) => set({ hfrom: e.target.value || t, cpage: 1 })} /></Field>
         <Field label={L('结束', 'To')}><input type="date" value={to} max={t} onChange={(e) => set({ hto: e.target.value || t, cpage: 1 })} /></Field>
+        <Field label={L('货币', 'Currency')}><select value={cur} onChange={(e) => set({ cur: e.target.value, cpage: 1 })}><CurrencyOptions all={L('全部货币', 'All currencies')} /></select></Field>
         <Field label={L('员工', 'Employee')}><EmpSearch value={q} onChange={(v) => set({ cq: v, cpage: 1 })} /></Field>
       </div></div>
-      <div className="rbar"><CurSeg value={cur} onChange={(c) => set({ cur: c, cpage: 1 })} all={L('全部货币', 'All currencies')} /></div>
       <ErrBox error={error} />
       {data && (data.rows.length === 0 ? <div className="card empty">{L('这段期间没有记录', 'No history in this period')}</div> : (
         <>
