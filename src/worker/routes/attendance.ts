@@ -62,13 +62,12 @@ attendanceRoutes.get('/overview', async (c) => {
   const f = query(c, z.object({ date: dateStr, cur: z.string().max(10).optional().default(''), shift: z.string().max(10).optional().default('') }));
   const db = c.env.DB;
   const now = Date.now();
-  const from14 = addDays(f.date, -13);
   const empCond = f.cur ? ' AND e.currency_code = ?' : '';
   const empP = f.cur ? [f.cur] : [];
   const shiftCond = f.shift && f.shift !== 'none' ? ' AND i.shift_id = ?' : f.shift === 'none' ? ' AND 0' : '';
   const shiftP = f.shift && f.shift !== 'none' ? [Number(f.shift)] : [];
   const sShift = f.shift === 'none' ? ' AND s.shift_instance_id IS NULL' : f.shift ? ' AND i.shift_id = ?' : '';
-  const [emps, exp, agg, trendI, trendS] = await db.batch([
+  const [emps, exp, agg] = await db.batch([
     stmt(db, `SELECT COUNT(*) AS n FROM employees e WHERE e.employment_status = 'ACTIVE'${empCond}`, ...empP),
     stmt(db, `SELECT COUNT(*) AS expected, SUM(i.scheduled_start_at <= ?) AS started,
                 SUM(i.scheduled_start_at <= ? AND EXISTS (SELECT 1 FROM attendance_sessions s WHERE s.employee_id = i.employee_id AND s.work_date = i.shift_date AND s.actual_in_at IS NOT NULL)) AS started_present
@@ -78,25 +77,13 @@ attendanceRoutes.get('/overview', async (c) => {
                 SUM(s.early_min > 0) AS early, SUM(COALESCE(s.early_min, 0)) AS early_min, SUM(s.actual_in_at IS NOT NULL) AS clocked_in
               FROM attendance_sessions s JOIN employees e ON e.id = s.employee_id LEFT JOIN shift_instances i ON i.id = s.shift_instance_id
               WHERE s.work_date = ?${empCond}${sShift}`, f.date, ...empP, ...shiftP),
-    stmt(db, `SELECT i.shift_date AS d, COUNT(*) AS expected FROM shift_instances i JOIN employees e ON e.id = i.employee_id
-              WHERE i.shift_date BETWEEN ? AND ? AND i.adjustment_status <> 'CANCELLED'${empCond}${shiftCond} GROUP BY i.shift_date`, from14, f.date, ...empP, ...shiftP),
-    stmt(db, `SELECT s.work_date AS d, SUM(s.actual_in_at IS NOT NULL) AS present, SUM(s.late_min > 0) AS late
-              FROM attendance_sessions s JOIN employees e ON e.id = s.employee_id LEFT JOIN shift_instances i ON i.id = s.shift_instance_id
-              WHERE s.work_date BETWEEN ? AND ?${empCond}${sShift} GROUP BY s.work_date`, from14, f.date, ...empP, ...shiftP),
   ]);
   const n = (v: unknown) => Number(v ?? 0);
   const e = exp.results[0] as Record<string, unknown>;
   const a = agg.results[0] as Record<string, unknown>;
-  const ti = new Map((trendI.results as { d: string; expected: number }[]).map((r) => [r.d, r.expected]));
-  const ts = new Map((trendS.results as { d: string; present: number; late: number }[]).map((r) => [r.d, r]));
-  const trend = Array.from({ length: 14 }, (_, k) => {
-    const d = addDays(from14, k);
-    return { date: d, expected: n(ti.get(d)), present: n(ts.get(d)?.present), late: n(ts.get(d)?.late) };
-  });
   return c.json({
     totalEmployees: n((emps.results[0] as { n: number }).n), expected: n(e.expected), started: n(e.started), startedPresent: n(e.started_present),
     working: n(a.working), onBreak: n(a.on_break), late: n(a.late), lateMin: n(a.late_min), early: n(a.early), earlyMin: n(a.early_min), clockedIn: n(a.clocked_in),
-    trend,
   });
 });
 

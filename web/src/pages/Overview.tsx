@@ -1,4 +1,4 @@
-import { ArcElement, CategoryScale, Chart, DoughnutController, Filler, Legend, LinearScale, LineController, LineElement, PointElement, Tooltip } from 'chart.js';
+import { ArcElement, Chart, DoughnutController, Legend, Tooltip } from 'chart.js';
 import { type ReactNode, useEffect, useRef } from 'react';
 import { CurrencyOptions, ErrBox, Field, ShiftOptions } from '../components/ui';
 import { qs } from '../lib/api';
@@ -6,12 +6,11 @@ import { fmtMin, today } from '../lib/format';
 import { useI18n } from '../lib/i18n';
 import { useApi, usePageState } from '../lib/store';
 
-Chart.register(LineController, LineElement, PointElement, LinearScale, CategoryScale, Filler, Legend, Tooltip, DoughnutController, ArcElement);
+Chart.register(Legend, Tooltip, DoughnutController, ArcElement);
 
 interface OverviewData {
   totalEmployees: number; expected: number; started: number; startedPresent: number; working: number; onBreak: number;
   late: number; lateMin: number; early: number; earlyMin: number; clockedIn: number;
-  trend: { date: string; expected: number; present: number; late: number }[];
 }
 
 const css = (v: string) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
@@ -58,17 +57,6 @@ export function Overview() {
             {k(L('迟到率', 'Late Rate'), pct(d.late, d.clockedIn), L('迟到 / 已打卡', 'late / clocked in'))}
           </div>
           <div className="charts">
-            <div className="card"><h3>{L('每日出勤趋势（14 天）', 'Daily Attendance Trend (14 days)')}</h3>
-              <ChartBox deps={[d, L('应到', 'Expected')]} build={(el) => new Chart(el, {
-                type: 'line',
-                data: { labels: d.trend.map((t) => t.date.slice(5)), datasets: [
-                  { label: L('应到', 'Expected'), data: d.trend.map((t) => t.expected), borderColor: '#94a3b8', tension: 0.3 },
-                  { label: L('出勤', 'Present'), data: d.trend.map((t) => t.present), borderColor: '#2563eb', backgroundColor: 'rgba(37,99,235,.12)', fill: true, tension: 0.3 },
-                  { label: L('迟到', 'Late'), data: d.trend.map((t) => t.late), borderColor: '#f59e0b', tension: 0.3 },
-                ] },
-                options: { maintainAspectRatio: false, plugins: { legend: { position: 'bottom' } } },
-              })} />
-            </div>
             <div className="card"><h3>{L('准时 vs 迟到', 'On-Time vs Late')}（{f.date}）</h3>
               <ChartBox deps={[d, L('准时', 'On time')]} build={(el) => new Chart(el, {
                 type: 'doughnut',

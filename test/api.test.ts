@@ -464,7 +464,6 @@ describe('dashboard queries', () => {
     expect(exp.json.rows).toHaveLength(2);
     const ov = await h.req('GET', `/api/overview?date=${D}`);
     expect(ov.json).toMatchObject({ totalEmployees: 2, expected: 2, late: 1, lateMin: 25, startedPresent: 2, started: 2 });
-    expect(ov.json.trend).toHaveLength(14);
     const meta = await h.req('GET', '/api/meta');
     expect(meta.json.employees.map((e: any) => e.thread)).toEqual([1001, 1002]);
   });
