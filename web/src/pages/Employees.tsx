@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Cnt, CurB, CurrencyOptions, EmpSearch, ErrBox, Field, jsonOrNull, KvList, Modal, ModalActions, Pager, TblTop } from '../components/ui';
 import { api, type ApiErr, qs } from '../lib/api';
+import { exportXLSX, readGrid } from '../lib/files';
 import { fmtDT } from '../lib/format';
 import { useI18n } from '../lib/i18n';
 import { toast, useApi, useData, usePageState } from '../lib/store';
@@ -14,6 +15,23 @@ export function Employees() {
   const { data, error } = useApi<{ total: number; rows: EmpRow[] }>(`/employees?${qs(f)}`);
   const [edit, setEdit] = useState<number | 'new' | null>(null);
   const [hist, setHist] = useState<number | null>(null);
+  const [imp, setImp] = useState<{ grid: (string | number | null)[][]; file: string; plan: EmpPlan } | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const doExport = async () => {
+    try {
+      const r = await api<{ rows: { employee_code: string; name: string; currency_code: string | null; employment_status: string; chat_id: number | null; message_thread_id: number | null }[] }>(`/export/employees?${qs({ q: f.q, status: f.status })}`);
+      await exportXLSX(`employees${f.status ? '_' + f.status.toLowerCase() : ''}`, ['PSD ID', 'Employee Name', 'Currency', 'Chat ID', 'Thread ID', 'Status'],
+        r.rows.map((e) => [e.employee_code, e.name, e.currency_code ?? '', e.chat_id != null ? String(e.chat_id) : '', e.message_thread_id ?? '', e.employment_status]));
+      toast(L(`已导出 ${r.rows.length} 名员工`, `Exported ${r.rows.length} employees`));
+    } catch (e) { toast(L('导出失败', 'Export failed') + ': ' + (e as Error).message); }
+  };
+  const doImport = async (file: File) => {
+    try {
+      const grid = await readGrid(file);
+      const r = await api<{ plan: EmpPlan }>('/employees/import', { method: 'POST', body: { grid, fileName: file.name } });
+      setImp({ grid, file: file.name, plan: r.plan });
+    } catch (e) { toast(L('无法读取文件', 'Could not read the file') + ': ' + ((e as ApiErr).msg ? L((e as ApiErr).msg.zh, (e as ApiErr).msg.en) : (e as Error).message)); }
+  };
   const deactivate = async (e: EmpRow) => {
     const reason = prompt(L(`停用 ${e.employee_code} ${e.name}？历史考勤会保留。请输入原因：`, `Deactivate ${e.employee_code} ${e.name}? History is kept. Enter a reason:`));
     if (!reason) return;
@@ -26,6 +44,11 @@ export function Employees() {
         <Field label={L('搜索', 'Search')}><EmpSearch value={f.q} onChange={(q) => set({ q, page: 1 })} /></Field>
         <Field label={L('状态', 'Status')}><select value={f.status} onChange={(e) => set({ status: e.target.value, page: 1 })}><option value="">{L('全部', 'All')}</option><option value="ACTIVE">{L('在职', 'Active')}</option><option value="INACTIVE">{L('停用', 'Inactive')}</option></select></Field>
         {!readOnly && <button className="btn p" onClick={() => setEdit('new')}>+ {L('新增员工', 'Add employee')}</button>}
+        <div className="rowact">
+          {!readOnly && <button className="btn" onClick={() => { if (fileRef.current) { fileRef.current.value = ''; fileRef.current.click(); } }}>{L('导入', 'Import')}</button>}
+          <button className="btn" onClick={doExport}>{L('导出', 'Export')}</button>
+          <input ref={fileRef} type="file" accept=".csv,.xlsx" hidden onChange={(e) => { const x = e.target.files?.[0]; if (x) void doImport(x); }} />
+        </div>
       </div></div>
       <ErrBox error={error} />
       {data && (
@@ -49,7 +72,59 @@ export function Employees() {
       )}
       {edit != null && <EmployeeModal id={edit === 'new' ? null : edit} onClose={() => setEdit(null)} />}
       {hist != null && <HistoryModal id={hist} onClose={() => setHist(null)} />}
+      {imp && <ImportModal {...imp} onClose={() => setImp(null)} />}
     </>
+  );
+}
+
+interface EmpPlan {
+  newCount: number; updateCount: number; unchanged: number; errorCount: number; errors: { where: string; msg: { zh: string; en: string } }[];
+  changes: { kind: 'NEW' | 'UPDATE'; code: string; name: string; currency: string | null; topic: number | null; fields: string[]; before: { name: string; currency: string | null; topic: number | null } | null }[];
+}
+
+function ImportModal({ grid, file, plan, onClose }: { grid: (string | number | null)[][]; file: string; plan: EmpPlan; onClose: () => void }) {
+  const { L, dt } = useI18n();
+  const { reloadMeta, refresh } = useData();
+  const [err, setErr] = useState<ApiErr | Error | null>(null);
+  const [busy, setBusy] = useState(false);
+  const n = plan.newCount + plan.updateCount;
+  const apply = async () => {
+    setBusy(true);
+    try {
+      const r = await api<{ applied: { added: number; updated: number } }>('/employees/import', { method: 'POST', body: { grid, fileName: file, apply: true } });
+      toast(L(`已导入：新增 ${r.applied.added}，更新 ${r.applied.updated}`, `Imported: ${r.applied.added} added, ${r.applied.updated} updated`));
+      await reloadMeta(); refresh(); onClose();
+    } catch (e) { setErr(e as ApiErr); } finally { setBusy(false); }
+  };
+  const diff = (c: EmpPlan['changes'][number], k: 'name' | 'currency' | 'topic', now: string) => {
+    if (!c.fields.includes(k)) return <span className="mut">{now || '—'}</span>;
+    const was = c.before ? String((k === 'topic' ? (c.before.topic != null ? '#' + c.before.topic : '') : c.before[k]) ?? '') : '';
+    return <>{was && <><span className="mut" style={{ textDecoration: 'line-through' }}>{was}</span> → </>}<b>{now || '—'}</b></>;
+  };
+  return (
+    <Modal onClose={onClose} wide>
+      <h3 style={{ marginTop: 0 }}>{L('导入员工', 'Import employees')} · {file}</h3>
+      <div className="kv">
+        <div><span>{L('新增', 'New')}</span><b>{plan.newCount}</b></div>
+        <div><span>{L('更新', 'Updated')}</span><b>{plan.updateCount}</b></div>
+        <div><span>{L('不变', 'Unchanged')}</span><b>{plan.unchanged}</b></div>
+        <div><span>{L('错误（跳过）', 'Errors (skipped)')}</span><b style={{ color: plan.errorCount ? 'var(--bad)' : 'inherit' }}>{plan.errorCount}</b></div>
+      </div>
+      {plan.changes.length > 0 && (
+        <div className="tw" style={{ maxHeight: 300, marginTop: 12 }}><table><thead><tr><th className="pid">PSD ID</th><th></th><th>{L('员工姓名', 'Employee Name')}</th><th>{L('货币', 'Currency')}</th><th>Topic</th></tr></thead><tbody>
+          {plan.changes.map((c) => <tr key={c.code}><td className="pid"><b>{c.code}</b></td><td>{c.kind === 'NEW' ? <span className="b ok">{L('新增', 'New')}</span> : <span className="b i">{L('更新', 'Update')}</span>}</td>
+            <td>{diff(c, 'name', c.name)}</td><td>{diff(c, 'currency', c.currency ?? '')}</td><td>{diff(c, 'topic', c.topic != null ? '#' + c.topic : '')}</td></tr>)}
+        </tbody></table></div>
+      )}
+      {plan.errors.length > 0 && (
+        <div className="tw" style={{ maxHeight: 200, marginTop: 12 }}><table><thead><tr><th>{L('位置', 'Where')}</th><th>{L('原因', 'Reason')}</th></tr></thead><tbody>
+          {plan.errors.map((x, i) => <tr key={i}><td>{x.where}</td><td style={{ color: 'var(--bad)' }}>{dt(x.msg)}</td></tr>)}
+        </tbody></table></div>
+      )}
+      <p className="mut" style={{ fontSize: 12 }}>{L('栏位：PSD ID、Employee Name、Currency、Chat ID、Thread ID。已有的员工：留空的栏位保持不变；Status 栏只供参考，不会改变在职/停用。', 'Columns: PSD ID, Employee Name, Currency, Chat ID, Thread ID. For existing employees an empty cell keeps the current value; the Status column is for reference only and does not activate / deactivate anyone.')}</p>
+      <ErrBox error={err} />
+      <ModalActions onCancel={onClose} onOk={n > 0 ? apply : undefined} busy={busy} okLabel={L(`确认导入 ${n} 名员工`, `Import ${n} employees`)} />
+    </Modal>
   );
 }
 

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { addDays, localDate } from '../../shared/time';
 import type { AppBindings } from '../env';
 import { auditStmt } from '../lib/audit';
-import { all, first, stmt } from '../lib/db';
+import { all, chunk, first, stmt } from '../lib/db';
 import { ApiError, bad, body, clientIp, conflict, intParam, notFound, query, requireAdminRole } from '../lib/http';
 import { afterInstancesChanged, generateFromAssignments } from '../lib/roster';
 import type { Key } from '../lib/sessions';
@@ -175,4 +175,162 @@ employeeRoutes.post('/employees/:id/deactivate', async (c) => {
   const settings = await loadSettings(db);
   await afterInstancesChanged(db, future.map((f) => [id, f.shift_date] as Key), { now, tz, rules: settings.rules, byCur: settings.rulesCur });
   return c.json({ ok: true });
+});
+
+// ---------------------------------------------------------------- export / import (PSD ID, Employee Name, Currency, Chat ID, Thread ID)
+employeeRoutes.get('/export/employees', async (c) => {
+  const f = query(c, z.object({ q: z.string().max(80).optional().default(''), status: z.enum(['', 'ACTIVE', 'INACTIVE']).optional().default('') }));
+  const cond: string[] = ['1 = 1'];
+  const p: unknown[] = [];
+  if (f.status) { cond.push('e.employment_status = ?'); p.push(f.status); }
+  if (f.q) { cond.push("(e.employee_code LIKE ? ESCAPE '\\' OR e.name LIKE ? ESCAPE '\\')"); p.push(likeEsc(f.q), likeEsc(f.q)); }
+  const rows = await all(c.env.DB, `SELECT e.employee_code, e.name, e.currency_code, e.employment_status, m.chat_id, m.message_thread_id
+    FROM employees e LEFT JOIN telegram_topic_mappings m ON m.employee_id = e.id AND m.is_active = 1
+    WHERE ${cond.join(' AND ')} ORDER BY e.employee_code`, ...p);
+  return c.json({ rows });
+});
+
+const EmpImportSchema = z.object({
+  grid: z.array(z.array(z.union([z.string().max(100), z.number(), z.null()])).max(20)).min(1).max(2000),
+  fileName: z.string().max(200).default('employees'),
+  apply: z.boolean().default(false),
+});
+
+interface ImpRow { row: number; code: string; name: string; currency: string | null; chatId: number | null; threadId: number | null; topicGiven: boolean }
+
+employeeRoutes.post('/employees/import', async (c) => {
+  requireAdminRole(c);
+  const v = await body(c, EmpImportSchema);
+  const db = c.env.DB;
+  const actor = c.get('admin').username;
+  const ip = clientIp(c);
+  const now = Date.now();
+  const cell = (r: (string | number | null)[], i: number) => (i < 0 ? '' : String(r[i] ?? '').trim());
+  const head = v.grid[0].map((x) => String(x ?? '').trim().toLowerCase());
+  const col = (re: RegExp) => head.findIndex((h) => re.test(h));
+  const ci = { code: col(/^(psd\s*id|employee\s*id|员工编号|id)$/), name: col(/^(employee\s*name|name|员工姓名|姓名)$/), cur: col(/^(currency|货币)$/), chat: col(/^(chat\s*id|chat)$/), thread: col(/^(thread\s*id|thread|topic)$/) };
+  if (ci.code < 0 || ci.name < 0) throw bad('HEADER', '第一行需要有「PSD ID」和「Employee Name」栏位', 'The first row needs "PSD ID" and "Employee Name" columns');
+
+  const [empR, curR, mapR] = await db.batch([
+    stmt(db, 'SELECT id, employee_code, name, currency_code, employment_status FROM employees'),
+    stmt(db, 'SELECT code FROM currencies'),
+    stmt(db, 'SELECT m.id, m.employee_id, m.chat_id, m.message_thread_id FROM telegram_topic_mappings m WHERE m.is_active = 1'),
+  ]);
+  type Emp = { id: number; employee_code: string; name: string; currency_code: string | null; employment_status: string };
+  const emps = new Map((empR.results as Emp[]).map((e) => [e.employee_code.toLowerCase(), e]));
+  const empById = new Map((empR.results as Emp[]).map((e) => [e.id, e]));
+  const curs = new Set((curR.results as { code: string }[]).map((x) => x.code));
+  type Map1 = { id: number; employee_id: number; chat_id: number; message_thread_id: number };
+  const mapByEmp = new Map((mapR.results as Map1[]).map((m) => [m.employee_id, m]));
+  const topicOwner = new Map((mapR.results as Map1[]).map((m) => [`${m.chat_id}|${m.message_thread_id}`, m.employee_id]));
+
+  const errs: { where: string; msg: { zh: string; en: string } }[] = [];
+  const rows: ImpRow[] = [];
+  const seen = new Set<string>();
+  for (let r = 1; r < v.grid.length; r++) {
+    const g = v.grid[r];
+    const code = cell(g, ci.code);
+    if (!code) continue;
+    const where = `Row ${r + 1} · ${code}`;
+    const e = (zh: string, en: string) => errs.push({ where, msg: { zh, en } });
+    if (!/^[A-Za-z0-9_.-]{1,32}$/.test(code)) { e('PSD ID 只能用英文字母、数字和 _ . -', 'PSD ID may only contain letters, digits and _ . -'); continue; }
+    if (seen.has(code.toLowerCase())) { e('文件里重复出现', 'Appears more than once in the file'); continue; }
+    seen.add(code.toLowerCase());
+    const old = emps.get(code.toLowerCase());
+    const name = cell(g, ci.name) || old?.name || '';
+    if (!name || name.length > 100) { e('缺少员工姓名', 'Employee name is missing'); continue; }
+    const curRaw = cell(g, ci.cur).toUpperCase();
+    const currency = curRaw || old?.currency_code || null;
+    if (curRaw && !curs.has(curRaw)) { e(`货币 ${curRaw} 不存在`, `Unknown currency ${curRaw}`); continue; }
+    if (!old && !currency) { e('新员工需要填写货币', 'A new employee needs a currency'); continue; }
+    let chatRaw = cell(g, ci.chat).replace(/\.0+$/, '');
+    const threadRaw = cell(g, ci.thread).replace(/^#/, '').replace(/\.0+$/, '');
+    let chatId: number | null = null, threadId: number | null = null;
+    const topicGiven = !!threadRaw;
+    if (topicGiven) {
+      if (/^\d{5,17}$/.test(chatRaw)) chatRaw = '-100' + chatRaw; // t.me/c/<id>/<thread> link form
+      if (!/^\d+$/.test(threadRaw)) { e('Thread ID 必须是数字', 'Thread ID must be a number'); continue; }
+      if (!/^-100\d{5,17}$/.test(chatRaw)) { e('Chat ID 格式错误（超级群组是 -100 开头）', 'Invalid Chat ID (supergroup ids start with -100)'); continue; }
+      chatId = Number(chatRaw); threadId = Number(threadRaw);
+    }
+    if (old && old.employment_status !== 'ACTIVE') { e('员工已停用，请先在页面上重新启用', 'Employee is deactivated; reactivate them first'); continue; }
+    rows.push({ row: r + 1, code: old?.employee_code ?? code, name, currency, chatId, threadId, topicGiven });
+  }
+
+  // topic ownership after the import: a topic may belong to one employee only
+  const finalTopic = new Map<string, string>(); // topic → code
+  for (const [k, empId] of topicOwner) { const e = empById.get(empId); if (e) finalTopic.set(k, e.employee_code); }
+  for (const x of rows) { const e = emps.get(x.code.toLowerCase()); if (x.topicGiven && e) { const m = mapByEmp.get(e.id); if (m) finalTopic.delete(`${m.chat_id}|${m.message_thread_id}`); } }
+  const ok: ImpRow[] = [];
+  for (const x of rows) {
+    if (x.topicGiven) {
+      const k = `${x.chatId}|${x.threadId}`;
+      const holder = finalTopic.get(k);
+      if (holder && holder.toLowerCase() !== x.code.toLowerCase()) {
+        errs.push({ where: `Row ${x.row} · ${x.code}`, msg: { zh: `Topic #${x.threadId} 已属于 ${holder}`, en: `Topic #${x.threadId} already belongs to ${holder}` } });
+        continue;
+      }
+      finalTopic.set(k, x.code);
+    }
+    ok.push(x);
+  }
+
+  type Ch = ImpRow & { kind: 'NEW' | 'UPDATE'; id: number | null; fields: string[]; oldMap: Map1 | null };
+  const changes: Ch[] = [];
+  let unchanged = 0;
+  for (const x of ok) {
+    const old = emps.get(x.code.toLowerCase());
+    if (!old) { changes.push({ ...x, kind: 'NEW', id: null, fields: ['name', 'currency', ...(x.topicGiven ? ['topic'] : [])], oldMap: null }); continue; }
+    const m = mapByEmp.get(old.id) ?? null;
+    const fields: string[] = [];
+    if (old.name !== x.name) fields.push('name');
+    if ((old.currency_code ?? null) !== x.currency) fields.push('currency');
+    if (x.topicGiven && (!m || m.chat_id !== x.chatId || m.message_thread_id !== x.threadId)) fields.push('topic');
+    if (!fields.length) { unchanged++; continue; }
+    changes.push({ ...x, kind: 'UPDATE', id: old.id, fields, oldMap: m });
+  }
+  const plan = {
+    newCount: changes.filter((x) => x.kind === 'NEW').length, updateCount: changes.filter((x) => x.kind === 'UPDATE').length, unchanged,
+    errorCount: errs.length, errors: errs.slice(0, 200),
+    changes: changes.slice(0, 300).map((x) => {
+      const old = emps.get(x.code.toLowerCase());
+      return { kind: x.kind, code: x.code, name: x.name, currency: x.currency, topic: x.topicGiven ? x.threadId : x.oldMap?.message_thread_id ?? null, fields: x.fields,
+        before: old ? { name: old.name, currency: old.currency_code, topic: x.oldMap?.message_thread_id ?? null } : null };
+    }),
+  };
+  if (!v.apply) return c.json({ plan });
+
+  // 1) close the topic bindings that move, 2) write employees + new bindings (so a topic can pass from one employee to another)
+  const closes: D1PreparedStatement[] = [];
+  const writes: D1PreparedStatement[] = [];
+  for (const x of changes) {
+    const ref = x.id ? String(x.id) : '(SELECT id FROM employees WHERE employee_code = ?)';
+    const refP = x.id ? [] : [x.code];
+    if (x.kind === 'NEW') {
+      writes.push(stmt(db, `INSERT INTO employees (employee_code, name, currency_code, employment_status, default_shift_id, timezone, created_at, updated_at)
+                            VALUES (?,?,?,'ACTIVE',NULL,?,?,?)`, x.code, x.name, x.currency, bizTz(c.env), now, now));
+    } else if (x.fields.includes('name') || x.fields.includes('currency')) {
+      writes.push(stmt(db, 'UPDATE employees SET name = ?, currency_code = ?, updated_at = ? WHERE id = ?', x.name, x.currency, now, x.id));
+    }
+    if (x.fields.includes('topic') && x.topicGiven) {
+      if (x.oldMap) closes.push(stmt(db, 'UPDATE telegram_topic_mappings SET valid_until = ?, is_active = 0, updated_at = ? WHERE id = ?', now, now, x.oldMap.id));
+      writes.push(stmt(db, `INSERT INTO telegram_topic_mappings (employee_id, chat_id, message_thread_id, valid_from, valid_until, is_active, created_by, created_at, updated_at)
+                            VALUES (${ref}, ?, ?, ?, NULL, 1, ?, ?, ?)`, ...refP, x.chatId, x.threadId, now, actor, now, now));
+      writes.push(auditStmt(db, { actor, action: 'TOPIC_MAPPING_CHANGED', entityType: 'telegram_topic_mapping', entityId: x.code,
+        before: x.oldMap ? { chat_id: x.oldMap.chat_id, thread_id: x.oldMap.message_thread_id } : null, after: { chat_id: x.chatId, thread_id: x.threadId }, note: `Import ${v.fileName}`, ip, at: now }));
+    }
+    const old = emps.get(x.code.toLowerCase());
+    writes.push(auditStmt(db, { actor, action: x.kind === 'NEW' ? 'EMPLOYEE_CREATED' : 'EMPLOYEE_UPDATED', entityType: 'employee', entityId: x.code,
+      before: old ? { name: old.name, currency: old.currency_code, topic: x.oldMap?.message_thread_id ?? null } : null,
+      after: { name: x.name, currency: x.currency, topic: x.topicGiven ? x.threadId : x.oldMap?.message_thread_id ?? null }, note: `Import ${v.fileName}`, ip, at: now }));
+  }
+  writes.push(auditStmt(db, { actor, action: 'EMPLOYEES_IMPORTED', entityType: 'employee', entityId: v.fileName, after: { added: plan.newCount, updated: plan.updateCount, skipped_errors: errs.length }, ip, at: now }));
+  writes.push(stmt(db, "UPDATE system_settings SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT), updated_at = ? WHERE key = 'data_version'", now));
+  try {
+    for (const part of chunk([...closes, ...writes], 90)) await db.batch(part);
+  } catch (e) {
+    if (/UNIQUE/i.test(String((e as Error).message))) throw conflict('CONFLICT', '资料冲突（PSD ID 或 Topic 已被使用）', 'Conflict: PSD ID or topic already in use');
+    throw e;
+  }
+  return c.json({ plan, applied: { added: plan.newCount, updated: plan.updateCount } });
 });

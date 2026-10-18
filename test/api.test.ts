@@ -790,6 +790,36 @@ describe('rules and roster per currency', () => {
   });
 });
 
+describe('employee import / export', () => {
+  it('exports, then imports new employees, updates and topic moves; bad rows are skipped', async () => {
+    const { h } = await fixture();
+    await h.req('POST', '/api/currencies', { code: 'PHP' });
+    const ex = (await h.req('GET', '/api/export/employees?status=ACTIVE')).json.rows;
+    expect(ex.map((r: any) => [r.employee_code, r.message_thread_id])).toEqual([['E001', 1001], ['E002', 1002]]);
+    const grid = [
+      ['PSD ID', 'Employee Name', 'Currency', 'Chat ID', 'Thread ID', 'Status'],
+      ['E001', 'Nimal P.', '', '', '', 'ACTIVE'],                 // rename only; topic kept
+      ['E002', 'Kasun Silva', 'PHP', String(CHAT), '1001', ''],   // takes E001's topic → E001 still holds it → error
+      ['N100', 'New Person', 'PHP', String(CHAT).replace('-100', ''), '#2001', ''], // link form chat id
+      ['N101', 'No Currency', '', '', '', ''],
+      ['bad id', 'X', 'PHP', '', '', ''],
+    ];
+    const plan = (await h.req('POST', '/api/employees/import', { grid, fileName: 'emp.xlsx' })).json.plan;
+    expect(plan).toMatchObject({ newCount: 1, updateCount: 1, unchanged: 0, errorCount: 3 });
+    const r = await h.req('POST', '/api/employees/import', { grid, fileName: 'emp.xlsx', apply: true });
+    expect(r.json.applied).toEqual({ added: 1, updated: 1 });
+    const e1 = h.db.get<any>("SELECT e.name, m.message_thread_id AS t FROM employees e JOIN telegram_topic_mappings m ON m.employee_id = e.id AND m.is_active = 1 WHERE e.employee_code = 'E001'");
+    expect(e1).toMatchObject({ name: 'Nimal P.', t: 1001 });
+    const n = h.db.get<any>("SELECT e.currency_code, m.chat_id, m.message_thread_id AS t FROM employees e JOIN telegram_topic_mappings m ON m.employee_id = e.id AND m.is_active = 1 WHERE e.employee_code = 'N100'");
+    expect(n).toMatchObject({ currency_code: 'PHP', chat_id: CHAT, t: 2001 });
+    // swap topics inside one file
+    const swap = [['PSD ID', 'Employee Name', 'Chat ID', 'Thread ID'], ['E001', 'Nimal P.', String(CHAT), '1002'], ['E002', 'Kasun Silva', String(CHAT), '1001']];
+    expect((await h.req('POST', '/api/employees/import', { grid: swap, apply: true })).json.applied).toEqual({ added: 0, updated: 2 });
+    const t = (c: string) => h.db.get<any>(`SELECT m.message_thread_id AS t FROM employees e JOIN telegram_topic_mappings m ON m.employee_id = e.id AND m.is_active = 1 WHERE e.employee_code = '${c}'`).t;
+    expect([t('E001'), t('E002')]).toEqual([1002, 1001]);
+  });
+});
+
 describe('roster history', () => {
   it('lists manual shift changes and one row per roster import, with who, when and why', async () => {
     const { h, e1 } = await fixture();
