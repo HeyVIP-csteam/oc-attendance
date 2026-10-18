@@ -33,7 +33,7 @@ export interface EngineInstance {
   breakMinutes: number | null;
 }
 
-export interface EngineRules { windowHours: number; lateAsException: boolean }
+export interface EngineRules { windowHours: number; lateAsException: boolean; breakMinutes?: number | null }
 
 export interface Flag { code: ExceptionCode; ts: number; eventId: number | null; detail: Bi | null }
 
@@ -161,9 +161,11 @@ export function computeSession(input: ComputeInput): SessionSummary | null {
   const netMs = shiftDurMs != null && open.length === 0 ? shiftDurMs - totalBreakMs : null;
 
   let breakExceeded: boolean | null = null;
-  if (inst && inst.breakMinutes != null && inT != null) {
-    breakExceeded = totalBreakMs > inst.breakMinutes * MIN;
-    if (breakExceeded) flags.push({ code: 'BREAK_LIMIT_EXCEEDED', ts: inT ?? inst.startAt, eventId: null, detail: bi(`当日合计 ${fmtDuration(totalBreakMs)} > ${inst.breakMinutes}m`, `daily total ${fmtDuration(totalBreakMs)} > ${inst.breakMinutes}m`) });
+  // the daily break allowance is one setting for every shift (Settings → Attendance rules); older shift-level values are only a fallback
+  const quota = rules.breakMinutes !== undefined ? rules.breakMinutes : inst?.breakMinutes ?? null;
+  if (inst && quota != null && inT != null) {
+    breakExceeded = totalBreakMs > quota * MIN;
+    if (breakExceeded) flags.push({ code: 'BREAK_LIMIT_EXCEEDED', ts: inT ?? inst.startAt, eventId: null, detail: bi(`当日合计 ${fmtDuration(totalBreakMs)} > ${quota}m`, `daily total ${fmtDuration(totalBreakMs)} > ${quota}m`) });
   }
 
   const windowMs = rules.windowHours * HOUR;

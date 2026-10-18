@@ -73,6 +73,8 @@ export interface Rules {
   windowUnit?: 'h' | 'm';     // how the admin entered it (display only)
   lateAsException: boolean;   // also list late / early leave as exceptions
   botReply: boolean;          // bot replies in the topic
+  breakMinutes: number | null; // total break allowed per day, in minutes (null = no limit); applies to every shift
+  breakUnit?: 'h' | 'm';      // how the admin entered it (display only)
   otHours: number;            // on-shift time (clock in → clock out) above this many hours is tagged OT on the roster
 }
 
@@ -103,6 +105,6 @@ export interface ParserRules {
   typedTimeReview: boolean;
 }
 export const DEFAULT_PARSER: ParserRules = { skipLabels: [], typoTolerance: true, ignoreBrackets: true, typedTimeReview: true };
-export const DEFAULT_RULES: Rules = { windowHours: 4, windowUnit: 'h', lateAsException: false, botReply: true, otHours: 9 };
+export const DEFAULT_RULES: Rules = { windowHours: 4, windowUnit: 'h', lateAsException: false, botReply: true, otHours: 9, breakMinutes: 90, breakUnit: 'm' };
 
 export const BIZ_TZ_DEFAULT = 'Asia/Colombo';

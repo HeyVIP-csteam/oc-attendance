@@ -91,6 +91,8 @@ const RulesSchema = z.object({
   lateAsException: z.boolean(),
   botReply: z.boolean(),
   otHours: z.number().min(1).max(24).optional().default(9),
+  breakMinutes: z.number().int().min(0).max(1440).nullable().optional().default(90),
+  breakUnit: z.enum(['h', 'm']).optional().default('m'),
 });
 
 settingsRoutes.put('/settings/rules', async (c) => {
@@ -106,7 +108,7 @@ settingsRoutes.put('/settings/rules', async (c) => {
     bump(db, now),
   ];
   // rules that change computed results → re-evaluate the last 31 days in the background (cron, 200 sessions per run)
-  if (before.rules.lateAsException !== rules.lateAsException || before.rules.windowHours !== rules.windowHours) {
+  if (before.rules.lateAsException !== rules.lateAsException || before.rules.windowHours !== rules.windowHours || before.rules.breakMinutes !== rules.breakMinutes) {
     statements.push(stmt(db, 'UPDATE attendance_sessions SET next_check_at = 0 WHERE work_date >= ?', addDays(localDate(now, bizTz(c.env)), -31)));
   }
   await db.batch(statements);

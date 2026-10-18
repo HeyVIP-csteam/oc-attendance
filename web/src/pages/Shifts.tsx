@@ -194,12 +194,12 @@ function Templates() {
     <>
       <div className="tw"><table className="tpltbl"><thead><tr>
         <th>Code</th><th>{L('名称', 'Name')}</th><th>{L('时间', 'Time')}</th><th className="n">{L('迟到宽限', 'Late grace')}</th><th className="n">{L('早退宽限', 'Early grace')}</th>
-        <th className="n">{L('休息时间（总计）', 'Break time (total)')}</th><th>{L('创建日期', 'Create Date')}</th><th>{L('启用', 'Active')}</th><th className="c">{L('操作', 'Action')}</th>
+        <th>{L('创建日期', 'Create Date')}</th><th>{L('启用', 'Active')}</th><th className="c">{L('操作', 'Action')}</th>
       </tr></thead><tbody>
         {meta.shifts.map((s) => (
           <tr key={s.id}>
             <td><span className={`chip cell ${s.code}`}>{s.code}</span></td><td>{s.name}</td><td>{s.start_time}–{s.end_time}</td><td className="n">{s.late_grace_min}m</td><td className="n">{s.early_grace_min}m</td>
-            <td className="n">{s.break_minutes != null ? `${s.break_minutes}m` : <span className="mut">{L('不限', 'No limit')}</span>}</td><td>{date(s.created_at)}</td>
+            <td>{date(s.created_at)}</td>
             <td>{s.is_active ? <span className="b ok">Active</span> : <span className="b">Off</span>}</td>
             <td>{!readOnly && <button className="btn sm" onClick={() => setEdit(s)}>{L('编辑', 'Edit')}</button>}</td>
           </tr>
@@ -242,7 +242,6 @@ function ShiftModal({ s, onClose }: { s: MetaShift | null; onClose: () => void }
         <div><label>{L('结束（Colombo；≤ 开始 视为跨午夜）', 'End (Colombo; ≤ start = overnight)')}</label><input type="time" value={v.end} onChange={(e) => upd({ end: e.target.value })} /></div>
         <div><label>{L('迟到宽限（分钟）', 'Late grace (min)')}</label><input type="number" min={0} value={v.lg} onChange={(e) => upd({ lg: e.target.value })} /></div>
         <div><label>{L('早退宽限（分钟）', 'Early leave grace (min)')}</label><input type="number" min={0} value={v.eg} onChange={(e) => upd({ eg: e.target.value })} /></div>
-        <div><label>{L('休息时间（总计，分钟；空 = 不限）', 'Break time (total, min; empty = no limit)')}</label><input type="number" min={0} value={v.br} onChange={(e) => upd({ br: e.target.value })} /></div>
         <div><label>{L('启用', 'Active')}</label><select value={v.active ? '1' : '0'} onChange={(e) => upd({ active: e.target.value === '1' })}><option value="1">Active</option><option value="0">Inactive</option></select></div>
       </div>
       {s && <label style={{ display: 'block', marginTop: 10, fontSize: 13 }}><input type="checkbox" checked={v.apply} onChange={(e) => upd({ apply: e.target.checked })} /> {L('同时更新明天及以后的班次实例（今天及以前的考勤不变）', 'Also update shift instances from tomorrow onwards (today and earlier stay unchanged)')}</label>}

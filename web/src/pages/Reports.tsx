@@ -24,7 +24,6 @@ export function Reports() {
     else if (period === 'weekly') setF({ period, from: addDays(t, -6), to: t });
     else if (period === 'monthly') setF({ period, from: t.slice(0, 8) + '01', to: t });
   };
-  const title = !f.status ? L('员工出勤', 'Employee Attendance') : f.status === 'MISSING' ? L('任何缺卡', 'Any missing punch') : dt((STATUSES as any)[f.status]?.label ?? f.status);
   let cols: string[] = [];
   let rows: (string | number)[][] = [];
   const left: number[] = [0]; // PSD ID
@@ -52,7 +51,7 @@ export function Reports() {
       <ErrBox error={error} />
       {data && (
         <div className="card">
-          <TblTop left={<h3 style={{ margin: 0 }}>{title} · {from} → {to} · {L(`${data.total} 行`, `${data.total} rows`)} · {L('斯里兰卡时间', 'Sri Lanka time')}</h3>} size={f.size} onSize={(size) => set({ size, page: 1 })} />
+          <TblTop left={<span />} size={f.size} onSize={(size) => set({ size, page: 1 })} />
           {rows.length ? (
             <>
               <div className="tw"><table><thead><tr>{cols.map((c, i) => <th key={i} className={left.includes(i) ? 'pid' : ''}>{c}</th>)}</tr></thead><tbody>

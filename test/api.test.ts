@@ -730,6 +730,24 @@ describe('shift matching window in minutes', () => {
   });
 });
 
+describe('daily break allowance (Attendance rules)', () => {
+  it('one setting for every shift; empty = no limit', async () => {
+    const { h, e1 } = await fixture();
+    await h.roster(e1, D, 'A');
+    await h.send({ text: 'IN', ts: lk(D, '07:00'), thread: 1001 });
+    await h.send({ text: 'BREAK', ts: lk(D, '10:00'), thread: 1001 });
+    await h.send({ text: 'RESUME', ts: lk(D, '11:00'), thread: 1001 }); // 60 min
+    const ex = async () => (await h.session(e1, D))!.break_exceeded;
+    expect(await ex()).toBe(0); // default 90 min
+    await h.req('PUT', '/api/settings/rules', { windowHours: 4, lateAsException: false, botReply: true, breakMinutes: 30 });
+    await h.cron(lk(D, '12:00'));
+    expect(await ex()).toBe(1);
+    await h.req('PUT', '/api/settings/rules', { windowHours: 4, lateAsException: false, botReply: true, breakMinutes: null });
+    await h.cron(lk(D, '12:00'));
+    expect(await ex()).toBeNull();
+  });
+});
+
 describe('roster history', () => {
   it('lists manual shift changes and one row per roster import, with who, when and why', async () => {
     const { h, e1 } = await fixture();

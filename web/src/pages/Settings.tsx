@@ -166,17 +166,21 @@ function Keywords() {
 function Rules() {
   const { L } = useI18n();
   const { meta, reloadMeta, readOnly } = useData();
+  const brMin0 = meta.rules.breakMinutes === undefined ? 90 : meta.rules.breakMinutes;
+  const brUnit0: 'h' | 'm' = meta.rules.breakUnit ?? 'm';
   const unit0: 'h' | 'm' = meta.rules.windowUnit ?? (Number.isInteger(meta.rules.windowHours) ? 'h' : 'm');
-  const [v, setV] = useState({ unit: unit0, win: String(unit0 === 'm' ? Math.round(meta.rules.windowHours * 60) : meta.rules.windowHours), lx: meta.rules.lateAsException ? '1' : '0', bot: meta.rules.botReply ? '1' : '0', ot: String(meta.rules.otHours ?? 9) });
+  const [v, setV] = useState({ unit: unit0, win: String(unit0 === 'm' ? Math.round(meta.rules.windowHours * 60) : meta.rules.windowHours), bunit: brUnit0, br: brMin0 == null ? '' : String(brUnit0 === 'h' ? Math.round((brMin0 / 60) * 100) / 100 : brMin0), lx: meta.rules.lateAsException ? '1' : '0', bot: meta.rules.botReply ? '1' : '0', ot: String(meta.rules.otHours ?? 9) });
   const onErr = useErr();
   const winH = () => {
     const n = Number(v.win) || 0;
     const mins = Math.round(v.unit === 'm' ? n : n * 60);
     return Math.min(480, Math.max(5, mins)) / 60;
   };
+  const brMin = () => (v.br.trim() === '' ? null : Math.min(1440, Math.max(0, Math.round((Number(v.br) || 0) * (v.bunit === 'h' ? 60 : 1)))));
+  const conv = (val: string, u: 'h' | 'm') => { if (val.trim() === '') return ''; const n = Number(val) || 0; return String(u === 'm' ? Math.round(n * 60) : Math.round((n / 60) * 100) / 100); };
   const save = async () => {
     try {
-      await api('/settings/rules', { method: 'PUT', body: { windowHours: winH(), windowUnit: v.unit, lateAsException: v.lx === '1', botReply: v.bot === '1', otHours: Math.min(24, Math.max(1, Number(v.ot) || 9)) } });
+      await api('/settings/rules', { method: 'PUT', body: { windowHours: winH(), windowUnit: v.unit, breakMinutes: brMin(), breakUnit: v.bunit, lateAsException: v.lx === '1', botReply: v.bot === '1', otHours: Math.min(24, Math.max(1, Number(v.ot) || 9)) } });
       toast(L('设置已保存，计算已更新', 'Settings saved; results updated'));
       await reloadMeta();
     } catch (e) { onErr(e); }
@@ -185,6 +189,7 @@ function Rules() {
     <div className="card"><h3>{L('考勤与异常规则', 'Attendance & exception rules')}</h3>
       <div className="setlist">
         <div className="setrow"><label htmlFor="stWin">{L('班次匹配窗口（排班前后）', 'Shift matching window (before/after the shift)')}</label><div className="setctl unitctl"><input id="stWin" type="number" min={v.unit === 'm' ? 5 : 1} max={v.unit === 'm' ? 480 : 8} step={v.unit === 'm' ? 5 : 0.5} value={v.win} disabled={readOnly} onChange={(e) => setV({ ...v, win: e.target.value })} /><select aria-label={L('单位', 'Unit')} value={v.unit} disabled={readOnly} onChange={(e) => { const u = e.target.value as 'h' | 'm'; const n = Number(v.win) || 0; setV({ ...v, unit: u, win: String(u === 'm' ? Math.round(n * 60) : Math.round((n / 60) * 100) / 100) }); }}><option value="h">{L('小时', 'Hours')}</option><option value="m">{L('分钟', 'Minutes')}</option></select></div></div>
+        <div className="setrow"><label htmlFor="stBr">{L('每日休息时间（总计；留空 = 不限）', 'Break time per day (total; empty = no limit)')}</label><div className="setctl unitctl"><input id="stBr" type="number" min={0} step={v.bunit === 'm' ? 5 : 0.25} placeholder={L('不限', 'No limit')} value={v.br} disabled={readOnly} onChange={(e) => setV({ ...v, br: e.target.value })} /><select aria-label={L('单位', 'Unit')} value={v.bunit} disabled={readOnly} onChange={(e) => { const u = e.target.value as 'h' | 'm'; setV({ ...v, bunit: u, br: conv(v.br, u) }); }}><option value="h">{L('小时', 'Hours')}</option><option value="m">{L('分钟', 'Minutes')}</option></select></div></div>
         <div className="setrow"><label htmlFor="stLx">{L('迟到/早退是否也列为异常', 'Also list late / early leave as exceptions')}</label><div className="setctl"><select id="stLx" value={v.lx} disabled={readOnly} onChange={(e) => setV({ ...v, lx: e.target.value })}><option value="0">{L('否，只显示状态', 'No, status only')}</option><option value="1">{L('是', 'Yes')}</option></select></div></div>
         <div className="setrow"><label htmlFor="stBot">{L('Bot 在 Topic 回复确认', 'Bot replies in the topic')}</label><div className="setctl"><select id="stBot" value={v.bot} disabled={readOnly} onChange={(e) => setV({ ...v, bot: e.target.value })}><option value="1">{L('开启', 'On')}</option><option value="0">{L('关闭', 'Off')}</option></select></div></div>
         <div className="setrow"><label htmlFor="stOt">{L('OT 门槛：上班到下班超过几小时，排班表标示 OT', 'OT threshold: hours from clock in to clock out before the roster shows OT')}</label><div className="setctl"><input id="stOt" type="number" min={1} max={24} step={0.5} value={v.ot} disabled={readOnly} onChange={(e) => setV({ ...v, ot: e.target.value })} /></div></div>

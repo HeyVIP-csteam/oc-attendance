@@ -109,7 +109,7 @@ const WD_EN = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 export function SessionDrawer({ emp, date, onClose }: { emp: number; date: string; onClose: () => void }) {
   const { L, dt, lang } = useI18n();
-  const { refresh, readOnly } = useData();
+  const { refresh, readOnly, meta } = useData();
   const { data, error, reload } = useApi<Detail>(`/sessions/${emp}/${date}`);
   const [type, setType] = useState<EventType>('CLOCK_OUT');
   const [ts, setTs] = useState('');
@@ -147,7 +147,7 @@ export function SessionDrawer({ emp, date, onClose }: { emp: number; date: strin
   const adjById = new Map((data?.adjustments ?? []).map((a) => [a.id, a]));
   // an ADD adjustment that points at an older punch is the second half of an "edit"
   const editedIds = new Set((data?.adjustments ?? []).filter((a) => a.action === 'ADD_EVENT' && a.target_event_id).map((a) => a.target_event_id!));
-  const breakQuota = inst?.break_minutes ?? null;
+  const breakQuota = meta.rules.breakMinutes !== undefined ? meta.rules.breakMinutes : inst?.break_minutes ?? null;
   const live = (data?.events ?? []).filter((e) => !e.is_voided).length;
   const gone = (data?.events ?? []).filter((e) => e.is_voided).length;
 
