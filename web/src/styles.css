@@ -108,9 +108,13 @@ sup.dd{color:var(--info);font-weight:700;font-size:10px;margin-left:1px}
 .kv b{font-variant-numeric:tabular-nums}
 #toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#0f172a;color:#fff;padding:9px 16px;border-radius:10px;font-size:13px;z-index:40;opacity:0;transition:.25s;pointer-events:none}
 #toast.on{opacity:1}
-.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:14px;flex-wrap:wrap}
-.tabs button{border:0;background:none;padding:8px 14px;cursor:pointer;border-bottom:2px solid transparent;color:var(--mut)}
-.tabs button.on{color:var(--pri);border-color:var(--pri);font-weight:600}
+/* page tabs: folder tabs, the selected one filled blue and joined to the content below by a blue line */
+.tabs{display:flex;gap:4px;margin-bottom:0;padding-left:6px;flex-wrap:wrap}
+.tabs button{border:1px solid var(--line);border-bottom:0;background:var(--card);padding:9px 18px;border-radius:9px 9px 0 0;color:var(--grey);cursor:pointer;font:inherit;white-space:nowrap;transition:background .12s,color .12s}
+.tabs button:hover{background:var(--greyb);color:var(--ink)}
+.tabs button.on{background:var(--pri);border-color:var(--pri);color:#fff;font-weight:600}
+.tabs + .card,.tabs + .tw{border-top:2px solid var(--pri);border-top-left-radius:0}
+.tabs + :not(.card):not(.tw){margin-top:0;border-top:2px solid var(--pri);padding-top:14px}
 .roster td{padding:4px;text-align:center}
 .cell{display:block;border-radius:6px;padding:4px 2px;font-size:11.5px;font-weight:600;cursor:pointer;min-width:62px;background:#e2e8f0;color:#334155}
 .cell.A{background:#dbeafe;color:#1e40af}.cell.B{background:#fef3c7;color:#92400e}.cell.C{background:#e0e7ff;color:#3730a3}.cell.OFF{background:var(--greyb);color:var(--mut);font-weight:400}
