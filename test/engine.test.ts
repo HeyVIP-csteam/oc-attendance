@@ -82,6 +82,15 @@ describe('keyword parser', () => {
   it.each(['good morning', 'ok noted', "I'm in the meeting now", 'will be out for lunch later?', '', '👍', 'on', 'it', 'thanks'])('chat "%s" → NONE', (text) => {
     expect(parseText(text, idx).kind).toBe('NONE');
   });
+  it('a date written with colons or dots is not a typed time', () => {
+    const k = buildKeywordIndex(TEST_KEYWORDS, TEST_PARSER);
+    expect(parseText('Start of Shift:HaseeB\nDATE\n09:10:2026', buildKeywordIndex({ ...TEST_KEYWORDS }, { ...TEST_PARSER, skipLabels: [] }))).toMatchObject({ kind: 'PUNCH', type: 'CLOCK_IN' });
+    expect(parseText('Clocked in 05.10.2026', k)).toMatchObject({ kind: 'PUNCH', type: 'CLOCK_IN' });
+    expect(parseText('IN 08:30', k)).toMatchObject({ kind: 'UNRECOGNIZED', reason: 'TIME' });
+    expect(parseText('BACK 10.25', k)).toMatchObject({ kind: 'UNRECOGNIZED', reason: 'TIME' });
+    expect(parseText('back 10/25 pm', k)).toMatchObject({ kind: 'UNRECOGNIZED', reason: 'TIME' });
+  });
+
   it('reads the whole phrase and ignores little words (end shift = END OF SHIFT)', () => {
     const k = buildKeywordIndex({ ...TEST_KEYWORDS, BREAK_END: [...TEST_KEYWORDS.BREAK_END, 'END'], CLOCK_OUT: [...TEST_KEYWORDS.CLOCK_OUT, 'END OF SHIFT'] }, TEST_PARSER);
     expect(parseText('end shift', k)).toMatchObject({ kind: 'PUNCH', type: 'CLOCK_OUT' });

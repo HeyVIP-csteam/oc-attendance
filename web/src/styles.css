@@ -371,3 +371,18 @@ table.grid td{white-space:normal}
 .rcsw button{width:32px;height:26px;border-radius:7px;border:0;cursor:pointer;font-size:10px;font-weight:700;padding:0}
 .rcsw button.on{outline:2px solid var(--ink);outline-offset:2px}
 .rcchip{display:inline-block;min-width:42px;padding:3px 8px;border-radius:6px;font-weight:700;font-size:12px;text-align:center}
+
+/* telegram history import */
+.impsteps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:14px}
+.impsteps > div{border:1px solid var(--line);border-radius:10px;padding:12px;background:color-mix(in srgb,var(--greyb) 40%,var(--card))}
+.impsteps b{display:block;margin-bottom:4px}
+.impsteps span{color:var(--mut);font-size:12.5px;line-height:1.5}
+.impdrop{display:block;border:2px dashed var(--line);border-radius:12px;padding:28px;text-align:center;color:var(--grey);cursor:pointer}
+.impdrop:hover,.impdrop.on{border-color:var(--pri);background:var(--pri2)}
+.impdrop b{color:var(--pri)}
+.impkv{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin:4px 0 14px}
+.impkv > div{border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+.impkv span{display:block;color:var(--mut);font-size:12px}
+.impkv b{font-size:20px}
+.impmsg{max-width:320px;overflow:hidden;text-overflow:ellipsis;color:var(--grey)}
+@media (max-width:780px){.impsteps{grid-template-columns:1fr}.impkv{grid-template-columns:repeat(2,minmax(0,1fr))}}

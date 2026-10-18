@@ -13,6 +13,7 @@ import { employeeRoutes } from './routes/employees';
 import { exceptionRoutes } from './routes/exceptions';
 import { settingsRoutes } from './routes/settings';
 import { shiftRoutes } from './routes/shifts';
+import { tgImportRoutes } from './routes/tgimport';
 import { webhookRoutes } from './routes/webhook';
 
 export const app = new Hono<AppBindings>();
@@ -48,6 +49,7 @@ app.route('/api', employeeRoutes);
 app.route('/api', shiftRoutes);
 app.route('/api', exceptionRoutes);
 app.route('/api', adminRoutes);
+app.route('/api', tgImportRoutes);
 app.all('/api/*', (c) => c.json({ error: 'NOT_FOUND', message: { zh: '接口不存在', en: 'Not found' } }, 404));
 
 // non-API paths are normally served from static assets before the Worker runs; this is the fallback.

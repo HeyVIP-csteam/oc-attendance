@@ -72,7 +72,8 @@ export function buildKeywordIndex(kw: KeywordConfig, parser: Partial<ParserRules
 }
 
 /** A clock time typed by the employee: 08:30, 8.30, 9am, 9 pm. Durations ("60 mins", "30minute") are fine. */
-const TIME_RE = /(^|[^\d])\d{1,2}\s*[:：.]\s*\d{2}(?!\d)|(^|[^\d])\d{1,2}\s*(am|pm|a\.m|p\.m)\b/i;
+// A date written with the same separators ("09:10:2026", "05.10.2026") is not a time: no digit group may follow or precede.
+const TIME_RE = /(?<!\d\s*[:：./]\s*)(?<!\d)\d{1,2}\s*[:：.]\s*\d{2}(?!\d|\s*[:：./]\s*\d)|(^|[^\d])\d{1,2}\s*(am|pm|a\.m|p\.m)\b/i;
 const MAX_LINE_WORDS = 12;   // longer lines are prose, not a punch
 const SHORT_LINE_WORDS = 4;  // a single-word keyword ("in", "back") only counts on a short line
 

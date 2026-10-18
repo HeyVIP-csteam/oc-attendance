@@ -886,6 +886,43 @@ describe('roster codes', () => {
   });
 });
 
+describe('telegram history import', () => {
+  it('reads a Telegram Desktop export: topics via reply chains, punches at Telegram time, skips what the bot already has', async () => {
+    const { h, e1, e2 } = await fixture();
+    await h.roster(e1, D, 'A'); // 07:00–15:00
+    // the bot already received one message (id 9005)
+    await h.send({ text: 'OUT', ts: lk(D, '15:02'), thread: 1001, messageId: 9005 });
+    const t = (hhmm: string) => String(lk(D, hhmm) / 1000);
+    const exp = { name: 'Team', type: 'private_supergroup', id: Number(String(CHAT).replace('-100', '')), messages: [
+      { id: 9001, type: 'message', date_unixtime: t('06:58'), reply_to_message_id: 1001, text: [{ type: 'bold', text: 'Clocked In !' }, '\n', { type: 'bold', text: 'Agent: Nimal' }] },
+      { id: 9002, type: 'message', date_unixtime: t('10:00'), reply_to_message_id: 1001, text: 'short break' },
+      { id: 9003, type: 'message', date_unixtime: t('10:15'), reply_to_message_id: 9002, text: 'RESUME' }, // reply inside the topic
+      { id: 9004, type: 'message', date_unixtime: t('11:00'), reply_to_message_id: 1002, text: 'RESUME 10:25' }, // typed time → unclear
+      { id: 9005, type: 'message', date_unixtime: t('15:02'), reply_to_message_id: 1001, text: 'OUT' },
+      { id: 9006, type: 'message', date_unixtime: t('12:00'), reply_to_message_id: 5555, text: 'IN' }, // topic nobody is bound to
+      { id: 9007, type: 'message', date_unixtime: t('12:01'), reply_to_message_id: 1002, text: 'good morning team' },
+      { id: 9008, type: 'service', date_unixtime: t('12:02'), action: 'pin_message' },
+    ] };
+    const { readTelegramExport } = await import('../src/shared/tgexport');
+    const x = readTelegramExport(exp);
+    expect(x.chatId).toBe(CHAT);
+    const body = { chatId: x.chatId, fileName: 'result.json', messages: x.messages };
+    const plan = (await h.req('POST', '/api/telegram-import', body)).json.plan;
+    expect(plan).toMatchObject({ toAdd: 3, already: 1, unclear: 1, noTopic: 1, notPunch: 1 });
+    expect((await h.req('POST', '/api/telegram-import', { ...body, apply: true, reason: '' })).status).toBe(400);
+    const r = await h.req('POST', '/api/telegram-import', { ...body, apply: true, reason: 'Before the bot joined' });
+    expect(r.json.applied.added).toBe(3);
+    const s = (await h.session(e1, D))!;
+    expect(s.actual_in_at).toBe(lk(D, '06:58'));
+    expect(s.actual_out_at).toBe(lk(D, '15:02'));
+    expect(s.break_count).toBe(1);
+    expect(h.db.get<any>("SELECT COUNT(*) AS n FROM telegram_messages WHERE source = 'IMPORT'").n).toBe(3);
+    // importing the same file again adds nothing
+    expect((await h.req('POST', '/api/telegram-import', body)).json.plan).toMatchObject({ toAdd: 0, already: 4 });
+    expect(h.db.get<any>('SELECT COUNT(*) AS n FROM attendance_events WHERE employee_id = ?', e2).n).toBe(0);
+  });
+});
+
 describe('roster history', () => {
   it('lists manual shift changes and one row per roster import, with who, when and why', async () => {
     const { h, e1 } = await fixture();
