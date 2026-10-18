@@ -96,7 +96,7 @@ interface Detail {
   workDate: string;
   instance: { id: number; shift_name: string; adjustment_status: string; source: string; late_grace_min: number; early_grace_min: number; break_minutes: number | null; scheduled_start_at: number; scheduled_end_at: number } | null;
   session: AttRow & { scheduled_start_at: number | null; shift_duration_ms: number | null } | null;
-  events: { id: number; event_type: EventType; event_ts: number; source: string; is_voided: number; sm_result: string | null; adjustment_id: number | null; voided_by_adjustment_id: number | null; raw_text: string | null; tg_message_id: number | null; message_thread_id: number | null; from_user_id: number | null; telegram_message_ts: number | null; raw_received_at: number | null; processed_at: number | null }[];
+  events: { id: number; event_type: EventType; event_ts: number; source: string; is_voided: number; sm_result: string | null; adjustment_id: number | null; voided_by_adjustment_id: number | null; raw_text: string | null; tg_message_id: number | null; message_thread_id: number | null; from_user_id: number | null; telegram_message_ts: number | null; raw_received_at: number | null; raw_source?: string | null; processed_at: number | null }[];
   breaks: { seq: number; start_at: number; end_at: number | null; duration_ms: number | null; status: string; remark: string | null }[];
   exceptions: { id: number; code: string; occurred_at: number; detail: string | null; status: string }[];
   adjustments: { id: number; action: string; event_type: EventType | null; event_ts: number | null; target_event_id: number | null; reason: string; before_json: string | null; after_json: string | null; created_by: string; created_at: number }[];
@@ -201,7 +201,8 @@ export function SessionDrawer({ emp, date, onClose }: { emp: number; date: strin
                   {data.events.map((e) => {
                     const adj = e.adjustment_id ? adjById.get(e.adjustment_id) : undefined;
                     const isEdit = !!adj?.target_event_id;
-                    const delay = e.raw_received_at && e.telegram_message_ts ? e.raw_received_at - e.telegram_message_ts : 0;
+                    const imported = e.raw_source === 'IMPORT';
+                    const delay = !imported && e.raw_received_at && e.telegram_message_ts ? e.raw_received_at - e.telegram_message_ts : 0;
                     const od = otherDay(e.event_ts);
                     return (
                       <tr key={e.id} className={e.is_voided ? 'vd' : ''}>
@@ -211,7 +212,7 @@ export function SessionDrawer({ emp, date, onClose }: { emp: number; date: strin
                           : <><span className="b v">{isEdit ? L('管理员修改', 'Edited by admin') : L('管理员补录', 'Added by admin')}</span>{adj?.reason && <span className="rs"> {adj.reason}</span>}</>}</td>
                         <td>{e.is_voided ? <span className="b">{editedIds.has(e.id) ? L('已修改', 'Edited') : L('已删除', 'Deleted')}</span>
                           : e.sm_result ? <ExB code={e.sm_result} /> : <span className="b ok">{L('已记录', 'Recorded')}</span>}
-                          {!e.is_voided && delay > 5 * 60000 && <> <span className="b w">{L('延迟', 'Delay')} {fmtDur(delay)}</span></>}</td>
+                          {!e.is_voided && delay > 5 * 60000 && <> <span className="b w">{L('延迟', 'Delay')} {fmtDur(delay)}</span></>}{imported && <> <span className="b i" title={L('从 Telegram 导出档补入', 'Added from a Telegram chat export')}>{L('导入', 'Imported')}</span></>}</td>
                         {!readOnly && <td>{e.is_voided ? <span className="mut">—</span> : <><button className="btn sm" disabled={busy} onClick={() => setDlg({ kind: 'edit', ev: e })}>{L('编辑', 'Edit')}</button> <button className="btn sm d" disabled={busy} onClick={() => setDlg({ kind: 'del', ev: e })}>{L('删除', 'Delete')}</button></>}</td>}
                       </tr>
                     );

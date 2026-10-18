@@ -917,6 +917,7 @@ describe('telegram history import', () => {
     expect(s.actual_out_at).toBe(lk(D, '15:02'));
     expect(s.break_count).toBe(1);
     expect(h.db.get<any>("SELECT COUNT(*) AS n FROM telegram_messages WHERE source = 'IMPORT'").n).toBe(3);
+    expect(h.db.get<any>("SELECT COUNT(*) AS n FROM attendance_exceptions WHERE code = 'DELAYED_DELIVERY'").n).toBe(0); // imported ≠ delivered late
     // importing the same file again adds nothing
     expect((await h.req('POST', '/api/telegram-import', body)).json.plan).toMatchObject({ toAdd: 0, already: 4 });
     expect(h.db.get<any>('SELECT COUNT(*) AS n FROM attendance_events WHERE employee_id = ?', e2).n).toBe(0);

@@ -164,7 +164,10 @@ export async function recomputeMany(db: D1Database, keys: Key[], o: RecomputeOpt
     const ws = pairsWhere(part, 's.employee_id', 's.work_date');
     const [instR, evR, brR, exR, adjR] = await db.batch([
       stmt(db, `SELECT * FROM shift_instances WHERE adjustment_status <> 'CANCELLED' AND ${wi.sql}`, ...wi.params),
-      stmt(db, `SELECT id, employee_id, work_date, event_type, event_ts, tg_message_id, received_at, source, is_voided, sm_result, message_id
+      // a message imported from a Telegram export was not "delivered late": its arrival time is its Telegram time
+      stmt(db, `SELECT id, employee_id, work_date, event_type, event_ts, tg_message_id,
+                  CASE WHEN EXISTS (SELECT 1 FROM telegram_messages t WHERE t.id = attendance_events.message_id AND t.source = 'IMPORT') THEN event_ts ELSE received_at END AS received_at,
+                  source, is_voided, sm_result, message_id
                 FROM attendance_events WHERE ${w.sql}`, ...w.params),
       stmt(db, `SELECT b.session_id, s.employee_id, s.work_date, b.seq, b.start_at, b.end_at, b.duration_ms, b.status
                 FROM break_sessions b JOIN attendance_sessions s ON s.id = b.session_id WHERE ${ws.sql}`, ...ws.params),

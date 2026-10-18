@@ -120,7 +120,7 @@ attendanceRoutes.get('/sessions/:emp/:date', async (c) => {
     stmt(db, 'SELECT * FROM shift_instances WHERE employee_id = ? AND shift_date = ?', emp, date),
     stmt(db, 'SELECT * FROM attendance_sessions WHERE employee_id = ? AND work_date = ?', emp, date),
     stmt(db, `SELECT ev.id, ev.event_type, ev.event_ts, ev.source, ev.is_voided, ev.sm_result, ev.adjustment_id, ev.voided_by_adjustment_id, ev.received_at,
-                m.id AS raw_id, m.raw_text, m.message_id AS tg_message_id, m.message_thread_id, m.from_user_id, m.telegram_message_ts, m.received_at AS raw_received_at, m.processed_at
+                m.id AS raw_id, m.raw_text, m.message_id AS tg_message_id, m.message_thread_id, m.from_user_id, m.telegram_message_ts, m.received_at AS raw_received_at, m.processed_at, m.source AS raw_source
               FROM attendance_events ev LEFT JOIN telegram_messages m ON m.id = ev.message_id
               WHERE ev.employee_id = ? AND ev.work_date = ? ORDER BY ev.event_ts, ev.tg_message_id, ev.id`, emp, date),
     stmt(db, `SELECT b.seq, b.start_at, b.end_at, b.duration_ms, b.status, ${BREAK_TEXT} AS start_text FROM break_sessions b JOIN attendance_sessions s ON s.id = b.session_id WHERE s.employee_id = ? AND s.work_date = ? ORDER BY b.seq`, emp, date),
