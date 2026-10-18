@@ -820,6 +820,42 @@ describe('employee import / export', () => {
   });
 });
 
+describe('disable / active / delete employee', () => {
+  it('active brings the employee and their old topic back', async () => {
+    const { h, e1 } = await fixture();
+    await h.req('POST', `/api/employees/${e1}/deactivate`, { reason: 'Leave' });
+    const r = await h.req('POST', `/api/employees/${e1}/activate`, {});
+    expect(r.json).toMatchObject({ ok: true, topic: 1001 });
+    expect(h.db.get<any>('SELECT employment_status FROM employees WHERE id = ?', e1).employment_status).toBe('ACTIVE');
+    expect((await h.send({ text: 'IN', ts: lk(D, '07:00'), thread: 1001 })).status).toBe(200);
+    expect(h.db.get<any>('SELECT COUNT(*) AS n FROM attendance_events WHERE employee_id = ?', e1).n).toBe(1);
+    expect((await h.req('POST', `/api/employees/${e1}/activate`, {})).status).toBe(409);
+  });
+
+  it('delete removes the employee and all their data, keeps only the audit log; other employees untouched', async () => {
+    const { h, e1, e2 } = await fixture();
+    await h.roster(e1, D, 'A');
+    await h.send({ text: 'IN', ts: lk(D, '07:00'), thread: 1001 });
+    await h.send({ text: 'OUT', ts: lk(D, '15:00'), thread: 1001 });
+    await h.send({ text: 'hello clock', ts: lk(D, '15:01'), thread: 1001 });
+    await h.send({ text: 'IN', ts: lk(D, '07:00'), thread: 1002 });
+    const evId = h.db.get<any>("SELECT id FROM attendance_events WHERE employee_id = ? AND event_type = 'CLOCK_OUT'", e1).id;
+    await h.req('POST', `/api/sessions/${e1}/${D}/adjustments`, { action: 'VOID_EVENT', targetEventId: evId, reason: 'Sent OUT by mistake' });
+    expect((await h.req('POST', `/api/employees/${e1}/delete`, { confirm: 'E002' })).status).toBe(400);
+    expect((await h.req('POST', `/api/employees/${e1}/delete`, { confirm: 'E001' })).status).toBe(200);
+    const cnt = (sql: string, ...p: unknown[]) => h.db.get<any>(sql, ...p).n;
+    for (const tbl of ['attendance_events', 'attendance_adjustments', 'attendance_sessions', 'shift_instances', 'telegram_topic_mappings', 'attendance_exceptions', 'telegram_messages'])
+      expect(cnt(`SELECT COUNT(*) AS n FROM ${tbl} WHERE employee_id = ?`, e1)).toBe(0);
+    expect(cnt('SELECT COUNT(*) AS n FROM telegram_messages WHERE message_thread_id = 1001')).toBe(0);
+    expect(cnt('SELECT COUNT(*) AS n FROM employees WHERE id = ?', e1)).toBe(0);
+    expect(cnt('SELECT COUNT(*) AS n FROM attendance_events WHERE employee_id = ?', e2)).toBe(1);
+    expect(cnt("SELECT COUNT(*) AS n FROM audit_logs WHERE action = 'EMPLOYEE_DELETED' AND entity_id = 'E001'")).toBe(1);
+    expect(cnt("SELECT COUNT(*) AS n FROM system_settings WHERE key = 'purge_employee'")).toBe(0);
+    // raw data of other employees is still append-only
+    expect(() => h.db.x('DELETE FROM attendance_events WHERE employee_id = ?', e2)).toThrow();
+  });
+});
+
 describe('roster history', () => {
   it('lists manual shift changes and one row per roster import, with who, when and why', async () => {
     const { h, e1 } = await fixture();

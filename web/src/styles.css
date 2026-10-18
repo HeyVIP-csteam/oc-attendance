@@ -352,3 +352,11 @@ table.grid td{white-space:normal}
 .rbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
 .rbar .sp{flex:1}
 @media (max-width:900px){.setrow{grid-template-columns:1fr;gap:8px}}
+
+/* employee actions */
+.btn.dis{color:var(--warn)}
+.btn.act{color:var(--ok)}
+.btn.danger{background:var(--bad);border-color:var(--bad);color:#fff}
+.btn.danger:disabled{opacity:.45;cursor:not-allowed}
+.delwarn{background:var(--badb);color:var(--bad);border-radius:8px;padding:8px 10px;font-size:12.5px}
+.dellist{margin:8px 0 12px;padding-left:18px;color:var(--grey);line-height:1.6}

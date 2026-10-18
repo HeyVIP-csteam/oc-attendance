@@ -44,11 +44,22 @@ export function Employees() {
       setImp({ grid, file: file.name, plan: r.plan });
     } catch (e) { toast(L('无法读取文件', 'Could not read the file') + ': ' + ((e as ApiErr).msg ? L((e as ApiErr).msg.zh, (e as ApiErr).msg.en) : (e as Error).message)); }
   };
+  const [del, setDel] = useState<EmpRow | null>(null);
   const deactivate = async (e: EmpRow) => {
-    const reason = prompt(L(`停用 ${e.employee_code} ${e.name}？历史考勤会保留。请输入原因：`, `Deactivate ${e.employee_code} ${e.name}? History is kept. Enter a reason:`));
+    const reason = prompt(L(`停用 ${e.employee_code} ${e.name}？历史考勤会保留。请输入原因：`, `Disable ${e.employee_code} ${e.name}? History is kept. Enter a reason:`));
     if (!reason) return;
-    try { await api(`/employees/${e.id}/deactivate`, { method: 'POST', body: { reason } }); toast(L('已停用', 'Deactivated')); await reloadMeta(); refresh(); }
+    try { await api(`/employees/${e.id}/deactivate`, { method: 'POST', body: { reason } }); toast(L('已停用', 'Disabled')); await reloadMeta(); refresh(); }
     catch (x) { alert(L((x as ApiErr).msg.zh, (x as ApiErr).msg.en)); }
+  };
+  const activate = async (e: EmpRow) => {
+    if (!confirm(L(`重新启用 ${e.employee_code} ${e.name}？`, `Activate ${e.employee_code} ${e.name} again?`))) return;
+    try {
+      const r = await api<{ topic: number | null; topicTaken: boolean }>(`/employees/${e.id}/activate`, { method: 'POST', body: {} });
+      toast(r.topic != null ? L(`已启用，Topic #${r.topic} 已恢复`, `Activated; topic #${r.topic} restored`)
+        : r.topicTaken ? L('已启用；原本的 Topic 已被别人使用，请按 Edit 绑定新的 Topic', 'Activated; the old topic is used by someone else — bind a new one with Edit')
+        : L('已启用', 'Activated'));
+      await reloadMeta(); refresh();
+    } catch (x) { alert(L((x as ApiErr).msg.zh, (x as ApiErr).msg.en)); }
   };
   return (
     <>
@@ -77,7 +88,9 @@ export function Employees() {
                 <td>{e.employment_status === 'ACTIVE' ? <span className="b ok">ACTIVE</span> : <span className="b">INACTIVE</span>}</td>
                 <td>{e.message_thread_id != null ? <><code>{e.chat_id}</code> / <b>#{e.message_thread_id}</b></> : <span className="b w">{L('未绑定 Topic', 'Topic not bound')}</span>}</td>
                 <td>{e.message_thread_id != null && <span className="b ok">{L('已验证', 'Verified')}</span>}</td>
-                <td><button className="btn sm" onClick={() => setHist(e.id)}>{L('历史', 'History')}</button>{!readOnly && <> <button className="btn sm" onClick={() => setEdit(e.id)}>{L('编辑', 'Edit')}</button> {e.employment_status === 'ACTIVE' && <button className="btn sm d" onClick={() => deactivate(e)}>{L('停用', 'Deactivate')}</button>}</>}</td>
+                <td><button className="btn sm" onClick={() => setHist(e.id)}>{L('历史', 'History')}</button>{!readOnly && <> <button className="btn sm" onClick={() => setEdit(e.id)}>{L('编辑', 'Edit')}</button> {e.employment_status === 'ACTIVE'
+                  ? <button className="btn sm dis" onClick={() => deactivate(e)}>{L('停用', 'Disable')}</button>
+                  : <button className="btn sm act" onClick={() => activate(e)}>{L('启用', 'Active')}</button>} <button className="btn sm d" onClick={() => setDel(e)}>{L('删除', 'Delete')}</button></>}</td>
               </tr>
             ))}
           </tbody></table></div>
@@ -87,7 +100,44 @@ export function Employees() {
       {edit != null && <EmployeeModal id={edit === 'new' ? null : edit} onClose={() => setEdit(null)} />}
       {hist != null && <HistoryModal id={hist} onClose={() => setHist(null)} />}
       {imp && <ImportModal {...imp} onClose={() => setImp(null)} />}
+      {del && <DeleteModal emp={del} onClose={() => setDel(null)} />}
     </>
+  );
+}
+
+function DeleteModal({ emp, onClose }: { emp: EmpRow; onClose: () => void }) {
+  const { L } = useI18n();
+  const { reloadMeta, refresh } = useData();
+  const [typed, setTyped] = useState('');
+  const [err, setErr] = useState<ApiErr | Error | null>(null);
+  const [busy, setBusy] = useState(false);
+  const ok = typed.trim() === emp.employee_code;
+  const go = async () => {
+    setBusy(true);
+    try {
+      await api(`/employees/${emp.id}/delete`, { method: 'POST', body: { confirm: typed.trim() } });
+      toast(L(`已删除 ${emp.employee_code}`, `${emp.employee_code} deleted`));
+      await reloadMeta(); refresh(); onClose();
+    } catch (e) { setErr(e as ApiErr); } finally { setBusy(false); }
+  };
+  return (
+    <Modal onClose={onClose}>
+      <h3 style={{ marginTop: 0, color: 'var(--bad)' }}>{L(`删除 ${emp.employee_code} ${emp.name}？`, `Delete ${emp.employee_code} ${emp.name}?`)}</h3>
+      <div className="delwarn">{L('删除后无法恢复。', 'This cannot be undone.')}</div>
+      <ul className="dellist">
+        <li>{L('员工资料和 Topic 绑定', 'The employee and their topic binding')}</li>
+        <li>{L('所有打卡、考勤、休息和异常', 'All punches, attendance, breaks and exceptions')}</li>
+        <li>{L('排班，以及他 Topic 里的 Telegram 消息', 'Roster shifts and Telegram messages from their topic')}</li>
+      </ul>
+      <div className="mut" style={{ fontSize: 12.5, marginBottom: 6 }}>{L('Audit Log 只会留下一行删除纪录（谁、何时、删除哪个 PSD ID）。', 'Only one line stays in the Audit Log (who deleted which PSD ID, and when).')}<br />
+        {L('请输入 ', 'Type ')}<b>{emp.employee_code}</b>{L(' 确认删除：', ' to confirm:')}</div>
+      <input autoFocus autoComplete="off" style={{ width: '100%' }} value={typed} onChange={(e) => setTyped(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && ok && !busy) void go(); }} />
+      <ErrBox error={err} />
+      <div className="modal-actions" style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
+        <button className="btn" onClick={onClose}>{L('取消', 'Cancel')}</button>
+        <button className="btn danger" disabled={!ok || busy} onClick={go}>{L('永久删除', 'Delete permanently')}</button>
+      </div>
+    </Modal>
   );
 }
 

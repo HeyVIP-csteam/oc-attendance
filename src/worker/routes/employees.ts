@@ -178,6 +178,78 @@ employeeRoutes.post('/employees/:id/deactivate', async (c) => {
   return c.json({ ok: true });
 });
 
+// ---------------------------------------------------------------- re-activate a disabled employee
+employeeRoutes.post('/employees/:id/activate', async (c) => {
+  requireAdminRole(c);
+  const id = intParam(c, 'id');
+  const db = c.env.DB;
+  const now = Date.now();
+  const actor = c.get('admin').username;
+  const e = await first<{ employee_code: string; employment_status: string }>(db, 'SELECT employee_code, employment_status FROM employees WHERE id = ?', id);
+  if (!e) throw notFound('Employee not found');
+  if (e.employment_status === 'ACTIVE') throw new ApiError(409, 'ALREADY_ACTIVE', { zh: '员工已是在职', en: 'Employee is already active' });
+  // the topic they had when they were disabled comes back, unless someone else uses it now
+  const last = await first<{ chat_id: number; message_thread_id: number }>(db,
+    'SELECT chat_id, message_thread_id FROM telegram_topic_mappings WHERE employee_id = ? ORDER BY valid_from DESC, id DESC LIMIT 1', id);
+  const taken = last ? await first(db, 'SELECT 1 AS x FROM telegram_topic_mappings WHERE chat_id = ? AND message_thread_id = ? AND is_active = 1', last.chat_id, last.message_thread_id) : null;
+  const rebind = !!last && !taken;
+  await db.batch([
+    stmt(db, "UPDATE employees SET employment_status = 'ACTIVE', deactivated_at = NULL, updated_at = ? WHERE id = ?", now, id),
+    ...(rebind ? [
+      stmt(db, `INSERT INTO telegram_topic_mappings (employee_id, chat_id, message_thread_id, valid_from, valid_until, is_active, created_by, created_at, updated_at)
+                VALUES (?, ?, ?, ?, NULL, 1, ?, ?, ?)`, id, last!.chat_id, last!.message_thread_id, now, actor, now, now),
+    ] : []),
+    auditStmt(db, { actor, action: 'EMPLOYEE_ACTIVATED', entityType: 'employee', entityId: e.employee_code, before: { status: 'INACTIVE' },
+      after: { status: 'ACTIVE', topic: rebind ? last!.message_thread_id : null }, ip: clientIp(c), at: now }),
+    stmt(db, "UPDATE system_settings SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT), updated_at = ? WHERE key = 'data_version'", now),
+  ]);
+  return c.json({ ok: true, topic: rebind ? last!.message_thread_id : null, topicTaken: !!last && !!taken });
+});
+
+// ---------------------------------------------------------------- permanent delete (test accounts): everything except the audit log
+employeeRoutes.post('/employees/:id/delete', async (c) => {
+  requireAdminRole(c);
+  const id = intParam(c, 'id');
+  const { confirm } = await body(c, z.object({ confirm: z.string().trim().max(32) }));
+  const db = c.env.DB;
+  const now = Date.now();
+  const actor = c.get('admin').username;
+  const e = await first<{ employee_code: string; name: string; currency_code: string | null; employment_status: string }>(db,
+    'SELECT employee_code, name, currency_code, employment_status FROM employees WHERE id = ?', id);
+  if (!e) throw notFound('Employee not found');
+  if (confirm !== e.employee_code) throw bad('CONFIRM', `请输入 ${e.employee_code} 确认删除`, `Type ${e.employee_code} to confirm`);
+  const [ev, msgs, sess] = await db.batch([
+    stmt(db, 'SELECT COUNT(*) AS n FROM attendance_events WHERE employee_id = ?', id),
+    stmt(db, 'SELECT COUNT(*) AS n FROM telegram_messages WHERE employee_id = ?', id),
+    stmt(db, 'SELECT COUNT(*) AS n FROM attendance_sessions WHERE employee_id = ?', id),
+  ]);
+  const n = (r: D1Result) => (r.results[0] as { n: number }).n;
+  // messages in their topic(s) that were never linked to anyone
+  const topicMsgs = `SELECT m.id FROM telegram_messages m JOIN telegram_topic_mappings t ON t.employee_id = ? AND t.chat_id = m.chat_id AND t.message_thread_id = m.message_thread_id
+                     WHERE m.employee_id IS NULL`;
+  const msgSet = `(SELECT id FROM telegram_messages WHERE employee_id = ? UNION ${topicMsgs})`;
+  const sid = String(id);
+  await db.batch([
+    stmt(db, "INSERT INTO system_settings (key, value, updated_at, updated_by) VALUES ('purge_employee', ?, ?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value", sid, now, actor),
+    stmt(db, `DELETE FROM attendance_exceptions WHERE employee_id = ? OR message_id IN ${msgSet}
+              OR event_id IN (SELECT id FROM attendance_events WHERE employee_id = ?)`, id, id, id, id),
+    stmt(db, 'DELETE FROM break_sessions WHERE session_id IN (SELECT id FROM attendance_sessions WHERE employee_id = ?)', id),
+    stmt(db, 'DELETE FROM attendance_sessions WHERE employee_id = ?', id),
+    stmt(db, 'DELETE FROM attendance_events WHERE employee_id = ?', id),
+    stmt(db, 'DELETE FROM attendance_adjustments WHERE employee_id = ?', id),
+    stmt(db, `DELETE FROM telegram_messages WHERE id IN ${msgSet}`, id, id),
+    stmt(db, 'DELETE FROM shift_instances WHERE employee_id = ?', id),
+    stmt(db, 'DELETE FROM employee_shift_assignments WHERE employee_id = ?', id),
+    stmt(db, 'DELETE FROM telegram_topic_mappings WHERE employee_id = ?', id),
+    stmt(db, 'DELETE FROM employees WHERE id = ?', id),
+    stmt(db, "DELETE FROM system_settings WHERE key = 'purge_employee'"),
+    auditStmt(db, { actor, action: 'EMPLOYEE_DELETED', entityType: 'employee', entityId: e.employee_code,
+      before: { name: e.name, currency: e.currency_code, status: e.employment_status, events: n(ev), messages: n(msgs), sessions: n(sess) }, ip: clientIp(c), at: now }),
+    stmt(db, "UPDATE system_settings SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT), updated_at = ? WHERE key = 'data_version'", now),
+  ]);
+  return c.json({ ok: true });
+});
+
 // ---------------------------------------------------------------- export / import (PSD ID, Employee Name, Currency, Chat ID, Thread ID)
 employeeRoutes.get('/export/employees', async (c) => {
   const f = query(c, z.object({ q: z.string().max(80).optional().default(''), cur: z.string().trim().toUpperCase().max(10).optional().default(''), status: z.enum(['', 'ACTIVE', 'INACTIVE']).optional().default('') }));
