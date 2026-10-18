@@ -40,7 +40,7 @@ export interface TgUpdate { update_id: number; message?: TgMessage; edited_messa
 
 export interface IngestResult { http: number; status: string; codes: string[]; event?: EventType; reply?: string | null }
 
-interface MappingRow { employee_id: number; employee_code: string; name: string; currency_code: string | null; employment_status: string; deactivated_at: number | null; emp_bot_id: number | null; emp_bot_status: string | null }
+interface MappingRow { employee_id: number; employee_code: string; name: string; currency_code: string | null; employment_status: string; deactivated_at: number | null; emp_tg_bot: number | null; emp_cur_status: string | null }
 
 export const IDENTITY_CODES = ['UNTRUSTED_SOURCE', 'NO_TOPIC', 'WRONG_TOPIC_UNMAPPED', 'INACTIVE_EMPLOYEE'] as const;
 
@@ -53,7 +53,7 @@ export function identify(msg: Pick<TgMessage, 'forward_origin' | 'forward_date' 
   return { ok: true, employeeId: mapping.employee_id };
 }
 
-export const mappingSql = `SELECT m.employee_id, e.employee_code, e.name, e.currency_code, e.employment_status, e.deactivated_at, b.id AS emp_bot_id, b.status AS emp_bot_status
+export const mappingSql = `SELECT m.employee_id, e.employee_code, e.name, e.currency_code, e.employment_status, e.deactivated_at, b.tg_bot_id AS emp_tg_bot, b.status AS emp_cur_status
   FROM telegram_topic_mappings m JOIN employees e ON e.id = m.employee_id LEFT JOIN telegram_bots b ON b.currency_code = e.currency_code
   WHERE m.chat_id = ? AND m.message_thread_id = ? AND m.valid_from <= ? AND (m.valid_until IS NULL OR m.valid_until > ?)
   ORDER BY m.valid_from DESC LIMIT 1`;
@@ -104,9 +104,12 @@ export async function ingestUpdate(env: Env, bot: BotRow, upd: TgUpdate, receive
   if (!allowed) return { http: 200, status: 'IGNORED_CHAT', codes: [] };
 
   // Several currency bots may sit in one group: the bot of the employee's currency handles that employee's topic.
-  if (mapping && mapping.emp_bot_id != null && mapping.emp_bot_id !== bot.id && mapping.emp_bot_status === 'ACTIVE') {
+  // the employee's currency runs on a different bot that is in this group too: let that bot handle it
+  if (mapping && mapping.emp_tg_bot != null && mapping.emp_tg_bot !== bot.tg_bot_id && mapping.emp_cur_status === 'ACTIVE') {
     return { http: 200, status: 'IGNORED_OTHER_BOT', codes: [] };
   }
+  // the employee's currency is stopped in Bot Setting (each currency can be stopped on its own, even when it shares a bot)
+  if (mapping && mapping.emp_cur_status === 'DISABLED') return { http: 200, status: 'IGNORED_CURRENCY_STOPPED', codes: [] };
 
   const idx = buildKeywordIndex(settings.keywords, settings.parser);
   const parsed = parseText(text, idx);

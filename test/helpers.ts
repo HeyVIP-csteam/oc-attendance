@@ -19,6 +19,8 @@ export class Harness {
   cookie = '';
   tg: TgCall[] = [];
   webhooks = new Map<string, string>();
+  /** Telegram methods that fail with a network error (to simulate Telegram being unreachable). */
+  failing = new Set<string>();
   pending: Promise<unknown>[] = [];
   private seq = 1000;
 
@@ -33,6 +35,7 @@ export class Harness {
     const m = url.match(/^https:\/\/api\.telegram\.org\/bot(\d+):[^/]+\/(\w+)$/);
     if (!m) throw new Error(`unexpected fetch ${url}`);
     const [, botId, method] = m;
+    if (this.failing.has(method)) throw new TypeError('fetch failed');
     const body = init?.body ? JSON.parse(String(init.body)) : {};
     this.tg.push({ method, body });
     const ok = (result: unknown) => new Response(JSON.stringify({ ok: true, result }), { headers: { 'content-type': 'application/json' } });
@@ -82,8 +85,8 @@ export class Harness {
   }
 
   async secretFor(code = 'LKR') {
-    const b = this.db.get<{ id: number; secret_salt: string }>('SELECT id, secret_salt FROM telegram_bots WHERE currency_code = ?', code)!;
-    return webhookSecret(KEY, b.id, b.secret_salt);
+    const b = this.db.get<{ id: number; secret_ref: number | null; secret_salt: string }>('SELECT id, secret_ref, secret_salt FROM telegram_bots WHERE currency_code = ?', code)!;
+    return webhookSecret(KEY, b.secret_ref ?? b.id, b.secret_salt);
   }
 
   async employee(code: string, name: string, thread: number | null, currency = 'LKR') {

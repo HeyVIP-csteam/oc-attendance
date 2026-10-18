@@ -421,10 +421,8 @@ describe('security (test 17)', () => {
     expect(String(setWebhook.body.secret_token)).toMatch(/^[A-Za-z0-9_-]{40,}$/);
   });
 
-  it('each currency needs its own bot; deleting a currency in use is refused', async () => {
+  it('deleting a currency in use is refused', async () => {
     const { h } = await fixture();
-    const dup = await h.req('PUT', '/api/bots/MYR', { token: `700000001:AAH${'x'.repeat(32)}`, webhookUrl: 'https://att.example.com/api/telegram/webhook/myr' });
-    expect(dup.status).toBe(409);
     expect((await h.req('DELETE', '/api/currencies/LKR')).status).toBe(409);
     expect((await h.req('DELETE', '/api/currencies/USD')).status).toBe(200);
   });
@@ -518,6 +516,158 @@ describe('chat id input', () => {
     expect(r.status).toBe(200);
     expect(h.db.get('SELECT chat_id FROM telegram_topic_mappings WHERE message_thread_id = 28')).toEqual({ chat_id: CHAT });
     expect((await h.send({ text: 'IN', ts: lk(D, '07:00'), thread: 28 })).json.status).toBe('PROCESSED');
+  });
+});
+
+describe('bot shared with another system (one webhook per bot at Telegram)', () => {
+  const TBC = 'https://tbc-csteam.pages.dev/api/telegram-webhook/lkr';
+  const BOT = '700000001'; // LKR bot of the fixture
+  const tbcTakesBot = (h: Harness) => h.webhooks.set(BOT, TBC);
+  const deletes = (h: Harness) => h.tg.filter((t) => t.method === 'deleteWebhook').length;
+
+  it('clean leaves another system\'s webhook untouched', async () => {
+    const { h } = await fixture();
+    tbcTakesBot(h);
+    const r = await h.req('POST', '/api/bots/LKR/clean');
+    expect(r.status).toBe(200);
+    expect(r.json).toMatchObject({ webhook: 'other', url: TBC, webhookRemoved: false });
+    expect(h.webhooks.get(BOT)).toBe(TBC);
+    expect(deletes(h)).toBe(0);
+    expect(h.db.get("SELECT status FROM telegram_bots WHERE currency_code = 'LKR'")).toEqual({ status: 'NOT_SET' });
+  });
+
+  it('clean removes the webhook when it points at oc-attendance', async () => {
+    const { h } = await fixture();
+    const r = await h.req('POST', '/api/bots/LKR/clean');
+    expect(r.json).toMatchObject({ webhook: 'removed', webhookRemoved: true });
+    expect(h.webhooks.has(BOT)).toBe(false);
+  });
+
+  it('clean stops (keeps the token) when Telegram cannot be reached, unless forced', async () => {
+    const { h } = await fixture();
+    h.failing.add('getWebhookInfo');
+    const r = await h.req('POST', '/api/bots/LKR/clean', {});
+    expect(r.status).toBe(502);
+    expect(r.json.error).toBe('TELEGRAM_UNREACHABLE');
+    expect(h.db.get("SELECT status FROM telegram_bots WHERE currency_code = 'LKR'")).toEqual({ status: 'ACTIVE' });
+    const f = await h.req('POST', '/api/bots/LKR/clean', { force: true });
+    expect(f.status).toBe(200);
+    expect(f.json.webhook).toBe('unreachable');
+  });
+
+  it('stop leaves another system\'s webhook untouched', async () => {
+    const { h } = await fixture();
+    tbcTakesBot(h);
+    const r = await h.req('POST', '/api/bots/LKR/stop');
+    expect(r.status).toBe(200);
+    expect(r.json).toMatchObject({ webhook: 'other', url: TBC });
+    expect(h.webhooks.get(BOT)).toBe(TBC);
+    expect(h.db.get("SELECT status FROM telegram_bots WHERE currency_code = 'LKR'")).toEqual({ status: 'DISABLED' });
+  });
+
+  it('start and rotate refuse to take the bot back from another system', async () => {
+    const { h } = await fixture();
+    await h.req('POST', '/api/bots/LKR/stop');
+    tbcTakesBot(h);
+    const s = await h.req('POST', '/api/bots/LKR/start');
+    expect(s.status).toBe(409);
+    expect(s.json.error).toBe('BOT_IN_USE');
+    expect((await h.req('POST', '/api/bots/LKR/rotate')).status).toBe(409);
+    expect(h.webhooks.get(BOT)).toBe(TBC);
+  });
+
+  it('saving a bot that belongs to another system needs explicit confirmation', async () => {
+    const { h } = await fixture();
+    h.webhooks.set('700000005', TBC);
+    const body = { token: `700000005:AAH${'y'.repeat(32)}`, webhookUrl: 'https://att.example.com/api/telegram/webhook/usd' };
+    const r = await h.req('PUT', '/api/bots/USD', body);
+    expect(r.status).toBe(409);
+    expect(r.json).toMatchObject({ error: 'BOT_IN_USE', url: TBC });
+    expect(h.webhooks.get('700000005')).toBe(TBC);
+    expect(h.db.get("SELECT status FROM telegram_bots WHERE currency_code = 'USD'")).toEqual({ status: 'NOT_SET' });
+    const f = await h.req('PUT', '/api/bots/USD', { ...body, force: true });
+    expect(f.status).toBe(200);
+    expect(h.webhooks.get('700000005')).toBe(body.webhookUrl);
+  });
+
+  it('deleting a currency never removes another system\'s webhook', async () => {
+    const { h } = await fixture();
+    await h.setupBot('USD', 700000006);
+    h.webhooks.set('700000006', TBC);
+    expect((await h.req('DELETE', '/api/currencies/USD')).status).toBe(200);
+    expect(h.webhooks.get('700000006')).toBe(TBC);
+  });
+});
+
+describe('one bot for several currencies', () => {
+  const TOK = `700000001:AAH${'x'.repeat(32)}`; // the fixture's LKR bot
+  const save = (h: Harness, code: string, tok = TOK) => h.req('PUT', `/api/bots/${code}`, { token: tok, webhookUrl: `https://att.example.com/api/telegram/webhook/${code.toLowerCase()}` });
+  const row = (h: Harness, code: string) => h.db.get<Record<string, any>>('SELECT status, tg_bot_id, webhook_url, tg_url FROM telegram_bots WHERE currency_code = ?', code)!;
+  const sets = (h: Harness) => h.tg.filter((t) => t.method === 'setWebhook').length;
+
+  it('a bot set up under one currency also records employees of currencies that have no bot of their own', async () => {
+    const { h } = await fixture(); // only the LKR bot is set up
+    const m = await h.employee('M001', 'Myr Person', 1101, 'MYR');
+    await h.roster(m, D, 'A');
+    expect((await h.send({ text: 'IN', ts: lk(D, '07:00'), thread: 1101, code: 'LKR' })).json.status).toBe('PROCESSED');
+  });
+
+  it('every currency can save the same bot; nothing is reconnected at Telegram', async () => {
+    const { h } = await fixture();
+    const before = sets(h);
+    expect((await save(h, 'MYR')).status).toBe(200);
+    expect((await save(h, 'USD')).status).toBe(200);
+    expect(sets(h)).toBe(before); // already connected to oc-attendance: no setWebhook
+    expect(row(h, 'MYR')).toMatchObject({ status: 'ACTIVE', tg_bot_id: 700000001 });
+    expect(h.webhooks.get('700000001')).toContain('/webhook/lkr');
+    const list = (await h.req('GET', '/api/bots')).json.rows;
+    expect(new Set(list.map((x: any) => x.username))).toEqual(new Set(['att_700000001_bot']));
+    expect(new Set(list.map((x: any) => x.webhookUrl)).size).toBe(1);
+    const m = await h.employee('M002', 'Myr Two', 1102, 'MYR');
+    await h.roster(m, D, 'A');
+    expect((await h.send({ text: 'IN', ts: lk(D, '07:00'), thread: 1102 })).json.status).toBe('PROCESSED');
+    expect((await h.req('POST', '/api/bots/MYR/check')).json.lastError).toBeNull();
+  });
+
+  it('each currency is stopped and started on its own', async () => {
+    const { h, e1 } = await fixture();
+    await save(h, 'MYR');
+    const m = await h.employee('M003', 'Myr Three', 1104, 'MYR');
+    for (const e of [e1, m]) await h.roster(e, D, 'A');
+    expect((await h.req('POST', '/api/bots/MYR/stop')).json.webhook).toBe('kept');
+    expect((await h.send({ text: 'IN', ts: lk(D, '07:00'), thread: 1104 })).json.status).toBe('IGNORED_CURRENCY_STOPPED');
+    expect((await h.send({ text: 'IN', ts: lk(D, '07:01'), thread: 1001 })).json.status).toBe('PROCESSED'); // LKR unaffected
+    expect((await h.req('POST', '/api/bots/MYR/start')).status).toBe(200);
+    expect((await h.req('POST', '/api/bots/LKR/stop')).json.webhook).toBe('kept'); // MYR still runs on it
+    expect((await h.send({ text: 'IN', ts: lk(D, '07:02'), thread: 1104 })).json.status).toBe('PROCESSED');
+    expect((await h.send({ text: 'OUT', ts: lk(D, '15:00'), thread: 1001 })).json.status).toBe('IGNORED_CURRENCY_STOPPED');
+    expect((await h.req('POST', '/api/bots/MYR/stop')).json.webhook).toBe('removed'); // nobody runs on it any more
+    expect(h.webhooks.has('700000001')).toBe(false);
+    expect((await h.req('POST', '/api/bots/MYR/start')).status).toBe(200); // explicit admin action reconnects
+    expect((await h.send({ text: 'OUT', ts: lk(D, '15:01'), thread: 1104, code: 'MYR' })).json.status).toBe('PROCESSED');
+  });
+
+  it('switching or cleaning one currency never touches the others and never reconnects the old bot', async () => {
+    const { h } = await fixture();
+    await save(h, 'MYR');
+    await save(h, 'USD');
+    const m = await h.employee('M004', 'Myr Four', 1105, 'MYR');
+    const u = await h.employee('U004', 'Usd Four', 1106, 'USD');
+    for (const e of [m, u]) await h.roster(e, D, 'A');
+    // LKR moves to a new bot: the old bot stays as it is (still used by MYR and USD), nothing re-registered for it
+    const before = sets(h);
+    expect((await save(h, 'LKR', `700000008:AAH${'q'.repeat(32)}`)).json.oldBot).toBe('kept');
+    expect(sets(h)).toBe(before + 1); // only the NEW bot was connected
+    expect(h.webhooks.get('700000001')).toContain('/webhook/lkr'); // old bot untouched
+    expect((await h.send({ text: 'IN', ts: lk(D, '07:00'), thread: 1105, secret: await h.secretFor('MYR') })).json.status).toBe('PROCESSED');
+    // MYR is cleaned: USD keeps working, Telegram not touched
+    expect((await h.req('POST', '/api/bots/MYR/clean')).json.webhook).toBe('kept');
+    expect(h.webhooks.get('700000001')).toContain('/webhook/lkr');
+    expect((await h.send({ text: 'IN', ts: lk(D, '07:01'), thread: 1106, secret: await h.secretFor('USD') })).json.status).toBe('PROCESSED');
+    // the last currency using the old bot is cleaned: only now it is disconnected (it pointed at oc-attendance)
+    expect((await h.req('POST', '/api/bots/USD/clean')).json.webhook).toBe('removed');
+    expect(h.webhooks.has('700000001')).toBe(false);
+    expect(h.webhooks.get('700000008')).toContain('/webhook/lkr'); // LKR's new bot unaffected
   });
 });
 

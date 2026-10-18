@@ -39,7 +39,7 @@ export interface BotRow {
   id: number; currency_code: string; bot_user_id: number | null; username: string | null; token_ciphertext: string | null; token_last4: string | null;
   secret_salt: string; webhook_url: string | null; status: 'NOT_SET' | 'ACTIVE' | 'DISABLED' | 'ERROR';
   can_read_all_group_messages: number | null; pending_update_count: number | null; last_error: string | null; last_checked_at: number | null;
-  updated_at: number;
+  updated_at: number; shared_from?: string | null; tg_bot_id: number | null; secret_ref: number | null; tg_url: string | null;
 }
 
 /** Bot token: a Cloudflare secret TELEGRAM_BOT_TOKEN_<CODE> takes precedence over the encrypted copy in D1. */

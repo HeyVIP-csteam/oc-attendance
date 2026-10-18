@@ -3,7 +3,7 @@ import type { AppBindings } from '../env';
 import { log } from '../lib/audit';
 import { ConfigError, redact, safeEqual, webhookSecret } from '../lib/crypto';
 import { ingestUpdate, type TgUpdate } from '../lib/ingest';
-import { botToken, loadBot, sendReply } from '../lib/telegram';
+import { type BotRow, botToken, loadBot, sendReply } from '../lib/telegram';
 
 export const webhookRoutes = new Hono<AppBindings>();
 
@@ -18,23 +18,30 @@ webhookRoutes.post('/webhook/:code', async (c) => {
   const receivedAt = Date.now();
   const code = c.req.param('code').toUpperCase();
   if (!/^[A-Z0-9]{2,10}$/.test(code)) return c.json({ ok: false }, 404);
-  const bot = await loadBot(c.env.DB, code);
-  // A NOT_SET bot is accepted when the secret matches: right after "Save", Telegram may deliver queued
-  // updates before the ACTIVE status is written, and a 404 there would show up as a webhook error.
-  if (!bot) return c.json({ ok: false }, 404);
-
-  let expected: string;
-  try { expected = await webhookSecret(c.env.ENCRYPTION_KEY, bot.id, bot.secret_salt); }
-  catch (e) {
+  const db = c.env.DB;
+  const pathBot = await loadBot(db, code);
+  if (!pathBot) return c.json({ ok: false }, 404);
+  const got = c.req.header('x-telegram-bot-api-secret-token') ?? '';
+  // The update belongs to the bot whose webhook secret it carries. Several currencies may use one bot (they share the
+  // secret), so the URL it arrives on does not matter. A NOT_SET row whose secret matches is accepted too: right
+  // after "Save", Telegram may deliver queued updates before the ACTIVE status is written.
+  let matches: BotRow[] = [];
+  try {
+    const secretOf = (b: BotRow) => webhookSecret(c.env.ENCRYPTION_KEY, b.secret_ref ?? b.id, b.secret_salt);
+    if (safeEqual(got, await secretOf(pathBot))) matches.push(pathBot);
+    const others = await db.prepare("SELECT * FROM telegram_bots WHERE id <> ? AND (status <> 'NOT_SET' OR secret_ref = ? OR id = ?)").bind(pathBot.id, pathBot.secret_ref ?? pathBot.id, pathBot.secret_ref ?? -1).all<BotRow>();
+    for (const b of others.results ?? []) if (safeEqual(got, await secretOf(b))) matches.push(b);
+  } catch (e) {
     log('error', 'webhook_config', { bot: code, error: e instanceof ConfigError ? e.message : 'secret derivation failed' });
     return c.json({ ok: false }, 500);
   }
-  const got = c.req.header('x-telegram-bot-api-secret-token') ?? '';
-  if (!safeEqual(got, expected)) {
+  if (!matches.length) {
     log('warn', 'webhook_bad_secret', { bot: code });
     return c.json({ ok: false }, 401);
   }
-  if (bot.status === 'DISABLED') return c.json({ ok: false, status: 'BOT_STOPPED' }, 503);
+  // prefer a running currency of this bot; only when every currency using it is stopped is the update refused
+  const bot = matches.find((b) => b.status === 'ACTIVE') ?? matches.find((b) => b.status === 'NOT_SET' || b.status === 'ERROR');
+  if (!bot) return c.json({ ok: false, status: 'BOT_STOPPED' }, 503);
 
   const len = Number(c.req.header('content-length') ?? '0');
   if (len > MAX_BODY) return c.json({ ok: true, status: 'IGNORED_TOO_LARGE' });

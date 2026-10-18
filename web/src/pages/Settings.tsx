@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { DEFAULT_PARSER, EVENT_LABEL, EVENT_TYPES, type KeywordConfig, type ParserRules } from '../../../src/shared/codes';
 import { toMin } from '../../../src/shared/time';
 import { Empty, ErrBox, Field, Modal, ModalActions, Mut, Tabs } from '../components/ui';
-import { api, type ApiErr } from '../lib/api';
+import { api, ApiErr } from '../lib/api';
 import { fmtDT } from '../lib/format';
 import { useI18n } from '../lib/i18n';
 import { toast, useApi, useData, usePageState } from '../lib/store';
@@ -198,10 +198,11 @@ function Bots() {
   const onErr = useErr();
   const st = (s: string) => ({ NOT_SET: [L('未设置', 'Not set'), ''], ACTIVE: [L('运行中', 'Active'), 'ok'], ERROR: [L('错误', 'Error'), 'r'], DISABLED: [L('已停用', 'Stopped'), 'w'] } as Record<string, string[]>)[s] ?? ['—', ''];
   const act = async (b: BotView, a: 'check' | 'stop' | 'start') => {
-    if (a === 'stop' && !confirm(L(`停用 ${b.currency} 的 Webhook？这个 Bot 将不再接收打卡消息。`, `Stop the ${b.currency} webhook? This bot will stop receiving punches.`))) return;
+    if (a === 'stop' && !confirm(L(`停用 ${b.currency}？${b.currency} 员工的打卡将不再被记录，其他货币不受影响。`, `Stop ${b.currency}? Punches of ${b.currency} employees will no longer be recorded; other currencies are not affected.`))) return;
     try {
-      await api(`/bots/${b.currency}/${a}`, { method: 'POST' });
-      toast(a === 'check' ? L(`${b.currency} 状态已更新`, `${b.currency} status updated`) : a === 'stop' ? L(`${b.currency} 的 Webhook 已停用`, `${b.currency} webhook stopped`) : L(`${b.currency} 的 Webhook 已启动`, `Webhook started for ${b.currency}`));
+      const r = await api<{ webhook?: string; url?: string }>(`/bots/${b.currency}/${a}`, { method: 'POST' });
+      toast(a === 'check' ? L(`${b.currency} 状态已更新`, `${b.currency} status updated`) : a === 'stop' ? L(`${b.currency} 已停用`, `${b.currency} stopped`) : L(`${b.currency} 的 Webhook 已启动`, `Webhook started for ${b.currency}`));
+      if (a === 'stop' && r.webhook === 'other') alert(L(`${b.currency} 已在 oc-attendance 停用。\n\n这个 Bot 目前连接在其他系统（${r.url}），所以没有删除它的 Webhook，那个系统不受影响。`, `${b.currency} is stopped in oc-attendance.\n\nThis bot is connected to another system (${r.url}), so its webhook was left untouched.`));
     } catch (e) { onErr(e); }
     await reload();
   };
@@ -209,8 +210,16 @@ function Bots() {
     if (!confirm(L(`清除 ${b.currency} 的 Bot 资料？\n\n会删除：Bot Token、Bot 账号、Webhook，状态回到「未设置」。\n不会删除：员工、考勤记录、消息记录。\n\n之后可以按「设置」重新绑定新的 Bot。`,
       `Clean the ${b.currency} bot?\n\nRemoves: bot token, bot account and webhook; status returns to "Not set".\nKeeps: employees, attendance and messages.\n\nYou can set up a new bot afterwards.`))) return;
     try {
-      const r = await api<{ secretTokenRemains: boolean }>(`/bots/${b.currency}/clean`, { method: 'POST' });
+      type CleanRes = { secretTokenRemains: boolean; webhook: string; url?: string };
+      let r: CleanRes;
+      try { r = await api<CleanRes>(`/bots/${b.currency}/clean`, { method: 'POST', body: {} }); }
+      catch (e) {
+        if (!(e instanceof ApiErr) || e.code !== 'TELEGRAM_UNREACHABLE') throw e;
+        if (!confirm(L(`${e.msg.zh}\n\n如果这个 Bot 的 Token 已经失效（例如已在 BotFather 更换），可以仍然清除。要仍然清除吗？`, `${e.msg.en}\n\nIf the token is no longer valid (e.g. revoked in BotFather) you can clean anyway. Clean anyway?`))) { await reload(); return; }
+        r = await api<CleanRes>(`/bots/${b.currency}/clean`, { method: 'POST', body: { force: true } });
+      }
       toast(L(`${b.currency} 的 Bot 资料已清除`, `${b.currency} bot cleaned`));
+      if (r.webhook === 'other') alert(L(`${b.currency} 已在 oc-attendance 清除。\n\n这个 Bot 目前连接在其他系统（${r.url}），所以没有删除它的 Webhook，那个系统不受影响。`, `${b.currency} is cleaned in oc-attendance.\n\nThis bot is connected to another system (${r.url}), so its webhook was left untouched.`));
       if (r.secretTokenRemains) alert(L(`注意：Cloudflare 里还有 TELEGRAM_BOT_TOKEN_${b.currency} 这个 Secret，需要到 Cloudflare 删除。`, `Note: the Cloudflare secret TELEGRAM_BOT_TOKEN_${b.currency} still exists; delete it in Cloudflare.`));
     } catch (e) { onErr(e); }
     await reload();
@@ -262,9 +271,17 @@ function BotModal({ b, onClose }: { b: BotView; onClose: () => void }) {
     if (!/^https:\/\/[^\s/]+\.[^\s]+$/.test(url.trim())) return setErr(new Error(L('Webhook URL 必须是 https:// 开头的网址', 'Webhook URL must start with https://')));
     setBusy(true);
     try {
-      const r = await api<{ canReadAllGroupMessages: boolean }>(`/bots/${b.currency}`, { method: 'PUT', body: { token: token.trim(), webhookUrl: url.trim() } });
+      const put = (force: boolean) => api<{ canReadAllGroupMessages: boolean }>(`/bots/${b.currency}`, { method: 'PUT', body: { token: token.trim(), webhookUrl: url.trim(), force } });
+      let r: { canReadAllGroupMessages: boolean };
+      try { r = await put(false); }
+      catch (e) {
+        if (!(e instanceof ApiErr) || e.code !== 'BOT_IN_USE') throw e;
+        // the bot already belongs to another system (e.g. the CS reply tool): only continue on explicit confirmation
+        if (!confirm(L(`⚠️ ${e.msg.zh}\n\n通常这表示填错了 Token：考勤系统应使用自己专用的 Bot。\n\n确定要把这个 Bot 改连到 oc-attendance 吗？`, `⚠️ ${e.msg.en}\n\nThis usually means the wrong token: the attendance system should use its own bot.\n\nMove this bot to oc-attendance anyway?`))) { setBusy(false); return; }
+        r = await put(true);
+      }
       setToken('');
-      toast(L(`${b.currency} 的 Webhook 已启动`, `Webhook started for ${b.currency}`));
+      toast(L(`${b.currency} 的 Bot 已设置`, `${b.currency} bot is set up`));
       if (!r.canReadAllGroupMessages) alert(L('提醒：这个 Bot 的 Privacy Mode 仍是开启状态，读不到群组里的普通文字。请到 @BotFather → /setprivacy → Disable，然后把 Bot 移出群组再重新加入。', 'Note: this bot still has Privacy Mode on and cannot read plain group messages. In @BotFather run /setprivacy → Disable, then remove the bot from the group and add it again.'));
       onClose();
     } catch (e) { setErr(e as ApiErr); } finally { setBusy(false); }
