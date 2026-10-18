@@ -93,11 +93,6 @@ function Roster({ f, set }: { f: { from: string; to: string; cur: string; page: 
       {data && (
         <>
           <TblTop left={<Cnt n={data.total} />} size={f.size} onSize={(size) => set({ size, page: 1 })} />
-          <div className="rlegend">
-            {meta.shifts.filter((s) => s.is_active).map((s) => <span key={s.code}><span className={`cell ${s.code}`}>{s.code}</span>{s.name}</span>)}
-            {(meta.rosterCodes ?? []).map((c) => <span key={c.code}><span className="cell mark" style={rc(c.code)?.style}>{c.code}</span>{c.name}</span>)}
-            <span><span className="cell none">–</span>{L('未排班', 'Not scheduled')}</span>
-          </div>
           <div className={`tw roster ${compact ? 'compact' : ''}`} style={{ ['--ridw' as string]: `${Math.max(72, Math.ceil(Math.max(0, ...data.employees.map((e) => e.employee_code.length)) * 8.6) + 22)}px` }}><table><thead><tr>
             <th className="rid">{L('PSD ID', 'PSD ID')}</th><th className="rname">{L('员工姓名', 'Employee Name')}</th>{!f.cur && <th>{L('货币', 'Currency')}</th>}
             {days.map((d) => <th key={d} className={`${d === t ? 'today' : ''} ${[0, 6].includes(weekday(d)) ? 'wkend' : ''}`}>{compact ? <><span className="dw">{wd(d)}</span>{Number(d.slice(8))}</> : `${wd(d)} ${d.slice(5)}`}</th>)}
