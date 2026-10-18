@@ -10,7 +10,7 @@ export interface Meta {
   shifts: MetaShift[];
   employees: MetaEmployee[];
   keywords: Record<'CLOCK_IN' | 'BREAK_START' | 'BREAK_END' | 'CLOCK_OUT', string[]>;
-  rules: { windowHours: number; lateAsException: boolean; botReply: boolean };
+  rules: { windowHours: number; lateAsException: boolean; botReply: boolean; otHours?: number };
   parser?: { skipLabels: string[]; typoTolerance: boolean; ignoreBrackets: boolean; typedTimeReview: boolean };
   dataVersion: number;
 }

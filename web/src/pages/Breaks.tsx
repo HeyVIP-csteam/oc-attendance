@@ -38,15 +38,15 @@ export function Breaks() {
               const o = open[r.session_id];
               return (
                 <Fragment key={r.session_id}>
-                  <tr className="cl" onClick={() => setOpen({ ...open, [r.session_id]: !o })}>
-                    <td className="nw pid"><span className="mut" style={{ display: 'inline-block', width: 14 }}>{o ? '▾' : '▸'}</span><b>{r.employee_code}</b></td><td>{r.name}</td><td>{r.work_date}</td><td>{r.shift_name ?? L('未排班', 'No schedule')}</td>
+                  <tr className={`cl brm ${o ? 'open' : ''}`} onClick={() => setOpen({ ...open, [r.session_id]: !o })}>
+                    <td className="nw pid"><span className="arw">▶</span><b>{r.employee_code}</b></td><td>{r.name}</td><td>{r.work_date}</td><td>{r.shift_name ?? L('未排班', 'No schedule')}</td>
                     <td className="n">{r.break_count}{r.open_break_count > 0 && <> <span className="b r">+{r.open_break_count}</span></>}</td><td className="n">{fmtDur(r.total_break_ms)}</td>
                     <td>{r.open_break_count ? <span className="b w">{L('休息中', 'On break')}</span> : <span className="b ok">{L('全部结束', 'All closed')}</span>}</td>
                     <td className="c">{r.break_exceeded == null ? <Mut /> : r.break_exceeded ? <span className="b w">{L('是', 'Yes')}</span> : <span className="b ok">{L('否', 'No')}</span>}</td>
                   </tr>
-                  {o && (bySession.get(r.session_id) ?? []).map((b) => (
-                    <tr key={`${r.session_id}-${b.seq}`}><td></td><td className="mut">Break #{b.seq}</td><td>{b.remark ? <span className="b i" title={L('员工消息', 'Employee message')}>{b.remark}</span> : <span className="mut">—</span>}</td>
-                      <td>{fmtT(b.start_at)} → {b.end_at ? fmtT(b.end_at) : <span className="b r">{L('未结束', 'Open')}</span>}</td><td></td><td className="n">{fmtDur(b.duration_ms)}</td><td>{b.status}</td><td></td></tr>
+                  {o && (bySession.get(r.session_id) ?? []).map((b, j, all) => (
+                    <tr key={`${r.session_id}-${b.seq}`} className={`brd ${j === all.length - 1 ? 'last' : ''}`}><td></td><td className="tl mut">Break #{b.seq}</td><td>{b.remark ? <span className="b i" title={L('员工消息', 'Employee message')}>{b.remark}</span> : <span className="mut">—</span>}</td>
+                      <td>{fmtT(b.start_at)} → {b.end_at ? fmtT(b.end_at) : <span className="b r">{L('未结束', 'Open')}</span>}</td><td></td><td className="n">{fmtDur(b.duration_ms)}</td><td>{b.status === 'OPEN' ? <span className="b r">{L('未结束', 'Open')}</span> : L('已结束', 'Closed')}</td><td></td></tr>
                   ))}
                 </Fragment>
               );

@@ -704,6 +704,21 @@ describe('roster hides deactivated employees', () => {
   });
 });
 
+describe('roster OT tag', () => {
+  it('worked on a day off, or on shift longer than the OT threshold → listed as OT', async () => {
+    const { h, e1, e2 } = await fixture();
+    await h.roster(e1, D, 'A'); // A = 07:00–15:00
+    await h.send({ text: 'IN', ts: lk(D, '05:00'), thread: 1001 });
+    await h.send({ text: 'OUT', ts: lk(D, '15:30'), thread: 1001 }); // 10h30m on shift
+    await h.send({ text: 'IN', ts: lk(D, '09:00'), thread: 1002 }); // E002 has no shift: day off
+    const r = await h.req('GET', `/api/roster?from=${D}&to=${D}`);
+    const ot = r.json.ot.map((o: any) => [o.employee_id, o.kind]).sort();
+    expect(ot).toEqual([[e1, 'LONG'], [e2, 'OFF']].sort());
+    await h.req('PUT', '/api/settings/rules', { windowHours: 4, lateAsException: false, botReply: true, otHours: 11 });
+    expect((await h.req('GET', `/api/roster?from=${D}&to=${D}`)).json.ot.map((o: any) => o.employee_id)).toEqual([e2]);
+  });
+});
+
 describe('roster history', () => {
   it('lists manual shift changes and one row per roster import, with who, when and why', async () => {
     const { h, e1 } = await fixture();

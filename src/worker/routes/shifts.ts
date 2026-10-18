@@ -125,9 +125,19 @@ shiftRoutes.get('/roster', async (c) => {
     stmt(db, `SELECT id, employee_code, name, currency_code, employment_status FROM employees ${cond} ORDER BY employee_code LIMIT ? OFFSET ?`, ...p, f.size, (f.page - 1) * f.size),
   ]);
   const ids = (emps.results as { id: number }[]).map((e) => e.id);
-  const instances = ids.length ? await all(db, `SELECT employee_id, shift_date, shift_id, shift_code, shift_name, scheduled_start_at, scheduled_end_at, adjustment_status, source
-      FROM shift_instances WHERE employee_id IN (${ids.map(() => '?').join(',')}) AND shift_date BETWEEN ? AND ?`, ...ids, from, to) : [];
-  return c.json({ from, to, total: (cnt.results[0] as { n: number }).n, employees: emps.results, instances });
+  const inList = ids.map(() => '?').join(',');
+  const [instances, ot] = ids.length ? await Promise.all([
+    all(db, `SELECT employee_id, shift_date, shift_id, shift_code, shift_name, scheduled_start_at, scheduled_end_at, adjustment_status, source
+      FROM shift_instances WHERE employee_id IN (${inList}) AND shift_date BETWEEN ? AND ?`, ...ids, from, to),
+    // OT on the roster: worked on a day off (no active shift), or on shift longer than the OT threshold (clock in → out)
+    all(db, `SELECT s.employee_id, s.work_date, s.actual_in_at, s.actual_out_at, s.shift_duration_ms,
+        CASE WHEN s.shift_instance_id IS NULL OR i.adjustment_status = 'CANCELLED' THEN 'OFF' ELSE 'LONG' END AS kind
+      FROM attendance_sessions s LEFT JOIN shift_instances i ON i.id = s.shift_instance_id
+      WHERE s.employee_id IN (${inList}) AND s.work_date BETWEEN ? AND ? AND s.actual_in_at IS NOT NULL
+        AND (s.shift_instance_id IS NULL OR i.adjustment_status = 'CANCELLED' OR (s.actual_out_at IS NOT NULL AND s.actual_out_at - s.actual_in_at > ?))`,
+      ...ids, from, to, Math.round((await loadSettings(db)).rules.otHours * 3_600_000)),
+  ]) : [[], []];
+  return c.json({ from, to, total: (cnt.results[0] as { n: number }).n, employees: emps.results, instances, ot });
 });
 
 shiftRoutes.get('/roster/export', async (c) => {

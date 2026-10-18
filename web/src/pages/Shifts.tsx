@@ -3,12 +3,12 @@ import { addDays, dayDiff, monthEnd, monthStart, weekday } from '../../../src/sh
 import { Cnt, CurrencyOptions, EmpSearch, ErrBox, Field, Modal, ModalActions, Pager, Tabs, TblTop } from '../components/ui';
 import { api, type ApiErr, qs } from '../lib/api';
 import { exportXLSX, readGrid } from '../lib/files';
-import { fmtDT, fmtT, today } from '../lib/format';
+import { fmtDT, fmtDur, fmtT, today } from '../lib/format';
 import { useI18n } from '../lib/i18n';
 import { type MetaShift, toast, useApi, useData, usePageState } from '../lib/store';
 
 interface Inst { employee_id: number; shift_date: string; shift_id: number; shift_code: string; shift_name: string; scheduled_start_at: number; scheduled_end_at: number; adjustment_status: string; source: string }
-interface RosterData { from: string; to: string; total: number; employees: { id: number; employee_code: string; name: string; currency_code: string | null; employment_status: string }[]; instances: Inst[] }
+interface RosterData { ot?: { employee_id: number; work_date: string; actual_in_at: number; actual_out_at: number | null; kind: 'OFF' | 'LONG' }[]; from: string; to: string; total: number; employees: { id: number; employee_code: string; name: string; currency_code: string | null; employment_status: string }[]; instances: Inst[] }
 
 export function Shifts() {
   const { L } = useI18n();
@@ -24,7 +24,7 @@ export function Shifts() {
 
 function Roster({ f, set }: { f: { from: string; to: string; cur: string; page: number; size: number }; set: (p: Partial<{ from: string; to: string; cur: string; page: number; size: number }>) => void }) {
   const { L, lang } = useI18n();
-  const { readOnly } = useData();
+  const { readOnly, meta } = useData();
   const t = today();
   const { data, error } = useApi<RosterData>(`/roster?${qs({ from: f.from, to: f.to, cur: f.cur, page: f.page, size: f.size })}`);
   const [cell, setCell] = useState<{ emp: RosterData['employees'][number]; date: string; inst: Inst | undefined; cancelled: boolean } | null>(null);
@@ -37,6 +37,7 @@ function Roster({ f, set }: { f: { from: string; to: string; cur: string; page: 
   const compact = days.length > 14;
   const wd = (d: string) => (lang === 'en' ? ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] : ['日', '一', '二', '三', '四', '五', '六'])[weekday(d)];
   const byKey = new Map((data?.instances ?? []).map((i) => [`${i.employee_id}|${i.shift_date}`, i]));
+  const otKey = new Map((data?.ot ?? []).map((o) => [`${o.employee_id}|${o.work_date}`, o]));
   const doExport = async () => {
     try {
       const r = await api<{ from: string; to: string; employees: { id: number; employee_code: string; name: string; currency_code: string | null }[]; instances: { employee_id: number; shift_date: string; shift_code: string }[] }>(`/roster/export?${qs({ from: f.from, to: f.to, cur: f.cur })}`);
@@ -82,10 +83,14 @@ function Roster({ f, set }: { f: { from: string; to: string; cur: string; page: 
                   const raw = byKey.get(`${e.id}|${d}`);
                   const i = raw && raw.adjustment_status !== 'CANCELLED' ? raw : undefined;
                   const cancelled = !!raw && raw.adjustment_status === 'CANCELLED';
+                  const ot = otKey.get(`${e.id}|${d}`);
                   return (
-                    <td key={d}><span className={`cell ${i ? i.shift_code : 'OFF'}`} title={i ? `${i.shift_name} ${fmtT(i.scheduled_start_at)}–${fmtT(i.scheduled_end_at)} (LK)` : L('休息', 'Off')}
+                    <td key={d}><span className={`cell ${i ? i.shift_code : 'OFF'}`} title={i ? `${i.shift_name} ${fmtT(i.scheduled_start_at)}–${fmtT(i.scheduled_end_at)} (LK)${ot?.kind === 'LONG' && ot.actual_out_at
+                        ? L(`\nOT：实际 ${fmtT(ot.actual_in_at)} – ${fmtT(ot.actual_out_at)}，在班 ${fmtDur(ot.actual_out_at - ot.actual_in_at)}（超过 ${meta.rules.otHours ?? 9} 小时）`, `\nOT: actual ${fmtT(ot.actual_in_at)} – ${fmtT(ot.actual_out_at)}, on shift ${fmtDur(ot.actual_out_at - ot.actual_in_at)} (over ${meta.rules.otHours ?? 9} h)`) : ''}`
+                      : ot ? L(`休息日上班（OT）：${fmtT(ot.actual_in_at)} – ${ot.actual_out_at ? fmtT(ot.actual_out_at) : '未下班'}`, `Worked on a day off (OT): ${fmtT(ot.actual_in_at)} – ${ot.actual_out_at ? fmtT(ot.actual_out_at) : 'not clocked out'}`) : L('休息', 'Off')}
                       onClick={() => !readOnly && setCell({ emp: e, date: d, inst: i, cancelled })} style={readOnly ? { cursor: 'default' } : undefined}>
                       {i ? (compact ? i.shift_code : <>{i.shift_code}<br /><span style={{ fontWeight: 400 }}>{fmtT(i.scheduled_start_at)}</span></>) : (compact ? '–' : 'OFF')}
+                      {ot && (!i || ot.kind === 'LONG') && <span className="ot">OT</span>}
                     </span></td>
                   );
                 })}

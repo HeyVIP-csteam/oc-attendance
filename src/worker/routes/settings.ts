@@ -89,6 +89,7 @@ const RulesSchema = z.object({
   windowHours: z.number().int().min(1).max(8),
   lateAsException: z.boolean(),
   botReply: z.boolean(),
+  otHours: z.number().min(1).max(24).optional().default(9),
 });
 
 settingsRoutes.put('/settings/rules', async (c) => {
