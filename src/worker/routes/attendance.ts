@@ -149,7 +149,7 @@ attendanceRoutes.get('/sessions/:emp/:date', async (c) => {
 });
 
 const AdjSchema = z.object({
-  action: z.enum(['ADD_EVENT', 'VOID_EVENT']),
+  action: z.enum(['ADD_EVENT', 'VOID_EVENT', 'EDIT_EVENT']), // EDIT = delete the old punch + add the corrected one, atomically
   eventType: z.enum(EVENT_TYPES).optional(),
   ts: z.number().int().optional(),
   targetEventId: z.number().int().optional(),
@@ -167,22 +167,41 @@ export async function applyAdjustment(env: AppBindings['Bindings'], actor: strin
   const ins = `INSERT INTO attendance_adjustments (employee_id, work_date, action, event_type, event_ts, target_event_id, reason, before_json, created_by, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)`;
   const beforeSnap = snapshot(before, tz);
   const statements: D1PreparedStatement[] = [];
-  if (a.action === 'ADD_EVENT') {
+  const checkNew = () => {
     if (!a.eventType || a.ts == null) throw bad('VALIDATION', '请选择事件类型和时间', 'Event type and time are required');
     const lo = zonedToUtc(addDays(date, -1), '00:00', tz);
     const hi = zonedToUtc(addDays(date, 2), '00:00', tz);
     if (a.ts < lo || a.ts >= hi) throw bad('TIME_RANGE', '时间必须在该考勤日前后 1 天内', 'The time must be within one day of the work date');
     if (a.ts > now + MIN) throw bad('TIME_FUTURE', '不能补录未来的时间', 'Cannot add an event in the future');
+  };
+  const target = async () => {
+    if (!a.targetEventId) throw bad('VALIDATION', '缺少要处理的打卡', 'targetEventId is required');
+    const ev = await first<{ id: number; is_voided: number; event_type: string; event_ts: number }>(db, 'SELECT id, is_voided, event_type, event_ts FROM attendance_events WHERE id = ? AND employee_id = ? AND work_date = ?', a.targetEventId, emp, date);
+    if (!ev) throw notFound('Event not found in this session');
+    if (ev.is_voided) throw bad('ALREADY_VOIDED', '这笔打卡已经删除或修改过', 'This punch was already deleted or edited');
+    return ev;
+  };
+  if (a.action === 'EDIT_EVENT') {
+    checkNew();
+    const ev = await target();
+    if (ev.event_type === a.eventType && ev.event_ts === a.ts) throw bad('NO_CHANGE', '没有任何修改', 'Nothing changed');
+    // one atomic batch: VOID adjustment + void the old punch, then ADD adjustment + the corrected punch (same created_at)
+    statements.push(
+      stmt(db, ins, emp, date, 'VOID_EVENT', null, null, a.targetEventId, a.reason, JSON.stringify(beforeSnap), actor, now),
+      stmt(db, 'UPDATE attendance_events SET is_voided = 1, voided_by_adjustment_id = last_insert_rowid() WHERE id = ?', a.targetEventId),
+      stmt(db, ins, emp, date, 'ADD_EVENT', a.eventType, a.ts, a.targetEventId, a.reason, JSON.stringify(beforeSnap), actor, now),
+      stmt(db, `INSERT INTO attendance_events (adjustment_id, employee_id, work_date, event_type, event_ts, received_at, source, created_at)
+                VALUES (last_insert_rowid(), ?, ?, ?, ?, ?, 'ADMIN', ?)`, emp, date, a.eventType, a.ts, now, now),
+    );
+  } else if (a.action === 'ADD_EVENT') {
+    checkNew();
     statements.push(
       stmt(db, ins, emp, date, 'ADD_EVENT', a.eventType, a.ts, null, a.reason, JSON.stringify(beforeSnap), actor, now),
       stmt(db, `INSERT INTO attendance_events (adjustment_id, employee_id, work_date, event_type, event_ts, received_at, source, created_at)
                 VALUES (last_insert_rowid(), ?, ?, ?, ?, ?, 'ADMIN', ?)`, emp, date, a.eventType, a.ts, now, now),
     );
   } else {
-    if (!a.targetEventId) throw bad('VALIDATION', '缺少要作废的事件', 'targetEventId is required');
-    const ev = await first<{ id: number; is_voided: number }>(db, 'SELECT id, is_voided FROM attendance_events WHERE id = ? AND employee_id = ? AND work_date = ?', a.targetEventId, emp, date);
-    if (!ev) throw notFound('Event not found in this session');
-    if (ev.is_voided) throw bad('ALREADY_VOIDED', '此事件已作废', 'This event is already voided');
+    await target();
     statements.push(
       stmt(db, ins, emp, date, 'VOID_EVENT', null, null, a.targetEventId, a.reason, JSON.stringify(beforeSnap), actor, now),
       stmt(db, 'UPDATE attendance_events SET is_voided = 1, voided_by_adjustment_id = last_insert_rowid() WHERE id = ?', a.targetEventId),
@@ -191,9 +210,10 @@ export async function applyAdjustment(env: AppBindings['Bindings'], actor: strin
   await db.batch(statements);
   const after = (await recomputeMany(db, [[emp, date]], { now: Date.now(), tz, rules: settings.rules })).get(keyStr([emp, date]))?.summary ?? null;
   const afterSnap = snapshot(after, tz);
-  const what = a.action === 'ADD_EVENT' ? `Added ${a.eventType} @ ${fmtDateTime(a.ts!, tz)}` : `Voided event #${a.targetEventId}`;
+  const what = a.action === 'ADD_EVENT' ? `Added ${a.eventType} @ ${fmtDateTime(a.ts!, tz)}`
+    : a.action === 'EDIT_EVENT' ? `Edited event #${a.targetEventId} → ${a.eventType} @ ${fmtDateTime(a.ts!, tz)}` : `Deleted (voided) event #${a.targetEventId}`;
   await db.batch([
-    stmt(db, 'UPDATE attendance_adjustments SET after_json = ? WHERE id = (SELECT MAX(id) FROM attendance_adjustments WHERE employee_id = ? AND work_date = ? AND created_at = ?)', JSON.stringify(afterSnap), emp, date, now),
+    stmt(db, 'UPDATE attendance_adjustments SET after_json = ? WHERE employee_id = ? AND work_date = ? AND created_at = ? AND after_json IS NULL', JSON.stringify(afterSnap), emp, date, now),
     auditStmt(db, { actor, action: 'ATTENDANCE_ADJUSTED', entityType: 'attendance_session', entityId: `${employee.employee_code}@${date}`, before: beforeSnap, after: afterSnap, note: `${what}; reason: ${a.reason}`, ip, at: now }),
   ]);
   return { before: beforeSnap, after: afterSnap };

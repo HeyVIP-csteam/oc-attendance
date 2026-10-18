@@ -13,11 +13,11 @@ interface RosterData { from: string; to: string; total: number; employees: { id:
 export function Shifts() {
   const { L } = useI18n();
   const t = today();
-  const [f, set] = usePageState('sh', () => ({ tab: 'roster' as 'roster' | 'history' | 'tpl', cq: '', cpage: 1, from: monthStart(t), to: monthEnd(t), cur: '', page: 1, size: 10 }));
+  const [f, set] = usePageState('sh', () => ({ tab: 'roster' as 'roster' | 'history' | 'tpl', cq: '', cpage: 1, hfrom: t, hto: t, from: monthStart(t), to: monthEnd(t), cur: '', page: 1, size: 10 }));
   return (
     <>
       <Tabs items={[['roster', L('排班表（Shift Instances）', 'Roster (shift instances)')], ['history', L('历史记录', 'History')], ['tpl', L('班次模板', 'Shift templates')]]} value={f.tab} onChange={(tab) => set({ tab })} />
-      {f.tab === 'tpl' ? <Templates /> : f.tab === 'history' ? <History q={f.cq} page={f.cpage} size={f.size} set={(p) => set(p)} /> : <Roster f={f} set={set} />}
+      {f.tab === 'tpl' ? <Templates /> : f.tab === 'history' ? <History q={f.cq} from={f.hfrom} to={f.hto} page={f.cpage} size={f.size} set={(p) => set(p)} /> : <Roster f={f} set={set} />}
     </>
   );
 }
@@ -250,18 +250,21 @@ function ShiftModal({ s, onClose }: { s: MetaShift | null; onClose: () => void }
 // ---------------------------------------------------------------- roster history: manual shift changes + roster imports
 interface HistRow { id: number; created_at: number; actor: string; action: string; entity_id: string; before_json: string | null; after_json: string | null; note: string | null; employee_code: string | null; name: string | null }
 
-function History({ q, page, size, set }: { q: string; page: number; size: number; set: (p: { cq?: string; cpage?: number; size?: number }) => void }) {
+function History({ q, from, to, page, size, set }: { q: string; from: string; to: string; page: number; size: number; set: (p: { cq?: string; hfrom?: string; hto?: string; cpage?: number; size?: number }) => void }) {
   const { L } = useI18n();
-  const { data, error } = useApi<{ total: number; rows: HistRow[] }>(`/roster/history-log?${qs({ q, page, size })}`);
+  const { data, error } = useApi<{ total: number; rows: HistRow[] }>(`/roster/history-log?${qs({ q, from, to, page, size })}`);
+  const t = today();
   const parse = (s: string | null) => { try { return s ? JSON.parse(s) : {}; } catch { return {}; } };
   const chip = (c: string | undefined) => <span className={`cell ${c ?? 'OFF'}`} style={{ display: 'inline-block', minWidth: 40, padding: '1px 6px' }}>{c ?? '—'}</span>;
   return (
     <>
       <div className="card"><div className="row">
+        <Field label={L('开始', 'From')}><input type="date" value={from} max={t} onChange={(e) => set({ hfrom: e.target.value || t, cpage: 1 })} /></Field>
+        <Field label={L('结束', 'To')}><input type="date" value={to} max={t} onChange={(e) => set({ hto: e.target.value || t, cpage: 1 })} /></Field>
         <Field label={L('员工', 'Employee')}><EmpSearch value={q} onChange={(v) => set({ cq: v, cpage: 1 })} /></Field>
       </div></div>
       <ErrBox error={error} />
-      {data && (data.rows.length === 0 ? <div className="card empty">{L('还没有记录', 'No history yet')}</div> : (
+      {data && (data.rows.length === 0 ? <div className="card empty">{L('这段期间没有记录', 'No history in this period')}</div> : (
         <>
           <TblTop left={<Cnt n={data.total} />} size={size} onSize={(n) => set({ size: n, cpage: 1 })} />
           <div className="tw"><table className="grid tpltbl"><thead><tr>

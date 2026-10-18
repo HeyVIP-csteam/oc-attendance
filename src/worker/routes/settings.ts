@@ -297,3 +297,34 @@ settingsRoutes.post('/bots/:code/check', (c) => botAction(c, 'check'));
 settingsRoutes.post('/bots/:code/stop', (c) => botAction(c, 'stop'));
 settingsRoutes.post('/bots/:code/start', (c) => botAction(c, 'start'));
 settingsRoutes.post('/bots/:code/rotate', (c) => botAction(c, 'rotate'));
+
+/**
+ * Clean: forget this currency's bot completely — Telegram webhook removed (best effort), stored token, bot identity,
+ * webhook URL and status wiped, and a new webhook secret so the old one can never be used again.
+ * Attendance records, raw messages and employees are NOT touched. The currency goes back to "Not set".
+ */
+settingsRoutes.post('/bots/:code/clean', async (c) => {
+  requireAdminRole(c);
+  const code = c.req.param('code').toUpperCase();
+  const db = c.env.DB;
+  const now = Date.now();
+  const bot = await loadBot(db, code);
+  if (!bot) throw notFound('Currency not found');
+  const token = await botToken(c.env, bot);
+  let webhookRemoved = false;
+  if (token) {
+    try { await tgCall(token, 'deleteWebhook', { drop_pending_updates: false }); webhookRemoved = true; }
+    catch { /* token revoked / bot deleted — nothing left to remove at Telegram */ }
+  }
+  const salt = [...randomBytes(16)].map((x) => x.toString(16).padStart(2, '0')).join('');
+  await db.batch([
+    stmt(db, `UPDATE telegram_bots SET bot_user_id = NULL, username = NULL, token_ciphertext = NULL, token_last4 = NULL, webhook_url = NULL,
+              status = 'NOT_SET', secret_salt = ?, can_read_all_group_messages = NULL, pending_update_count = NULL, last_error = NULL,
+              last_checked_at = NULL, updated_at = ? WHERE id = ?`, salt, now, bot.id),
+    auditStmt(db, { actor: c.get('admin').username, action: 'BOT_CLEARED', entityType: 'telegram_bot', entityId: code,
+      before: { bot: bot.username, status: bot.status, url: bot.webhook_url, token: bot.token_last4 ? `••••${bot.token_last4}` : null },
+      after: { status: 'NOT_SET', webhook_removed: webhookRemoved }, ip: clientIp(c), at: now }),
+    bump(db, now),
+  ]);
+  return c.json({ ok: true, webhookRemoved, secretTokenRemains: hasSecretToken(c.env, code) });
+});

@@ -205,6 +205,16 @@ function Bots() {
     } catch (e) { onErr(e); }
     await reload();
   };
+  const clean = async (b: BotView) => {
+    if (!confirm(L(`清除 ${b.currency} 的 Bot 资料？\n\n会删除：Bot Token、Bot 账号、Webhook，状态回到「未设置」。\n不会删除：员工、考勤记录、消息记录。\n\n之后可以按「设置」重新绑定新的 Bot。`,
+      `Clean the ${b.currency} bot?\n\nRemoves: bot token, bot account and webhook; status returns to "Not set".\nKeeps: employees, attendance and messages.\n\nYou can set up a new bot afterwards.`))) return;
+    try {
+      const r = await api<{ secretTokenRemains: boolean }>(`/bots/${b.currency}/clean`, { method: 'POST' });
+      toast(L(`${b.currency} 的 Bot 资料已清除`, `${b.currency} bot cleaned`));
+      if (r.secretTokenRemains) alert(L(`注意：Cloudflare 里还有 TELEGRAM_BOT_TOKEN_${b.currency} 这个 Secret，需要到 Cloudflare 删除。`, `Note: the Cloudflare secret TELEGRAM_BOT_TOKEN_${b.currency} still exists; delete it in Cloudflare.`));
+    } catch (e) { onErr(e); }
+    await reload();
+  };
   return (
     <div className="card"><h3>{L('Bot 设置', 'Bot Setting')}</h3>
       <ErrBox error={error} />
@@ -224,7 +234,8 @@ function Bots() {
                 <td className="nw">{!readOnly && <>
                   <button className={`btn sm ${configured ? '' : 'p'}`} onClick={() => setEdit(b)}>{configured ? L('编辑', 'Edit') : L('设置', 'Set up')}</button>{' '}
                   {configured && <button className="btn sm" onClick={() => act(b, 'check')}>{L('检查', 'Check')}</button>}{' '}
-                  {b.status === 'ACTIVE' || b.status === 'ERROR' ? <button className="btn sm d" onClick={() => act(b, 'stop')}>{L('停用', 'Stop')}</button> : b.status === 'DISABLED' ? <button className="btn sm" onClick={() => act(b, 'start')}>{L('启用', 'Start')}</button> : null}
+                  {b.status === 'ACTIVE' || b.status === 'ERROR' ? <button className="btn sm d" onClick={() => act(b, 'stop')}>{L('停用', 'Stop')}</button> : b.status === 'DISABLED' ? <button className="btn sm" onClick={() => act(b, 'start')}>{L('启用', 'Start')}</button> : null}{' '}
+                  {configured && <button className="btn sm d" onClick={() => clean(b)}>{L('清除', 'Clean')}</button>}
                 </>}</td>
               </tr>
             );

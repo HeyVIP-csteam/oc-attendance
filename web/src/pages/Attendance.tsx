@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { EVENT_LABEL, EVENT_TYPES, type EventType, STATUSES } from '../../../src/shared/codes';
 import { addDays } from '../../../src/shared/time';
-import { Cnt, CurB, CurrencyOptions, Drawer, EmpSearch, Empty, ErrBox, ExB, Field, KvList, Mut, Pager, ShiftOptions, StatusBadge, StatusOptions, TblTop, jsonOrNull } from '../components/ui';
+import { Cnt, CurB, CurrencyOptions, Drawer, EmpSearch, Empty, ErrBox, ExB, Field, Modal, Mut, Pager, ShiftOptions, StatusBadge, StatusOptions, TblTop } from '../components/ui';
 import { api, type ApiErr, qs } from '../lib/api';
 import { exportCSV, exportXLSX } from '../lib/files';
 import { fmtDT, fmtDur, fmtMin, fmtT, fromLocalInput, hrs, LATE_RED, toLocalInput, today, TZ } from '../lib/format';
@@ -94,16 +94,21 @@ export function Attendance() {
 interface Detail {
   employee: { id: number; employee_code: string; name: string; currency_code: string | null };
   workDate: string;
-  instance: { id: number; shift_name: string; adjustment_status: string; source: string; late_grace_min: number; early_grace_min: number; scheduled_start_at: number; scheduled_end_at: number } | null;
-  session: AttRow & { scheduled_start_at: number | null } | null;
-  events: { id: number; event_type: EventType; event_ts: number; source: string; is_voided: number; sm_result: string | null; adjustment_id: number | null; raw_text: string | null; tg_message_id: number | null; message_thread_id: number | null; from_user_id: number | null; telegram_message_ts: number | null; raw_received_at: number | null; processed_at: number | null }[];
+  instance: { id: number; shift_name: string; adjustment_status: string; source: string; late_grace_min: number; early_grace_min: number; break_minutes: number | null; scheduled_start_at: number; scheduled_end_at: number } | null;
+  session: AttRow & { scheduled_start_at: number | null; shift_duration_ms: number | null } | null;
+  events: { id: number; event_type: EventType; event_ts: number; source: string; is_voided: number; sm_result: string | null; adjustment_id: number | null; voided_by_adjustment_id: number | null; raw_text: string | null; tg_message_id: number | null; message_thread_id: number | null; from_user_id: number | null; telegram_message_ts: number | null; raw_received_at: number | null; processed_at: number | null }[];
   breaks: { seq: number; start_at: number; end_at: number | null; duration_ms: number | null; status: string; remark: string | null }[];
   exceptions: { id: number; code: string; occurred_at: number; detail: string | null; status: string }[];
   adjustments: { id: number; action: string; event_type: EventType | null; event_ts: number | null; target_event_id: number | null; reason: string; before_json: string | null; after_json: string | null; created_by: string; created_at: number }[];
 }
 
+type Ev = Detail['events'][number];
+const EV_DOT: Record<EventType, string> = { CLOCK_IN: 'd-in', BREAK_START: 'd-bs', BREAK_END: 'd-be', CLOCK_OUT: 'd-out' };
+const WD_ZH = '日一二三四五六';
+const WD_EN = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
 export function SessionDrawer({ emp, date, onClose }: { emp: number; date: string; onClose: () => void }) {
-  const { L, dt } = useI18n();
+  const { L, dt, lang } = useI18n();
   const { refresh, readOnly } = useData();
   const { data, error, reload } = useApi<Detail>(`/sessions/${emp}/${date}`);
   const [type, setType] = useState<EventType>('CLOCK_OUT');
@@ -111,108 +116,209 @@ export function SessionDrawer({ emp, date, onClose }: { emp: number; date: strin
   const [reason, setReason] = useState('');
   const [err, setErr] = useState<ApiErr | Error | null>(null);
   const [busy, setBusy] = useState(false);
+  const [dlg, setDlg] = useState<{ kind: 'edit' | 'del'; ev: Ev } | null>(null);
   const s = data?.session;
   const inst = data?.instance;
   const defaultTs = s?.actual_out_at ?? s?.scheduled_end_at ?? s?.actual_in_at ?? Date.now();
-  const post = async (body: Record<string, unknown>) => {
+  const post = async (body: Record<string, unknown>, msg: string) => {
     setBusy(true);
-    setErr(null);
     try {
       await api(`/sessions/${emp}/${date}/adjustments`, { method: 'POST', body });
-      toast(L('修正已保存，并写入 Audit Log', 'Adjustment saved and written to the audit log'));
-      setReason('');
+      toast(msg);
       await reload();
       refresh();
-    } catch (e) { setErr(e as ApiErr); } finally { setBusy(false); }
+      return null;
+    } catch (e) { return e as ApiErr; } finally { setBusy(false); }
   };
-  const save = () => {
+  const save = async () => {
+    setErr(null);
     const t = fromLocalInput(ts || toLocalInput(defaultTs));
     if (t == null) return setErr(new Error(L('请填写时间', 'Please enter a time')));
     if (reason.trim().length < 4) return setErr(new Error(L('必须填写修正原因（至少 4 个字）', 'A reason is required (at least 4 characters)')));
-    void post({ action: 'ADD_EVENT', eventType: type, ts: t, reason });
+    const e = await post({ action: 'ADD_EVENT', eventType: type, ts: t, reason }, L('已补录，数字已重新计算', 'Punch added; figures recalculated'));
+    if (e) setErr(e); else setReason('');
   };
-  const voidEv = (id: number) => {
-    const r = prompt(L('作废此事件的原因（必填，至少 4 个字）：', 'Reason for voiding this event (required, at least 4 characters):'));
-    if (r == null) return;
-    if (r.trim().length < 4) { alert(L('原因至少 4 个字', 'The reason needs at least 4 characters')); return; }
-    void post({ action: 'VOID_EVENT', targetEventId: id, reason: r });
-  };
-  const adjMap = new Map((data?.adjustments ?? []).map((a) => [a.id, a]));
+
+  const hm = (ms: number | null | undefined) => (ms == null ? null : fmtDT(ms).slice(11, 16));
+  const hms = (ms: number) => fmtDT(ms).slice(11, 19);
+  const otherDay = (ms: number) => { const d = fmtDT(ms).slice(0, 10); return d !== date ? d : null; };
+  const wd = (() => { const d = new Date(`${date}T00:00:00Z`).getUTCDay(); return lang === 'en' ? WD_EN[d] : L(`（${WD_ZH[d]}）`, `(${WD_EN[d]})`); })();
+  const initials = (n: string) => n.split(/[\s\-_.]+/).filter(Boolean).map((w) => w[0]).join('').slice(0, 2).toUpperCase() || '?';
+  const adjById = new Map((data?.adjustments ?? []).map((a) => [a.id, a]));
+  // an ADD adjustment that points at an older punch is the second half of an "edit"
+  const editedIds = new Set((data?.adjustments ?? []).filter((a) => a.action === 'ADD_EVENT' && a.target_event_id).map((a) => a.target_event_id!));
+  const breakQuota = inst?.break_minutes ?? null;
+  const live = (data?.events ?? []).filter((e) => !e.is_voided).length;
+  const gone = (data?.events ?? []).filter((e) => e.is_voided).length;
+
+  const late = s?.late_min ?? null, early = s?.early_min ?? null;
+  const lateTxt = s?.actual_in_at == null ? <b>—</b> : late ? <b className="red">{fmtMin(late)}</b> : <b>{L('准时', 'On time')}</b>;
+  const earlyTxt = s?.actual_out_at == null ? <b>—</b> : early ? <b className="red">{fmtMin(early)}</b> : <b>{L('准时', 'On time')}</b>;
+  const brOk = s?.break_exceeded == null ? null : !s.break_exceeded;
+
   return (
     <Drawer onClose={onClose}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <h2 style={{ margin: 0, fontSize: 18 }}>{data ? `${data.employee.employee_code} ${data.employee.name}` : '…'} · {date}</h2>
-        <button className="btn" onClick={onClose}>{L('关闭', 'Close')}</button>
-      </div>
+      <div className="sd">
       <ErrBox error={error} />
+      {!data && !error && <div className="mut" style={{ padding: 24 }}>…</div>}
       {data && (
         <>
-          <p className="mut">{data.employee.currency_code ? data.employee.currency_code + ' · ' : ''}{inst ? inst.shift_name : L('未排班', 'No schedule')}{inst ? `（${L('实例', 'instance')} #${inst.id}, ${inst.adjustment_status}, ${inst.source}）` : ''} · {L('斯里兰卡时间', 'Sri Lanka time')}</p>
-          <div className="kv">
-            <div><span>{L('状态', 'Status')}</span>{s ? <StatusBadge st={s.status} /> : '—'}</div><div><span>{L('缺卡', 'Missing Punch')}</span><b>{s?.missing ?? '—'}</b></div>
-            <div><span>{L('排班上班', 'Scheduled In')}</span><b>{fmtDT(s?.scheduled_start_at)}</b></div><div><span>{L('实际上班', 'Actual In')}</span><b>{fmtDT(s?.actual_in_at)}</b></div>
-            <div><span>{L('迟到', 'Late')}</span><b style={s?.late_min ? { color: LATE_RED } : undefined}>{s?.late_min ? fmtMin(s.late_min) : s?.late_min ?? '—'}</b> <span className="mut">{L('宽限', 'grace')} {inst ? inst.late_grace_min : '—'}m</span></div>
-            <div><span>{L('排班下班', 'Scheduled Out')}</span><b>{fmtDT(s?.scheduled_end_at)}</b></div><div><span>{L('实际下班', 'Actual Out')}</span><b>{fmtDT(s?.actual_out_at)}</b></div>
-            <div><span>{L('早退', 'Early Leave')}</span><b style={s?.early_min ? { color: LATE_RED } : undefined}>{s?.early_min ? fmtMin(s.early_min) : s?.early_min ?? '—'}</b> <span className="mut">{L('宽限', 'grace')} {inst ? inst.early_grace_min : '—'}m</span></div>
-            <div><span>{L('班次总时长', 'Total Shift')}</span><b>{fmtDur(s?.shift_duration_ms)}</b></div><div><span>{L('休息（完成 / 未结束）', 'Breaks (done / open)')}</span><b>{s ? `${s.break_count} / ${s.open_break_count}` : '—'}</b></div>
-            <div><span>{L('休息总时长', 'Total Break')}</span><b>{fmtDur(s?.total_break_ms ?? 0)}</b></div>
-            <div><span>{L('净工时', 'Net Worked')}</span><b>{s?.net_worked_ms == null ? L('—（不完整）', '— (incomplete)') : `${fmtDur(s.net_worked_ms)} · ${hrs(s.net_worked_ms)}h`}</b></div>
-            <div><span>{L('休息规则', 'Break Rule')}</span><b>{s?.break_exceeded == null ? L('未配置（不判定）', 'Not set (not judged)') : s.break_exceeded ? L('超出', 'Exceeded') : L('符合', 'Within rule')}</b></div>
-          </div>
-          <div className="split" style={{ marginTop: 14 }}>
-            <div className="card"><h3>{L('事件时间线（按 Telegram 时间排序）', 'Event timeline (by Telegram time)')}</h3><div className="tl">
-              {data.events.length === 0 && <div className="mut">{L('没有事件', 'No events')}</div>}
-              {data.events.map((e) => {
-                const bad = !!e.sm_result && e.sm_result !== 'CLOCK_OUT_DURING_BREAK';
-                if (e.is_voided) return <div key={e.id} className="it bad"><s>{dt(EVENT_LABEL[e.event_type])} · {fmtDT(e.event_ts)}</s> <span className="b">{L('已作废', 'Voided')}</span></div>;
-                const delay = e.raw_received_at && e.telegram_message_ts ? e.raw_received_at - e.telegram_message_ts : 0;
-                return (
-                  <div key={e.id} className={`it ${bad ? 'bad' : ''} ${e.source === 'ADMIN' ? 'adm' : ''}`}>
-                    <b>{dt(EVENT_LABEL[e.event_type])}</b> · {fmtDT(e.event_ts)} {e.source === 'ADMIN' && <span className="b v">{L('管理员补录', 'Added by admin')}</span>} {e.sm_result && <ExB code={e.sm_result} />}
-                    <div className="mut" style={{ fontSize: 12 }}>
-                      {e.source === 'TELEGRAM'
-                        ? <>{L('原始消息', 'Raw message')}「{e.raw_text}」· message_id {e.tg_message_id} · thread {e.message_thread_id ?? '—'} · from {e.from_user_id}<br />
-                          {L('Telegram 时间', 'Telegram time')} {fmtDT(e.telegram_message_ts)} · {L('接收', 'received')} {fmtDT(e.raw_received_at)} · {L('处理', 'processed')} {fmtDT(e.processed_at)} {delay > 5 * 60000 && <span className="b w">{L('延迟', 'delay')} {fmtDur(delay)}</span>}</>
-                        : <>{L('来源：管理员修正 #', 'Source: admin adjustment #')}{e.adjustment_id} · {adjMap.get(e.adjustment_id!)?.reason}</>}
-                    </div>
-                    {!readOnly && <button className="btn sm d" style={{ marginTop: 4 }} disabled={busy} onClick={() => voidEv(e.id)}>{L('作废此事件', 'Void this event')}</button>}
-                  </div>
-                );
-              })}
-            </div></div>
-            <div>
-              <div className="card"><h3>{L('休息明细', 'Breaks')}</h3>{data.breaks.length ? (
-                <div className="tw"><table><thead><tr><th>#</th><th>{L('备注', 'Remark')}</th><th>{L('开始', 'Start')}</th><th>{L('结束', 'End')}</th><th className="n">{L('时长', 'Duration')}</th><th>{L('状态', 'Status')}</th></tr></thead><tbody>
-                  {data.breaks.map((b) => <tr key={b.seq}><td>#{b.seq}</td><td>{b.remark ?? <span className="mut">—</span>}</td><td>{fmtT(b.start_at)}</td><td>{b.end_at ? fmtT(b.end_at) : <span className="b r">{L('未结束', 'Open')}</span>}</td><td className="n">{fmtDur(b.duration_ms)}</td><td>{b.status === 'OPEN' ? <span className="b r">OPEN</span> : <span className="b ok">CLOSED</span>}</td></tr>)}
-                </tbody></table></div>) : <div className="mut">{L('无休息记录', 'No breaks')}</div>}
-              </div>
-              <div className="card"><h3>{L('异常', 'Exceptions')}（{data.exceptions.length}）</h3>
-                {data.exceptions.length ? data.exceptions.map((x) => <div key={x.id} style={{ margin: '4px 0' }}><ExB code={x.code} /> <span className="mut" style={{ fontSize: 12 }}>{dt(parseBi(x.detail))} {fmtDT(x.occurred_at)}</span></div>) : <div className="mut">{L('无', 'None')}</div>}
+          <div className="sd-hd">
+            <div className="sd-av">{initials(data.employee.name)}</div>
+            <div style={{ minWidth: 0 }}>
+              <h2>{data.employee.name} <span className="sd-id">PSD ID {data.employee.employee_code}</span></h2>
+              <div className="sd-meta">
+                <span>{L('考勤日', 'Work date')} <b>{date}{wd}</b></span>
+                {data.employee.currency_code && <span>{L('货币', 'Currency')} <b>{data.employee.currency_code}</b></span>}
+                <span>{L('班次', 'Shift')} <b>{inst ? `${inst.shift_name} · ${hm(inst.scheduled_start_at)} – ${hm(inst.scheduled_end_at)}` : L('未排班', 'No schedule')}</b></span>
+                <span>{L('斯里兰卡时间', 'Sri Lanka time')}</span>
               </div>
             </div>
+            <div className="sd-r">{s && <StatusBadge st={s.status} />}<button className="btn" onClick={onClose}>{L('关闭', 'Close')}</button></div>
           </div>
-          {!readOnly && (
-            <div className="card"><h3>{L('管理员修正', 'Admin adjustment')}</h3>
-              <div className="fg">
-                <div><label>{L('动作', 'Action')}</label><select><option>{L('补录事件', 'Add event')}</option></select></div>
-                <div><label>{L('事件类型', 'Event type')}</label><select value={type} onChange={(e) => setType(e.target.value as EventType)}>{EVENT_TYPES.map((k) => <option key={k} value={k}>{dt(EVENT_LABEL[k])}</option>)}</select></div>
-                <div><label>{L('时间（斯里兰卡）', 'Time (Sri Lanka)')}</label><input type="datetime-local" step={1} value={ts || toLocalInput(defaultTs)} onChange={(e) => setTs(e.target.value)} /></div>
-              </div>
-              <div style={{ marginTop: 10 }}><label className="mut" style={{ fontSize: 12 }}>{L('修正原因（必填）', 'Reason (required)')}</label><textarea rows={2} value={reason} onChange={(e) => setReason(e.target.value)} placeholder={L('例如：员工忘记打 OUT，主管确认 18:05 离开', 'e.g. Employee forgot OUT; supervisor confirms left at 18:05')} /></div>
-              <div style={{ marginTop: 8 }}><ErrBox error={err} /></div>
-              <button className="btn p" style={{ marginTop: 8 }} disabled={busy} onClick={save}>{L('保存修正', 'Save adjustment')}</button>
-              {data.adjustments.length > 0 && (
-                <>
-                  <h3 style={{ marginTop: 16 }}>{L('修正历史', 'Adjustment history')}</h3>
-                  <div className="tw"><table className="grid"><thead><tr><th>{L('时间', 'Time')}</th><th>{L('管理员', 'Admin')}</th><th>{L('动作', 'Action')}</th><th>{L('原因', 'Reason')}</th><th>{L('修改前', 'Before')}</th><th>{L('修改后', 'After')}</th></tr></thead><tbody>
-                    {data.adjustments.map((a) => <tr key={a.id}><td>{fmtDT(a.created_at)}</td><td>{a.created_by}</td><td>{a.action === 'ADD_EVENT' ? `${L('补录 ', 'Add ')}${dt(EVENT_LABEL[a.event_type!])} ${fmtDT(a.event_ts)}` : `${L('作废 #', 'Void #')}${a.target_event_id}`}</td><td style={{ whiteSpace: 'normal' }}>{a.reason}</td><td><KvList obj={jsonOrNull(a.before_json)} /></td><td><KvList obj={jsonOrNull(a.after_json)} other={jsonOrNull(a.before_json)} /></td></tr>)}
-                  </tbody></table></div>
-                </>
+
+          <div className="sd-body">
+            <div className="sd-sum">
+              <div className="sd-sc"><div className="l">{L('上班', 'Clock in')}</div>
+                <div className="v">{hm(s?.actual_in_at) ?? <span className="mis">{L('未打卡', 'Missing')}</span>}</div>
+                <div className="s">{L('排班', 'Scheduled')} <b>{hm(inst?.scheduled_start_at) ?? '—'}</b> · {L('迟到', 'Late')} {lateTxt}</div></div>
+              <div className="sd-sc"><div className="l">{L('下班', 'Clock out')}</div>
+                <div className="v">{hm(s?.actual_out_at) ?? <span className="mis">{L('未打卡', 'Missing')}</span>}</div>
+                <div className="s">{L('排班', 'Scheduled')} <b>{hm(inst?.scheduled_end_at) ?? '—'}</b> · {L('早退', 'Early')} {earlyTxt}</div></div>
+              <div className="sd-sc"><div className="l">{L('休息', 'Breaks')} {brOk != null && <span className={`b ${brOk ? 'ok' : 'w'}`}>{brOk ? L('符合规则', 'Within rule') : L('超出额度', 'Over limit')}</span>}</div>
+                <div className="v">{fmtDur(s?.total_break_ms ?? 0)}</div>
+                <div className="s">{L('共', '')} <b>{s?.break_count ?? 0}</b> {L('次', 'breaks')}{s?.open_break_count ? <> · <b className="red">{L(`${s.open_break_count} 次未结束`, `${s.open_break_count} open`)}</b></> : null} · {L('额度', 'Limit')} <b>{breakQuota != null ? `${breakQuota}m` : L('不限', 'none')}</b></div></div>
+              <div className="sd-sc"><div className="l">{L('净工时', 'Net worked')}</div>
+                <div className="v">{s?.net_worked_ms == null ? <span className="mis">—</span> : `${hrs(s.net_worked_ms)} h`}</div>
+                <div className="s">{s?.net_worked_ms == null ? L('缺少上班或下班卡', 'Clock in or out missing') : <>{L('在班', 'On shift')} <b>{fmtDur(s.shift_duration_ms)}</b> − {L('休息', 'breaks')} <b>{fmtDur(s.total_break_ms)}</b></>}</div></div>
+            </div>
+
+            <div className="sd-card">
+              <div className="sd-ch"><h3>{L('打卡记录', 'Punch records')}</h3><span className="c">{L(`按 Telegram 消息时间排序 · 共 ${live} 笔`, `By Telegram message time · ${live} punches`)}{gone ? L(`（已删除 / 已修改 ${gone}）`, ` (${gone} deleted / edited)`) : ''}</span></div>
+              {data.events.length === 0 ? <div className="mut sd-empty">{L('没有打卡记录', 'No punches')}</div> : (
+                <table className="sd-t"><thead><tr><th>{L('时间', 'Time')}</th><th>{L('动作', 'Action')}</th><th>{L('员工消息', 'Message')}</th><th>{L('状态', 'Status')}</th>{!readOnly && <th>{L('操作', 'Action')}</th>}</tr></thead><tbody>
+                  {data.events.map((e) => {
+                    const adj = e.adjustment_id ? adjById.get(e.adjustment_id) : undefined;
+                    const isEdit = !!adj?.target_event_id;
+                    const delay = e.raw_received_at && e.telegram_message_ts ? e.raw_received_at - e.telegram_message_ts : 0;
+                    const od = otherDay(e.event_ts);
+                    return (
+                      <tr key={e.id} className={e.is_voided ? 'vd' : ''}>
+                        <td>{hms(e.event_ts)}{od && <div className="sd-sub">{od}</div>}</td>
+                        <td><span className="ev"><i className={`dot ${EV_DOT[e.event_type]}`} />{dt(EVENT_LABEL[e.event_type])}</span></td>
+                        <td className="msg">{e.source === 'TELEGRAM' ? (e.raw_text ?? '—')
+                          : <><span className="b v">{isEdit ? L('管理员修改', 'Edited by admin') : L('管理员补录', 'Added by admin')}</span>{adj?.reason && <span className="rs"> {adj.reason}</span>}</>}</td>
+                        <td>{e.is_voided ? <span className="b">{editedIds.has(e.id) ? L('已修改', 'Edited') : L('已删除', 'Deleted')}</span>
+                          : e.sm_result ? <ExB code={e.sm_result} /> : <span className="b ok">{L('已记录', 'Recorded')}</span>}
+                          {!e.is_voided && delay > 5 * 60000 && <> <span className="b w">{L('延迟', 'Delay')} {fmtDur(delay)}</span></>}</td>
+                        {!readOnly && <td>{e.is_voided ? <span className="mut">—</span> : <><button className="btn sm" disabled={busy} onClick={() => setDlg({ kind: 'edit', ev: e })}>{L('编辑', 'Edit')}</button> <button className="btn sm d" disabled={busy} onClick={() => setDlg({ kind: 'del', ev: e })}>{L('删除', 'Delete')}</button></>}</td>}
+                      </tr>
+                    );
+                  })}
+                </tbody></table>
               )}
             </div>
-          )}
+
+            <div className="sd-two">
+              <div className="sd-card">
+                <div className="sd-ch"><h3>{L('休息明细', 'Breaks')}</h3><span className="c">{L('合计', 'Total')} {fmtDur(s?.total_break_ms ?? 0)}</span></div>
+                {data.breaks.length ? (
+                  <table className="sd-t"><thead><tr><th>#</th><th>{L('备注', 'Remark')}</th><th>{L('时间', 'Time')}</th><th>{L('时长', 'Duration')}</th></tr></thead><tbody>
+                    {data.breaks.map((b) => <tr key={b.seq}><td>{b.seq}</td><td>{b.remark ?? <span className="mut">—</span>}</td><td>{hm(b.start_at)} – {b.end_at ? hm(b.end_at) : <span className="b r">{L('未结束', 'Open')}</span>}</td><td>{b.end_at ? fmtDur(b.duration_ms) : '—'}</td></tr>)}
+                  </tbody></table>
+                ) : <div className="mut sd-empty">{L('没有休息', 'No breaks')}</div>}
+              </div>
+              <div className="sd-card">
+                <div className="sd-ch"><h3>{L('异常', 'Exceptions')}</h3><span className="c">{L(`${data.exceptions.length} 项`, `${data.exceptions.length}`)}</span></div>
+                <div className="sd-exl">
+                  {data.exceptions.length ? data.exceptions.map((x) => (
+                    <div key={x.id} className="sd-exi"><ExB code={x.code} /><span className="x">{x.detail ? dt(parseBi(x.detail)) : ''}</span><span className="t">{hms(x.occurred_at)}</span></div>
+                  )) : <div className="sd-exi"><span className="b ok">{L('无异常', 'No exceptions')}</span></div>}
+                </div>
+              </div>
+            </div>
+
+            {!readOnly && (
+              <div className="sd-card">
+                <div className="sd-ch"><h3>{L('管理员修正', 'Admin correction')}</h3><span className="c">{L('每次修正都会写入 Audit Log', 'Every correction is written to the audit log')}</span></div>
+                <div className="sd-form">
+                  <div><label>{L('补录动作', 'Add punch')}</label><select value={type} onChange={(e) => setType(e.target.value as EventType)}>{EVENT_TYPES.map((k) => <option key={k} value={k}>{dt(EVENT_LABEL[k])}</option>)}</select></div>
+                  <div><label>{L('时间（斯里兰卡）', 'Time (Sri Lanka)')}</label><input type="datetime-local" step={1} value={ts || toLocalInput(defaultTs)} onChange={(e) => setTs(e.target.value)} /></div>
+                  <div><label>{L('修正原因（必填）', 'Reason (required)')}</label><input type="text" value={reason} onChange={(e) => setReason(e.target.value)} placeholder={L('例如：员工忘记打 OUT，主管确认 16:30 离开', 'e.g. Forgot OUT; supervisor confirms left at 16:30')} /></div>
+                </div>
+                <div className="sd-ft"><div style={{ flex: 1 }}><ErrBox error={err} /></div><button className="btn p" disabled={busy} onClick={save}>{L('保存修正', 'Save correction')}</button></div>
+                {data.adjustments.length > 0 && (
+                  <>
+                    <div className="sd-hh">{L('修正历史', 'Correction history')}</div>
+                    <table className="sd-t"><thead><tr><th>{L('时间', 'Time')}</th><th>{L('管理员', 'Admin')}</th><th>{L('动作', 'Action')}</th><th>{L('原因', 'Reason')}</th></tr></thead><tbody>
+                      {adjHistory(data, dt, L, hms).map((h) => <tr key={h.key}><td>{fmtDT(h.at)}</td><td>{h.by}</td><td>{h.what}</td><td className="msg" style={{ whiteSpace: 'normal' }}>{h.reason}</td></tr>)}
+                    </tbody></table>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
         </>
       )}
+      </div>
+      {dlg && data && <PunchDialog kind={dlg.kind} ev={dlg.ev} date={date} busy={busy} onClose={() => setDlg(null)} onSubmit={async (body, msg) => { const e = await post(body, msg); if (!e) setDlg(null); return e; }} />}
     </Drawer>
+  );
+}
+
+/** Correction history: an edit (VOID + ADD saved together) is shown as one line. */
+function adjHistory(data: Detail, dt: (b: { zh: string; en: string }) => string, L: (zh: string, en: string) => string, hms: (ms: number) => string) {
+  const evById = new Map(data.events.map((e) => [e.id, e]));
+  const list = [...data.adjustments].sort((a, b) => b.created_at - a.created_at || b.id - a.id);
+  const out: { key: number; at: number; by: string; what: string; reason: string }[] = [];
+  const pairedVoid = new Set(list.filter((a) => a.action === 'ADD_EVENT' && a.target_event_id).map((a) => `${a.created_at}|${a.target_event_id}`));
+  for (const a of list) {
+    const old = a.target_event_id ? evById.get(a.target_event_id) : undefined;
+    const oldTxt = old ? `${dt(EVENT_LABEL[old.event_type])} ${hms(old.event_ts)}` : `#${a.target_event_id}`;
+    if (a.action === 'VOID_EVENT' && pairedVoid.has(`${a.created_at}|${a.target_event_id}`)) continue;
+    const what = a.action === 'ADD_EVENT'
+      ? a.target_event_id ? `${L('修改', 'Edit')} ${oldTxt} → ${dt(EVENT_LABEL[a.event_type!])} ${hms(a.event_ts!)}` : `${L('补录', 'Add')} ${dt(EVENT_LABEL[a.event_type!])} ${hms(a.event_ts!)}`
+      : `${L('删除', 'Delete')} ${oldTxt}`;
+    out.push({ key: a.id, at: a.created_at, by: a.created_by, what, reason: a.reason });
+  }
+  return out;
+}
+
+function PunchDialog({ kind, ev, date, busy, onClose, onSubmit }: { kind: 'edit' | 'del'; ev: Ev; date: string; busy: boolean; onClose: () => void; onSubmit: (body: Record<string, unknown>, msg: string) => Promise<ApiErr | null> }) {
+  const { L, dt } = useI18n();
+  const [type, setType] = useState<EventType>(ev.event_type);
+  const [ts, setTs] = useState(toLocalInput(ev.event_ts));
+  const [reason, setReason] = useState('');
+  const [err, setErr] = useState<ApiErr | Error | null>(null);
+  const orig = `${dt(EVENT_LABEL[ev.event_type])} · ${fmtDT(ev.event_ts).slice(fmtDT(ev.event_ts).slice(0, 10) === date ? 11 : 0)}${ev.raw_text ? ` · 「${ev.raw_text}」` : ''}`;
+  const ok = async () => {
+    setErr(null);
+    if (reason.trim().length < 4) return setErr(new Error(kind === 'edit' ? L('请填写修改原因（至少 4 个字）', 'Please give a reason (at least 4 characters)') : L('请填写删除原因（至少 4 个字）', 'Please give a reason (at least 4 characters)')));
+    if (kind === 'del') { const e = await onSubmit({ action: 'VOID_EVENT', targetEventId: ev.id, reason }, L('已删除，数字已重新计算', 'Deleted; figures recalculated')); if (e) setErr(e); return; }
+    const t = fromLocalInput(ts);
+    if (t == null) return setErr(new Error(L('请填写时间', 'Please enter a time')));
+    if (t === ev.event_ts && type === ev.event_type) return setErr(new Error(L('没有任何修改', 'Nothing changed')));
+    const e = await onSubmit({ action: 'EDIT_EVENT', targetEventId: ev.id, eventType: type, ts: t, reason }, L('已修改，数字已重新计算', 'Edited; figures recalculated'));
+    if (e) setErr(e);
+  };
+  return (
+    <Modal onClose={onClose}>
+      <h3 style={{ marginTop: 0 }}>{kind === 'edit' ? L('编辑这笔打卡', 'Edit this punch') : L('删除这笔打卡', 'Delete this punch')}</h3>
+      <div className="sd-orig">{kind === 'edit' ? L('原本：', 'Original: ') : ''}{orig}</div>
+      {kind === 'del' && <p className="mut" style={{ fontSize: 12.5, margin: '0 0 12px' }}>{L('删除后这笔不计入考勤，系统会重新计算。原始 Telegram 消息仍保留，可在 Audit Log 查到。', 'The punch stops counting and figures are recalculated. The original Telegram message is kept and the change is in the audit log.')}</p>}
+      <div className="fg">
+        {kind === 'edit' && <>
+          <div><label>{L('动作', 'Action')}</label><select value={type} onChange={(e) => setType(e.target.value as EventType)}>{EVENT_TYPES.map((k) => <option key={k} value={k}>{dt(EVENT_LABEL[k])}</option>)}</select></div>
+          <div><label>{L('时间（斯里兰卡）', 'Time (Sri Lanka)')}</label><input type="datetime-local" step={1} value={ts} onChange={(e) => setTs(e.target.value)} /></div>
+        </>}
+      </div>
+      <div style={{ marginTop: 10 }}><label className="mut" style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>{kind === 'edit' ? L('修改原因（必填）', 'Reason (required)') : L('删除原因（必填）', 'Reason (required)')}</label>
+        <input type="text" style={{ width: '100%' }} autoFocus value={reason} onChange={(e) => setReason(e.target.value)} placeholder={kind === 'edit' ? L('例如：员工打错，主管确认实际 16:30 下班', 'e.g. Wrong punch; supervisor confirms 16:30') : L('例如：员工误打，实际没有休息', 'e.g. Sent by mistake; no actual break')} /></div>
+      <div style={{ marginTop: 8 }}><ErrBox error={err} /></div>
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 10 }}>
+        <button className="btn" onClick={onClose}>{L('取消', 'Cancel')}</button>
+        <button className={`btn ${kind === 'del' ? 'dd' : 'p'}`} disabled={busy} onClick={ok}>{kind === 'edit' ? L('保存修改', 'Save') : L('删除', 'Delete')}</button>
+      </div>
+    </Modal>
   );
 }

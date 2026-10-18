@@ -1,6 +1,6 @@
 import { type Context, Hono } from 'hono';
 import { z } from 'zod';
-import { addDays, dayDiff, fmtDateTime, isDate, isHHMM, localDate, shiftWindow } from '../../shared/time';
+import { addDays, dayDiff, fmtDateTime, isDate, isHHMM, localDate, shiftWindow, zonedToUtc } from '../../shared/time';
 import type { AppBindings } from '../env';
 import { auditStmt } from '../lib/audit';
 import { all, chunk, first, stmt } from '../lib/db';
@@ -279,13 +279,18 @@ shiftRoutes.post('/roster/import', async (c) => {
 shiftRoutes.get('/roster/history-log', async (c) => {
   const f = query(c, z.object({
     q: z.string().max(80).optional().default(''),
+    from: z.string().refine(isDate).optional(), to: z.string().refine(isDate).optional(), // custom date range (Sri Lanka dates of the change)
     page: z.coerce.number().int().min(1).default(1), size: z.coerce.number().int().refine((n) => [10, 20, 30, 50, 100].includes(n)).default(10),
   }));
   const db = c.env.DB;
+  const tz = bizTz(c.env);
   // manual shift changes one by one, plus ONE row per roster import (its per-cell entries are not listed)
   const cond = ["a.entity_type = 'shift_instance'",
     `((a.action = 'SHIFT_INSTANCE_ADJUSTED' AND COALESCE(a.after_json, '') NOT LIKE '%"source":"ROSTER_IMPORT"%') OR a.action = 'ROSTER_IMPORTED')`];
   const p: unknown[] = [];
+  const [d1, d2] = f.from && f.to && f.from > f.to ? [f.to, f.from] : [f.from, f.to];
+  if (d1) { cond.push('a.created_at >= ?'); p.push(zonedToUtc(d1, '00:00', tz)); }
+  if (d2) { cond.push('a.created_at < ?'); p.push(zonedToUtc(addDays(d2, 1), '00:00', tz)); }
   if (f.q) { cond.push("(e.employee_code LIKE ? ESCAPE '\\' OR e.name LIKE ? ESCAPE '\\')"); const like = `%${f.q.replace(/[\\%_]/g, (m) => '\\' + m)}%`; p.push(like, like); }
   const FROM = `FROM audit_logs a LEFT JOIN employees e ON e.employee_code = substr(a.entity_id, 1, instr(a.entity_id, '@') - 1)`;
   const [cnt, rows] = await db.batch([

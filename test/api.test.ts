@@ -48,6 +48,23 @@ describe('Telegram webhook', () => {
     expect(h.db.get('SELECT COUNT(*) AS n FROM telegram_messages')).toEqual({ n: 0 });
   });
 
+  it('clean: wipes the bot (token, account, webhook, secret) but keeps attendance; a new bot can be set up', async () => {
+    const { h, e1 } = await fixture();
+    await h.roster(e1, D, 'A');
+    expect((await h.send({ text: 'IN', ts: lk(D, '06:58'), thread: 1001 })).json.status).toBe('PROCESSED');
+    const oldSecret = await h.secretFor('LKR');
+    const r = await h.req('POST', '/api/bots/LKR/clean');
+    expect(r.status).toBe(200);
+    expect(r.json.webhookRemoved).toBe(true);
+    const b = h.db.get<Record<string, unknown>>("SELECT * FROM telegram_bots WHERE currency_code = 'LKR'")!;
+    expect([b.status, b.token_ciphertext, b.username, b.webhook_url, b.bot_user_id]).toEqual(['NOT_SET', null, null, null, null]);
+    expect((await h.session(e1, D))!.actual_in_at).toBe(lk(D, '06:58')); // attendance kept
+    expect((await h.send({ text: 'OUT', ts: lk(D, '15:00'), thread: 1001, secret: oldSecret })).status).toBe(401); // old secret is dead
+    expect(h.db.get("SELECT COUNT(*) AS n FROM audit_logs WHERE action = 'BOT_CLEARED'")).toEqual({ n: 1 });
+    await h.setupBot('LKR', 700000009);
+    expect((await h.send({ text: 'OUT', ts: lk(D, '15:01'), thread: 1001 })).json.status).toBe('PROCESSED');
+  });
+
   it('unknown currency path → 404; bot mid-setup (NOT_SET) with a valid secret is accepted; stopped bot → 503', async () => {
     const { h } = await fixture();
     expect((await h.send({ text: 'IN', ts: lk(D, '07:00'), thread: 1001, code: 'XYZ', secret: 'x' })).status).toBe(404);
@@ -290,6 +307,22 @@ describe('admin corrections and audit (test 16)', () => {
     expect(() => h.db.x('UPDATE attendance_events SET event_ts = 0')).toThrow(/immutable/);
   });
 
+  it('edit = delete the old punch + add the corrected one in one step; both are traceable', async () => {
+    const { h, e1 } = await fixture();
+    await h.roster(e1, D, 'A');
+    await h.send({ text: 'IN', ts: lk(D, '07:00'), thread: 1001 });
+    await h.send({ text: 'OUT', ts: lk(D, '13:00'), thread: 1001 });
+    h.now(lk(D2, '09:00'));
+    const evId = h.db.get<{ id: number }>("SELECT id FROM attendance_events WHERE event_type = 'CLOCK_OUT'")!.id;
+    expect((await h.req('POST', `/api/sessions/${e1}/${D}/adjustments`, { action: 'EDIT_EVENT', targetEventId: evId, eventType: 'CLOCK_OUT', ts: lk(D, '13:00'), reason: 'No real change here' })).status).toBe(400);
+    const r = await h.req('POST', `/api/sessions/${e1}/${D}/adjustments`, { action: 'EDIT_EVENT', targetEventId: evId, eventType: 'CLOCK_OUT', ts: lk(D, '15:05'), reason: 'Supervisor confirmed 15:05' });
+    expect(r.status).toBe(200);
+    expect(r.json.after).toMatchObject({ status: 'ON_TIME', actual_out: '2026-10-15 15:05:00' });
+    const adj = h.db.rows<any>('SELECT action, target_event_id, after_json IS NOT NULL AS done FROM attendance_adjustments ORDER BY id');
+    expect(adj).toEqual([{ action: 'VOID_EVENT', target_event_id: evId, done: 1 }, { action: 'ADD_EVENT', target_event_id: evId, done: 1 }]);
+    expect((await h.req('POST', `/api/sessions/${e1}/${D}/adjustments`, { action: 'EDIT_EVENT', targetEventId: evId, eventType: 'CLOCK_OUT', ts: lk(D, '15:06'), reason: 'Second edit of old one' })).status).toBe(400);
+  });
+
   it('editing an exception can fix attendance in one step', async () => {
     const { h, e1 } = await fixture();
     await h.roster(e1, D, 'A');
@@ -500,5 +533,9 @@ describe('roster history', () => {
     expect(JSON.parse(imp.after_json)).toMatchObject({ added: 1 });
     expect(man).toMatchObject({ action: 'SHIFT_INSTANCE_ADJUSTED', employee_code: 'E001', note: 'Cover for sick colleague', entity_id: 'E001@2026-10-20' });
     expect((await h.req('GET', '/api/roster/history-log?q=nimal')).json.total).toBe(1);
+    // custom date range = the day the change was made (Sri Lanka time); a reversed range is accepted
+    expect((await h.req('GET', '/api/roster/history-log?from=2026-10-15&to=2026-10-15')).json.total).toBe(2);
+    expect((await h.req('GET', '/api/roster/history-log?from=2026-10-16&to=2026-10-31')).json.total).toBe(0);
+    expect((await h.req('GET', '/api/roster/history-log?from=2026-10-15&to=2026-10-01')).json.total).toBe(2);
   });
 });
