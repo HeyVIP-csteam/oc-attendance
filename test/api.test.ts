@@ -719,6 +719,17 @@ describe('roster OT tag', () => {
   });
 });
 
+describe('shift matching window in minutes', () => {
+  it('accepts a 30-minute window and keeps the chosen unit', async () => {
+    const { h } = await fixture();
+    expect((await h.req('PUT', '/api/settings/rules', { windowHours: 0.5, windowUnit: 'm', lateAsException: false, botReply: true })).status).toBe(200);
+    const m = await h.req('GET', '/api/meta');
+    expect(m.json.rules).toMatchObject({ windowHours: 0.5, windowUnit: 'm' });
+    expect((await h.req('PUT', '/api/settings/rules', { windowHours: 0.51, lateAsException: false, botReply: true })).status).toBe(400);
+    expect((await h.req('PUT', '/api/settings/rules', { windowHours: 9, lateAsException: false, botReply: true })).status).toBe(400);
+  });
+});
+
 describe('roster history', () => {
   it('lists manual shift changes and one row per roster import, with who, when and why', async () => {
     const { h, e1 } = await fixture();

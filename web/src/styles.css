@@ -160,6 +160,9 @@ sup.dd{color:var(--info);font-weight:700;font-size:10px;margin-left:1px}
 .setrow:nth-child(even){background:color-mix(in srgb,var(--card) 55%,var(--bg))}
 .setrow>label{font-size:13.5px;color:var(--ink);font-weight:500}
 .setctl input,.setctl select{width:100%}
+.setctl.unitctl{display:flex;gap:8px}
+.setctl.unitctl input{flex:1;min-width:0}
+.setctl.unitctl select{width:110px;flex:none}
 .setfoot{display:flex;justify-content:flex-end;margin-top:14px}
 @media (max-width:600px){.setrow{grid-template-columns:1fr;gap:6px}}
 .extbl td{vertical-align:middle}

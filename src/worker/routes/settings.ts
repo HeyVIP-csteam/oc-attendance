@@ -86,7 +86,8 @@ settingsRoutes.put('/settings/parser', async (c) => {
 });
 
 const RulesSchema = z.object({
-  windowHours: z.number().int().min(1).max(8),
+  windowHours: z.number().min(5 / 60).max(8).refine((h) => Math.abs(h * 60 - Math.round(h * 60)) < 1e-6, 'whole minutes only'),
+  windowUnit: z.enum(['h', 'm']).optional().default('h'),
   lateAsException: z.boolean(),
   botReply: z.boolean(),
   otHours: z.number().min(1).max(24).optional().default(9),
