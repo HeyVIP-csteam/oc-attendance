@@ -1,6 +1,6 @@
 import { type Context, Hono } from 'hono';
 import { z } from 'zod';
-import { EVENT_TYPES, FIXED, type KeywordConfig, type Rules } from '../../shared/codes';
+import { EVENT_TYPES, FIXED, type KeywordConfig, ROSTER_COLORS, type RosterCode, type Rules } from '../../shared/codes';
 import { validateKeywords } from '../../shared/parser';
 import { addDays, localDate } from '../../shared/time';
 import type { AppBindings, Env } from '../env';
@@ -33,6 +33,7 @@ settingsRoutes.get('/meta', async (c) => {
     user: c.get('admin'), tz, today: localDate(Date.now(), tz), now: Date.now(),
     currencies: cur.results, shifts: sh.results, employees: emps.results,
     keywords: settings.keywords, rules: settings.rules, parser: settings.parser,
+    rosterCodes: settings.rosterCodes,
     rulesCur: Object.fromEntries((cur.results as { code: string }[]).map((x) => [x.code, rulesFor(settings, x.code)])), fixed: FIXED, dataVersion: settings.dataVersion,
   });
 });
@@ -138,6 +139,64 @@ settingsRoutes.post('/messages/reparse', async (c) => {
   const n = await reparsePending(c.env, c.get('admin').username, now);
   if (n) await auditStmt(c.env.DB, { actor: c.get('admin').username, action: 'MESSAGES_REPARSED', entityType: 'telegram_messages', entityId: 'pending', after: { count: n }, ip: clientIp(c), at: now }).run();
   return c.json({ count: n });
+});
+
+// ---------------------------------------------------------------- roster codes (OFF, VL, SL … — days that are not a work shift)
+const CodeSchema = z.object({
+  code: z.string().trim().toUpperCase().regex(/^[A-Z0-9]{1,6}$/, 'code'),
+  name: z.string().trim().min(1).max(40),
+  color: z.number().int().min(0).max(ROSTER_COLORS.length - 1),
+});
+async function saveCodes(c: Context<AppBindings>, list: RosterCode[], before: RosterCode[], extra: D1PreparedStatement[], what: string) {
+  const db = c.env.DB;
+  const now = Date.now();
+  const actor = c.get('admin').username;
+  await db.batch([
+    stmt(db, `INSERT INTO system_settings (key, value, updated_at, updated_by) VALUES ('roster_codes', ?, ?, ?)
+              ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, updated_by = excluded.updated_by`, JSON.stringify(list), now, actor),
+    ...extra,
+    auditStmt(db, { actor, action: 'SETTINGS_UPDATED', entityType: 'system_settings', entityId: `roster_codes:${what}`, before, after: list, ip: clientIp(c), at: now }),
+    bump(db, now),
+  ]);
+}
+async function checkCode(db: D1Database, code: string) {
+  if (await first(db, 'SELECT 1 AS x FROM shift_templates WHERE upper(code) = ?', code)) throw bad('VALIDATION', `${code} 已经是班次代号`, `${code} is already a shift code`);
+}
+settingsRoutes.post('/roster-codes', async (c) => {
+  requireAdminRole(c);
+  const v = await body(c, CodeSchema);
+  const before = (await loadSettings(c.env.DB)).rosterCodes;
+  if (before.some((x) => x.code === v.code)) throw conflict('EXISTS', `${v.code} 已存在`, `${v.code} already exists`);
+  await checkCode(c.env.DB, v.code);
+  await saveCodes(c, [...before, v], before, [], v.code);
+  return c.json({ ok: true });
+});
+settingsRoutes.put('/roster-codes/:code', async (c) => {
+  requireAdminRole(c);
+  const old = c.req.param('code').toUpperCase();
+  const v = await body(c, CodeSchema);
+  const db = c.env.DB;
+  const before = (await loadSettings(db)).rosterCodes;
+  if (!before.some((x) => x.code === old)) throw notFound();
+  if (v.code !== old) {
+    if (before.some((x) => x.code === v.code)) throw conflict('EXISTS', `${v.code} 已存在`, `${v.code} already exists`);
+    await checkCode(db, v.code);
+  }
+  // renaming a code renames it on the roster too
+  const extra = v.code !== old ? [stmt(db, 'UPDATE roster_marks SET code = ? WHERE code = ?', v.code, old)] : [];
+  await saveCodes(c, before.map((x) => (x.code === old ? v : x)), before, extra, old);
+  return c.json({ ok: true });
+});
+settingsRoutes.delete('/roster-codes/:code', async (c) => {
+  requireAdminRole(c);
+  const code = c.req.param('code').toUpperCase();
+  const db = c.env.DB;
+  const before = (await loadSettings(db)).rosterCodes;
+  if (!before.some((x) => x.code === code)) throw notFound();
+  const used = await first<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM roster_marks WHERE code = ?', code);
+  if (used && used.n > 0) throw conflict('IN_USE', `Roster 上还有 ${used.n} 天使用 ${code}，请先把这些日子改成别的再删除`, `${code} is still used on ${used.n} roster day(s); change those days first`);
+  await saveCodes(c, before.filter((x) => x.code !== code), before, [], code);
+  return c.json({ ok: true });
 });
 
 // ---------------------------------------------------------------- currencies

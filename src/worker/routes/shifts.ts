@@ -134,7 +134,7 @@ shiftRoutes.get('/roster', async (c) => {
   const otMs = (cur: string) => Math.round(rulesFor(settings, cur).otHours * 3_600_000);
   const otCase = `CASE e.currency_code ${curs.map(() => 'WHEN ? THEN ?').join(' ')} ELSE ? END`;
   const otParams = [...curs.flatMap((cu) => [cu, otMs(cu)]), otMs('')];
-  const [instances, ot] = ids.length ? await Promise.all([
+  const [instances, ot, marks] = ids.length ? await Promise.all([
     all(db, `SELECT employee_id, shift_date, shift_id, shift_code, shift_name, scheduled_start_at, scheduled_end_at, adjustment_status, source
       FROM shift_instances WHERE employee_id IN (${inList}) AND shift_date BETWEEN ? AND ?`, ...ids, from, to),
     // OT on the roster: worked on a day off (no active shift), or on shift longer than the OT threshold (clock in → out)
@@ -144,8 +144,9 @@ shiftRoutes.get('/roster', async (c) => {
       WHERE s.employee_id IN (${inList}) AND s.work_date BETWEEN ? AND ? AND s.actual_in_at IS NOT NULL
         AND (s.shift_instance_id IS NULL OR i.adjustment_status = 'CANCELLED' OR (s.actual_out_at IS NOT NULL AND s.actual_out_at - s.actual_in_at > ${otCase}))`,
       ...ids, from, to, ...otParams),
-  ]) : [[], []];
-  return c.json({ from, to, total: (cnt.results[0] as { n: number }).n, counts, employees: emps.results, instances, ot });
+    all(db, `SELECT employee_id, mark_date, code FROM roster_marks WHERE employee_id IN (${inList}) AND mark_date BETWEEN ? AND ?`, ...ids, from, to),
+  ]) : [[], [], []];
+  return c.json({ from, to, total: (cnt.results[0] as { n: number }).n, counts, employees: emps.results, instances, ot, marks });
 });
 
 shiftRoutes.get('/roster/export', async (c) => {
@@ -154,12 +155,14 @@ shiftRoutes.get('/roster/export', async (c) => {
   const db = c.env.DB;
   const cond = f.cur ? 'AND e.currency_code = ?' : '';
   const p = f.cur ? [f.cur] : [];
-  const [emps, inst] = await db.batch([
+  const [emps, inst, marks] = await db.batch([
     stmt(db, `SELECT id, employee_code, name, currency_code FROM employees e WHERE e.employment_status = 'ACTIVE' ${cond} ORDER BY employee_code`, ...p),
     stmt(db, `SELECT i.employee_id, i.shift_date, i.shift_code FROM shift_instances i JOIN employees e ON e.id = i.employee_id
               WHERE i.shift_date BETWEEN ? AND ? AND i.adjustment_status <> 'CANCELLED' AND e.employment_status = 'ACTIVE' ${cond}`, from, to, ...p),
+    stmt(db, `SELECT r.employee_id, r.mark_date, r.code FROM roster_marks r JOIN employees e ON e.id = r.employee_id
+              WHERE r.mark_date BETWEEN ? AND ? AND e.employment_status = 'ACTIVE' ${cond}`, from, to, ...p),
   ]);
-  return c.json({ from, to, employees: emps.results, instances: inst.results });
+  return c.json({ from, to, employees: emps.results, instances: inst.results, marks: marks.results });
 });
 
 shiftRoutes.get('/roster/history', async (c) => {
@@ -170,12 +173,17 @@ shiftRoutes.get('/roster/history', async (c) => {
   return c.json({ rows });
 });
 
-interface Change { employeeId: number; code: string; date: string; from: string; to: string; template: ShiftTemplate | null }
+/** A roster day holds a shift (template), a roster code (mark: OFF, VL …) or nothing ('' = not scheduled). */
+interface Change { employeeId: number; code: string; date: string; from: string; to: string; template: ShiftTemplate | null; mark?: string | null }
 
 function instanceChangeStmts(db: D1Database, ch: Change, cur: { adjustment_status: string } | null, source: 'MANUAL' | 'ROSTER_IMPORT', actor: string, reason: string, ip: string, now: number, tz: string): D1PreparedStatement[] {
   const out: D1PreparedStatement[] = [];
-  if (ch.to === 'OFF') out.push(cancelInstanceStmt(db, ch.employeeId, ch.date, actor, now));
-  else out.push(upsertInstanceStmt(db, ch.employeeId, ch.date, ch.template!, source, cur && cur.adjustment_status !== 'CANCELLED' ? 'ADJUSTED' : 'MANUAL', null, actor, now));
+  if (!ch.template) out.push(cancelInstanceStmt(db, ch.employeeId, ch.date, actor, now));
+  else out.push(upsertInstanceStmt(db, ch.employeeId, ch.date, ch.template, source, cur && cur.adjustment_status !== 'CANCELLED' ? 'ADJUSTED' : 'MANUAL', null, actor, now));
+  if (ch.mark) out.push(stmt(db, `INSERT INTO roster_marks (employee_id, mark_date, code, updated_at, updated_by) VALUES (?,?,?,?,?)
+                                  ON CONFLICT (employee_id, mark_date) DO UPDATE SET code = excluded.code, updated_at = excluded.updated_at, updated_by = excluded.updated_by`,
+    ch.employeeId, ch.date, ch.mark, now, actor));
+  else out.push(stmt(db, 'DELETE FROM roster_marks WHERE employee_id = ? AND mark_date = ?', ch.employeeId, ch.date));
   const w = ch.template ? shiftWindow(ch.date, ch.template.start_time, ch.template.end_time, ch.template.timezone) : null;
   out.push(auditStmt(db, { actor, action: 'SHIFT_INSTANCE_ADJUSTED', entityType: 'shift_instance', entityId: `${ch.code}@${ch.date}`,
     before: { shift: ch.from }, after: { shift: ch.to, source, ...(w ? { start: fmtDateTime(w.startAt, tz), end: fmtDateTime(w.endAt, tz) } : {}) }, note: reason, ip, at: now }));
@@ -184,26 +192,33 @@ function instanceChangeStmts(db: D1Database, ch: Change, cur: { adjustment_statu
 
 shiftRoutes.put('/roster/cell', async (c) => {
   requireAdminRole(c);
-  const v = await body(c, z.object({ employeeId: z.number().int(), date: z.string().refine(isDate), value: z.union([z.literal('OFF'), z.number().int()]), reason: z.string().trim().min(4).max(300) }));
+  // value: a shift template id, a roster code ('OFF', 'VL' …) or '' (not scheduled)
+  const v = await body(c, z.object({ employeeId: z.number().int(), date: z.string().refine(isDate), value: z.union([z.string().trim().toUpperCase().max(6), z.number().int()]), reason: z.string().trim().min(4).max(300) }));
   const db = c.env.DB;
   const now = Date.now();
   const tz = bizTz(c.env);
   const actor = c.get('admin').username;
-  const [eR, iR, tR] = await db.batch([
+  const isShift = typeof v.value === 'number';
+  const [eR, iR, tR, mR] = await db.batch([
     stmt(db, 'SELECT id, employee_code, employment_status, deactivated_at FROM employees WHERE id = ?', v.employeeId),
     stmt(db, 'SELECT shift_code, adjustment_status FROM shift_instances WHERE employee_id = ? AND shift_date = ?', v.employeeId, v.date),
-    stmt(db, 'SELECT * FROM shift_templates WHERE id = ?', v.value === 'OFF' ? 0 : v.value),
+    stmt(db, 'SELECT * FROM shift_templates WHERE id = ?', isShift ? v.value : 0),
+    stmt(db, 'SELECT code FROM roster_marks WHERE employee_id = ? AND mark_date = ?', v.employeeId, v.date),
   ]);
+  const codes = (await loadSettings(db)).rosterCodes.map((x) => x.code);
+  const markTo = !isShift && v.value !== '' ? String(v.value) : null;
+  if (markTo && !codes.includes(markTo)) throw bad('VALIDATION', `代号 ${markTo} 不存在`, `Unknown roster code ${markTo}`);
   const e = eR.results[0] as { employee_code: string; employment_status: string } | undefined;
   if (!e) throw notFound('Employee not found');
   const cur = (iR.results[0] as { shift_code: string; adjustment_status: string } | undefined) ?? null;
   const t = (tR.results[0] as unknown as ShiftTemplate | undefined) ?? null;
-  if (v.value !== 'OFF' && (!t || !t.is_active)) throw bad('VALIDATION', '班次不存在或未启用', 'Shift not found or inactive');
-  if (v.value !== 'OFF' && e.employment_status !== 'ACTIVE') throw bad('INACTIVE', '员工已停用', 'Employee is inactive');
-  const fromCode = cur && cur.adjustment_status !== 'CANCELLED' ? cur.shift_code : 'OFF';
-  const toCode = v.value === 'OFF' ? 'OFF' : t!.code;
+  if (isShift && (!t || !t.is_active)) throw bad('VALIDATION', '班次不存在或未启用', 'Shift not found or inactive');
+  if (isShift && e.employment_status !== 'ACTIVE') throw bad('INACTIVE', '员工已停用', 'Employee is inactive');
+  const curMark = (mR.results[0] as { code: string } | undefined)?.code ?? null;
+  const fromCode = cur && cur.adjustment_status !== 'CANCELLED' ? cur.shift_code : curMark ?? '';
+  const toCode = isShift ? t!.code : markTo ?? '';
   if (fromCode === toCode) return c.json({ ok: true, unchanged: true });
-  await db.batch([...instanceChangeStmts(db, { employeeId: v.employeeId, code: e.employee_code, date: v.date, from: fromCode, to: toCode, template: t }, cur, 'MANUAL', actor, v.reason, clientIp(c), now, tz), bump(db, now)]);
+  await db.batch([...instanceChangeStmts(db, { employeeId: v.employeeId, code: e.employee_code, date: v.date, from: fromCode, to: toCode, template: isShift ? t : null, mark: markTo }, cur, 'MANUAL', actor, v.reason, clientIp(c), now, tz), bump(db, now)]);
   const settings = await loadSettings(db);
   await afterInstancesChanged(db, [[v.employeeId, v.date]], { now, tz, rules: settings.rules, byCur: settings.rulesCur });
   return c.json({ ok: true });
@@ -244,11 +259,14 @@ shiftRoutes.post('/roster/import', async (c) => {
   if (!dateCols.length) errs.push({ where: 'Header', msg: { zh: '找不到日期栏位（格式 YYYY-MM-DD）', en: 'No date columns found (use YYYY-MM-DD)' } });
   const dates = dateCols.map((x) => x.d).sort();
   if (dates.length && dayDiff(dates[dates.length - 1], dates[0]) > 62) throw bad('RANGE', '一次最多导入 62 天', 'At most 62 days per import');
-  const [empR, tplR, instR] = await db.batch([
+  const [empR, tplR, instR, markR] = await db.batch([
     stmt(db, 'SELECT id, employee_code, name, employment_status, deactivated_at, currency_code FROM employees'),
     stmt(db, 'SELECT * FROM shift_templates WHERE is_active = 1'),
     stmt(db, 'SELECT employee_id, shift_date, shift_code, adjustment_status FROM shift_instances WHERE shift_date BETWEEN ? AND ?', dates[0] ?? today, dates[dates.length - 1] ?? today),
+    stmt(db, 'SELECT employee_id, mark_date, code FROM roster_marks WHERE mark_date BETWEEN ? AND ?', dates[0] ?? today, dates[dates.length - 1] ?? today),
   ]);
+  const marks = new Map((markR.results as { employee_id: number; mark_date: string; code: string }[]).map((m) => [`${m.employee_id}|${m.mark_date}`, m.code]));
+  const rosterCodes = new Set((await loadSettings(db)).rosterCodes.map((x) => x.code));
   const emps = new Map((empR.results as { id: number; employee_code: string; name: string; employment_status: string; deactivated_at: number | null; currency_code: string | null }[]).map((e) => [e.employee_code.toLowerCase(), e]));
   const tpls = new Map((tplR.results as unknown as ShiftTemplate[]).map((t) => [t.code.toUpperCase(), t]));
   const inst = new Map((instR.results as { employee_id: number; shift_date: string; shift_code: string; adjustment_status: string }[]).map((i) => [`${i.employee_id}|${i.shift_date}`, i]));
@@ -268,14 +286,15 @@ shiftRoutes.post('/roster/import', async (c) => {
       cells++;
       const where = `${e.employee_code} · ${d}`;
       const cur = inst.get(`${e.id}|${d}`) ?? null;
-      const curCode = cur && cur.adjustment_status !== 'CANCELLED' ? cur.shift_code : 'OFF';
+      const curCode = cur && cur.adjustment_status !== 'CANCELLED' ? cur.shift_code : marks.get(`${e.id}|${d}`) ?? '';
+      // a shift code, a roster code (OFF, VL …) or "-" (not scheduled); an empty cell leaves the day unchanged
       let next: string;
-      if (val === 'OFF' || val === '-' || val === '休息') next = 'OFF';
-      else if (tpls.has(val)) next = val;
-      else { errs.push({ where, msg: { zh: `未知班次「${val}」`, en: `Unknown shift "${val}"` } }); continue; }
-      if (next !== 'OFF' && e.employment_status !== 'ACTIVE') { errs.push({ where, msg: { zh: '员工已停用', en: 'Employee is inactive' } }); continue; }
+      if (val === '-' || val === '–') next = '';
+      else if (tpls.has(val) || rosterCodes.has(val)) next = val;
+      else { errs.push({ where, msg: { zh: `未知代号「${val}」`, en: `Unknown code "${val}"` } }); continue; }
+      if (tpls.has(next) && e.employment_status !== 'ACTIVE') { errs.push({ where, msg: { zh: '员工已停用', en: 'Employee is inactive' } }); continue; }
       if (next === curCode) { unchanged++; continue; }
-      changes.push({ employeeId: e.id, code: e.employee_code, date: d, from: curCode, to: next, template: next === 'OFF' ? null : tpls.get(next)! });
+      changes.push({ employeeId: e.id, code: e.employee_code, date: d, from: curCode, to: next, template: tpls.get(next) ?? null, mark: !tpls.has(next) && next ? next : null });
     }
   }
   const plan = {
@@ -291,7 +310,7 @@ shiftRoutes.post('/roster/import', async (c) => {
   let added = 0, changed = 0, removed = 0;
   for (const ch of changes) {
     statements.push(...instanceChangeStmts(db, ch, inst.get(`${ch.employeeId}|${ch.date}`) ?? null, 'ROSTER_IMPORT', actor, v.reason, ip, now, tz));
-    if (ch.to === 'OFF') removed++; else if (ch.from === 'OFF') added++; else changed++;
+    if (!ch.template) removed++; else if (!tpls.has(ch.from)) added++; else changed++;
   }
   statements.push(auditStmt(db, { actor, action: 'ROSTER_IMPORTED', entityType: 'shift_instance', entityId: v.fileName, after: { changes: changes.length, added, changed, removed, skipped_errors: errs.length, ...(v.currency ? { currency: v.currency } : {}) }, note: v.reason, ip, at: now }));
   statements.push(bump(db, now));

@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { DEFAULT_PARSER, EVENT_LABEL, EVENT_TYPES, type KeywordConfig, type ParserRules } from '../../../src/shared/codes';
+import { DEFAULT_PARSER, EVENT_LABEL, EVENT_TYPES, type KeywordConfig, type ParserRules, ROSTER_COLORS } from '../../../src/shared/codes';
 import { toMin } from '../../../src/shared/time';
 import { CurSeg, Empty, ErrBox, Field, Modal, ModalActions, Mut, Tabs } from '../components/ui';
 import { api, ApiErr } from '../lib/api';
@@ -7,18 +7,19 @@ import { fmtDT } from '../lib/format';
 import { useI18n } from '../lib/i18n';
 import { type MetaRules, rulesOf, toast, useApi, useData, usePageState } from '../lib/store';
 
-type Tab = 'shift3' | 'cur' | 'kw' | 'rules' | 'bot' | 'admins';
+type Tab = 'shift3' | 'cur' | 'kw' | 'rules' | 'codes' | 'bot' | 'admins';
 
 export function SettingsPage() {
   const { L } = useI18n();
   const [s, set] = usePageState('st', () => ({ tab: 'shift3' as Tab }));
   return (
     <>
-      <Tabs items={[['shift3', L('班次设置', 'Shift Setting')], ['cur', L('货币', 'Currency')], ['kw', L('打卡关键词', 'Punch keywords')], ['rules', L('考勤与异常规则', 'Attendance rules')], ['bot', L('Bot 设置', 'Bot Setting')], ['admins', L('管理员账号', 'Admin accounts')]]} value={s.tab} onChange={(tab) => set({ tab })} />
+      <Tabs items={[['shift3', L('班次设置', 'Shift Setting')], ['cur', L('货币', 'Currency')], ['kw', L('打卡关键词', 'Punch keywords')], ['rules', L('考勤与异常规则', 'Attendance rules')], ['codes', L('排班代号', 'Roster codes')], ['bot', L('Bot 设置', 'Bot Setting')], ['admins', L('管理员账号', 'Admin accounts')]]} value={s.tab} onChange={(tab) => set({ tab })} />
       {s.tab === 'shift3' && <Shift3 />}
       {s.tab === 'cur' && <Currencies />}
       {s.tab === 'kw' && <Keywords />}
       {s.tab === 'rules' && <Rules />}
+      {s.tab === 'codes' && <RosterCodes />}
       {s.tab === 'bot' && <Bots />}
       {s.tab === 'admins' && <Admins />}
     </>
@@ -231,6 +232,68 @@ function RulesForm({ cur }: { cur: string }) {
       </div>
       {!readOnly && <div className="setfoot"><button className="btn p" onClick={save}>{L(`保存 ${cur} 规则`, `Save ${cur} rules`)}</button></div>}
     </>
+  );
+}
+
+// ---------------------------------------------------------------- Roster codes (OFF, VL, SL …)
+type RCode = { code: string; name: string; color: number };
+function RosterCodes() {
+  const { L } = useI18n();
+  const { meta, readOnly, reloadMeta } = useData();
+  const [edit, setEdit] = useState<RCode | 'new' | null>(null);
+  const onErr = useErr();
+  const list = meta.rosterCodes ?? [];
+  const chip = (c: RCode) => { const [bg, fg] = ROSTER_COLORS[c.color] ?? ROSTER_COLORS[0]; return <span className="rcchip" style={{ background: bg, color: fg }}>{c.code}</span>; };
+  const del = async (c: RCode) => {
+    if (!confirm(L(`删除代号 ${c.code}（${c.name}）？`, `Delete code ${c.code} (${c.name})?`))) return;
+    try { await api(`/roster-codes/${encodeURIComponent(c.code)}`, { method: 'DELETE' }); toast(L('已删除', 'Deleted')); await reloadMeta(); } catch (e) { onErr(e); }
+  };
+  return (
+    <div className="card"><h3>{L('排班代号', 'Roster codes')}</h3>
+      <p className="mut" style={{ fontSize: 12.5, margin: '0 0 12px' }}>{L('不用上班的日子（休息、请假、假期……）用的代号，可以在 Roster 和排班导入里使用，和班次 A / B / C 并列。', 'Codes for days that are not a work shift (day off, leave, holiday…). They can be used on the roster and in roster imports, next to the shift codes A / B / C.')}</p>
+      {list.length === 0 ? <div className="empty">{L('还没有代号，请新增', 'No codes yet — add your own')}</div> : (
+        <div className="tw"><table><thead><tr><th>{L('代号', 'Code')}</th><th>{L('含义', 'Meaning')}</th>{!readOnly && <th>{L('操作', 'Action')}</th>}</tr></thead><tbody>
+          {list.map((c) => <tr key={c.code}><td>{chip(c)}</td><td>{c.name}</td>{!readOnly && <td><button className="btn sm" onClick={() => setEdit(c)}>{L('编辑', 'Edit')}</button> <button className="btn sm d" onClick={() => del(c)}>{L('删除', 'Delete')}</button></td>}</tr>)}
+        </tbody></table></div>
+      )}
+      {!readOnly && <div className="setfoot"><button className="btn p" onClick={() => setEdit('new')}>+ {L('新增代号', 'Add code')}</button></div>}
+      {edit && <RosterCodeModal code={edit === 'new' ? null : edit} onClose={() => setEdit(null)} />}
+    </div>
+  );
+}
+
+function RosterCodeModal({ code, onClose }: { code: RCode | null; onClose: () => void }) {
+  const { L } = useI18n();
+  const { reloadMeta } = useData();
+  const [v, setV] = useState<RCode>(code ?? { code: '', name: '', color: 3 });
+  const [err, setErr] = useState<ApiErr | Error | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [bg, fg] = ROSTER_COLORS[v.color] ?? ROSTER_COLORS[0];
+  const save = async () => {
+    if (!v.code || !v.name.trim()) return setErr(new Error(L('请填写代号和含义', 'Code and meaning are required')));
+    setBusy(true);
+    try {
+      await api(code ? `/roster-codes/${encodeURIComponent(code.code)}` : '/roster-codes', { method: code ? 'PUT' : 'POST', body: { code: v.code, name: v.name.trim(), color: v.color } });
+      toast(L('已保存', 'Saved'));
+      await reloadMeta();
+      onClose();
+    } catch (e) { setErr(e as ApiErr); } finally { setBusy(false); }
+  };
+  return (
+    <Modal onClose={onClose}>
+      <h3 style={{ marginTop: 0 }}>{code ? L('编辑代号', 'Edit code') : L('新增代号', 'Add code')}</h3>
+      <div className="fg">
+        <div><label>{L('代号（1–6 个字母或数字）', 'Code (1–6 letters or digits)')}</label><input value={v.code} maxLength={6} placeholder="e.g. EL" onChange={(e) => setV({ ...v, code: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '') })} /></div>
+        <div><label>{L('含义', 'Meaning')}</label><input value={v.name} maxLength={40} placeholder="e.g. Emergency Leave" onChange={(e) => setV({ ...v, name: e.target.value })} /></div>
+      </div>
+      <div style={{ marginTop: 12 }}><label className="mut" style={{ fontSize: 12, display: 'block', marginBottom: 6 }}>{L('颜色', 'Color')}</label>
+        <div className="rcsw">{ROSTER_COLORS.map(([b, f], k) => <button type="button" key={k} className={k === v.color ? 'on' : ''} style={{ background: b, color: f }} onClick={() => setV({ ...v, color: k })}>Aa</button>)}</div>
+      </div>
+      <div className="mut" style={{ fontSize: 12.5, marginTop: 12 }}>{L('Roster 上的样子：', 'Preview on the roster: ')}<span className="rcchip" style={{ background: bg, color: fg }}>{v.code || '—'}</span> {v.name}</div>
+      {code && v.code !== code.code && <div className="mut" style={{ fontSize: 12, marginTop: 6 }}>{L(`Roster 上所有 ${code.code} 都会改成 ${v.code || '—'}。`, `Every ${code.code} on the roster becomes ${v.code || '—'}.`)}</div>}
+      <div style={{ marginTop: 8 }}><ErrBox error={err} /></div>
+      <ModalActions onCancel={onClose} onOk={save} busy={busy} />
+    </Modal>
   );
 }
 

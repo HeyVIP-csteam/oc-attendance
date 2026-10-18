@@ -108,3 +108,12 @@ export const DEFAULT_PARSER: ParserRules = { skipLabels: [], typoTolerance: true
 export const DEFAULT_RULES: Rules = { windowHours: 4, windowUnit: 'h', lateAsException: false, botReply: true, otHours: 9, breakMinutes: 90, breakUnit: 'm' };
 
 export const BIZ_TZ_DEFAULT = 'Asia/Colombo';
+
+/** Roster code colors: [background, text]. 16 soft + 16 strong. A roster code stores the index. */
+export const ROSTER_COLORS: [string, string][] = [
+  ['#eef1f5', '#475569'], ['#fee2e2', '#b91c1c'], ['#ffedd5', '#c2410c'], ['#fef3c7', '#92400e'], ['#fef9c3', '#854d0e'], ['#ecfccb', '#4d7c0f'], ['#dcfce7', '#15803d'], ['#ccfbf1', '#0f766e'],
+  ['#cffafe', '#0e7490'], ['#e0f2fe', '#0369a1'], ['#dbeafe', '#1d4ed8'], ['#e0e7ff', '#4338ca'], ['#ede9fe', '#6d28d9'], ['#f3e8ff', '#7e22ce'], ['#fce7f3', '#be185d'], ['#ffe4e6', '#be123c'],
+  ['#475569', '#ffffff'], ['#dc2626', '#ffffff'], ['#ea580c', '#ffffff'], ['#d97706', '#ffffff'], ['#ca8a04', '#ffffff'], ['#65a30d', '#ffffff'], ['#16a34a', '#ffffff'], ['#0d9488', '#ffffff'],
+  ['#0891b2', '#ffffff'], ['#0284c7', '#ffffff'], ['#2563eb', '#ffffff'], ['#4f46e5', '#ffffff'], ['#7c3aed', '#ffffff'], ['#9333ea', '#ffffff'], ['#db2777', '#ffffff'], ['#e11d48', '#ffffff'],
+];
+export interface RosterCode { code: string; name: string; color: number }

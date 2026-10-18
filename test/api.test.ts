@@ -224,12 +224,13 @@ describe('shifts, roster and rotation', () => {
     const { h, e1, e2 } = await fixture();
     const grid = [['Employee ID', 'Name', '2026-10-20', '2026-10-21', '2026-10-22'], ['E001', 'Nimal', 'A', 'B', 'OFF'], ['E002', 'Kasun', 'C', 'X', ''], ['E999', '?', 'A', '', '']];
     const dry = await h.req('POST', '/api/roster/import', { grid, fileName: 'oct.csv' });
-    expect(dry.json.plan).toMatchObject({ changeCount: 3, errorCount: 2, unchanged: 1 });
+    expect(dry.json.plan).toMatchObject({ changeCount: 4, errorCount: 2, unchanged: 0 }); // OFF is a roster code: the day gets marked OFF
     expect((await h.req('POST', '/api/roster/import', { grid, apply: true, reason: '' })).status).toBe(400);
     const ap = await h.req('POST', '/api/roster/import', { grid, fileName: 'oct.csv', apply: true, reason: 'October roster' });
     expect(ap.json.applied).toMatchObject({ added: 3 });
     const roster = await h.req('GET', '/api/roster?from=2026-10-20&to=2026-10-22');
     expect(roster.json.instances.map((i: any) => `${i.employee_id}:${i.shift_date}:${i.shift_code}`).sort()).toEqual([`${e1}:2026-10-20:A`, `${e1}:2026-10-21:B`, `${e2}:2026-10-20:C`].sort());
+    expect(roster.json.marks).toEqual([{ employee_id: e1, mark_date: '2026-10-22', code: 'OFF' }]);
   });
 
   it('default shift assignment generates future instances', async () => {
@@ -852,6 +853,36 @@ describe('disable / active / delete employee', () => {
     expect(cnt("SELECT COUNT(*) AS n FROM system_settings WHERE key = 'purge_employee'")).toBe(0);
     // raw data of other employees is still append-only
     expect(() => h.db.x('DELETE FROM attendance_events WHERE employee_id = ?', e2)).toThrow();
+  });
+});
+
+describe('roster codes', () => {
+  it('admin-defined codes: add, use on the roster and in imports, rename, delete only when unused', async () => {
+    const { h, e1 } = await fixture();
+    expect((await h.req('GET', '/api/meta')).json.rosterCodes).toEqual([{ code: 'OFF', name: 'Day off', color: 0 }]);
+    expect((await h.req('POST', '/api/roster-codes', { code: 'vl', name: 'Vacation Leave', color: 6 })).status).toBe(200);
+    expect((await h.req('POST', '/api/roster-codes', { code: 'VL', name: 'Dup', color: 1 })).status).toBe(409);
+    expect((await h.req('POST', '/api/roster-codes', { code: 'A', name: 'Clash with shift A', color: 1 })).status).toBe(400);
+    // a shift day becomes a leave day: the shift is cancelled and the code is stored
+    await h.roster(e1, D2, 'A');
+    expect((await h.req('PUT', '/api/roster/cell', { employeeId: e1, date: D2, value: 'VL', reason: 'Annual leave' })).status).toBe(200);
+    expect(h.db.get<any>("SELECT adjustment_status FROM shift_instances WHERE employee_id = ? AND shift_date = ?", e1, D2).adjustment_status).toBe('CANCELLED');
+    expect(h.db.get<any>('SELECT code FROM roster_marks WHERE employee_id = ? AND mark_date = ?', e1, D2).code).toBe('VL');
+    expect((await h.req('PUT', '/api/roster/cell', { employeeId: e1, date: D2, value: 'XX', reason: 'Unknown code' })).status).toBe(400);
+    // import: codes, "-" clears, unknown code is an error
+    const grid = [['PSD ID', '2026-10-25', '2026-10-26', D2], ['E001', 'VL', 'ZZ', '-']];
+    const plan = (await h.req('POST', '/api/roster/import', { grid, fileName: 'r.csv' })).json.plan;
+    expect(plan).toMatchObject({ changeCount: 2, errorCount: 1 });
+    await h.req('POST', '/api/roster/import', { grid, fileName: 'r.csv', apply: true, reason: 'Leave plan' });
+    expect(h.db.rows<any>('SELECT mark_date, code FROM roster_marks WHERE employee_id = ? ORDER BY mark_date', e1)).toEqual([{ mark_date: '2026-10-25', code: 'VL' }]);
+    // rename follows onto the roster; delete is refused while used
+    expect((await h.req('PUT', '/api/roster-codes/VL', { code: 'AL', name: 'Annual Leave', color: 6 })).status).toBe(200);
+    expect(h.db.get<any>('SELECT code FROM roster_marks WHERE employee_id = ?', e1).code).toBe('AL');
+    expect((await h.req('DELETE', '/api/roster-codes/AL')).status).toBe(409);
+    await h.req('PUT', '/api/roster/cell', { employeeId: e1, date: '2026-10-25', value: '', reason: 'Leave cancelled' });
+    expect((await h.req('DELETE', '/api/roster-codes/AL')).status).toBe(200);
+    expect((await h.req('DELETE', '/api/roster-codes/OFF')).status).toBe(200); // OFF is not fixed
+    expect((await h.req('GET', '/api/meta')).json.rosterCodes).toEqual([]);
   });
 });
 

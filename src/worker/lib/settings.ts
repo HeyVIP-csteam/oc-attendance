@@ -1,15 +1,15 @@
-import { DEFAULT_KEYWORDS, DEFAULT_PARSER, DEFAULT_RULES, type KeywordConfig, type ParserRules, type Rules, BIZ_TZ_DEFAULT } from '../../shared/codes';
+import { DEFAULT_KEYWORDS, DEFAULT_PARSER, DEFAULT_RULES, type KeywordConfig, type ParserRules, type RosterCode, type Rules, BIZ_TZ_DEFAULT } from '../../shared/codes';
 import type { Env } from '../env';
 
 /** rules = the base set (also used for a currency that was never saved); rulesCur = each saved currency's own complete set. */
-export interface Settings { keywords: KeywordConfig; rules: Rules; rulesCur: Record<string, Rules>; parser: ParserRules; dataVersion: number }
+export interface Settings { keywords: KeywordConfig; rules: Rules; rulesCur: Record<string, Rules>; parser: ParserRules; rosterCodes: RosterCode[]; dataVersion: number }
 
 /** The attendance rules of one currency (every currency has its own set; an unsaved currency starts from the base set). */
 export function rulesFor(s: Pick<Settings, 'rules' | 'rulesCur'>, cur: string | null | undefined): Rules {
   return (cur && s.rulesCur[cur]) || s.rules;
 }
 
-export const settingsStmt = (db: D1Database) => db.prepare("SELECT key, value FROM system_settings WHERE key IN ('keywords','rules','rules_cur','parser','data_version')");
+export const settingsStmt = (db: D1Database) => db.prepare("SELECT key, value FROM system_settings WHERE key IN ('keywords','rules','rules_cur','parser','roster_codes','data_version')");
 
 export function parseSettings(rows: { key: string; value: string }[]): Settings {
   const m = new Map(rows.map((r) => [r.key, r.value]));
@@ -29,6 +29,7 @@ export function parseSettings(rows: { key: string; value: string }[]): Settings 
     rules,
     rulesCur,
     parser: safe<ParserRules>(m.get('parser'), DEFAULT_PARSER),
+    rosterCodes: (() => { try { const v = JSON.parse(m.get('roster_codes') ?? '[]'); return Array.isArray(v) ? (v as RosterCode[]) : []; } catch { return []; } })(),
     dataVersion: Number(m.get('data_version') ?? 0),
   };
 }

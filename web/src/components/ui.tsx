@@ -1,5 +1,5 @@
-import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
-import { EXCEPTIONS, exceptionSeverity, STATUSES } from '../../../src/shared/codes';
+import { type CSSProperties, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { EXCEPTIONS, exceptionSeverity, ROSTER_COLORS, STATUSES } from '../../../src/shared/codes';
 import type { ApiErr } from '../lib/api';
 import { useI18n } from '../lib/i18n';
 import { type MetaEmployee, useData, useToastText } from '../lib/store';
@@ -188,6 +188,19 @@ export function EmpSearch({ value, onChange }: { value: string; onChange: (v: st
       )}
     </div>
   );
+}
+
+// ---------------------------------------------------------------- roster codes (OFF, VL …)
+/** Inline colors for a roster code; null when the code is unknown. */
+export function useRosterCode() {
+  const { meta } = useData();
+  const list = meta.rosterCodes ?? [];
+  return (code: string | null | undefined) => {
+    const c = code ? list.find((x) => x.code === code) : undefined;
+    if (!c) return null;
+    const [bg, fg] = ROSTER_COLORS[c.color] ?? ROSTER_COLORS[0];
+    return { name: c.name, style: { background: bg, color: fg } as CSSProperties };
+  };
 }
 
 // ---------------------------------------------------------------- currency switch (segmented)

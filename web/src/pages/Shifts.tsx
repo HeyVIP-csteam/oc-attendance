@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { addDays, dayDiff, monthEnd, monthStart, weekday } from '../../../src/shared/time';
-import { Cnt, CurrencyOptions, EmpSearch, ErrBox, Field, Modal, ModalActions, Pager, Tabs, TblTop } from '../components/ui';
+import { Cnt, CurrencyOptions, EmpSearch, useRosterCode, ErrBox, Field, Modal, ModalActions, Pager, Tabs, TblTop } from '../components/ui';
 import { api, type ApiErr, qs } from '../lib/api';
 import { exportXLSX, readGrid } from '../lib/files';
 import { fmtDT, fmtDur, fmtT, today } from '../lib/format';
@@ -8,7 +8,7 @@ import { useI18n } from '../lib/i18n';
 import { type MetaShift, rulesOf, toast, useApi, useData, usePageState } from '../lib/store';
 
 interface Inst { employee_id: number; shift_date: string; shift_id: number; shift_code: string; shift_name: string; scheduled_start_at: number; scheduled_end_at: number; adjustment_status: string; source: string }
-interface RosterData { counts?: Record<string, number>; ot?: { employee_id: number; work_date: string; actual_in_at: number; actual_out_at: number | null; kind: 'OFF' | 'LONG' }[]; from: string; to: string; total: number; employees: { id: number; employee_code: string; name: string; currency_code: string | null; employment_status: string }[]; instances: Inst[] }
+interface RosterData { counts?: Record<string, number>; ot?: { employee_id: number; work_date: string; actual_in_at: number; actual_out_at: number | null; kind: 'OFF' | 'LONG' }[]; from: string; to: string; total: number; employees: { id: number; employee_code: string; name: string; currency_code: string | null; employment_status: string }[]; instances: Inst[]; marks?: { employee_id: number; mark_date: string; code: string }[] }
 
 export function Shifts() {
   const { L } = useI18n();
@@ -27,7 +27,7 @@ function Roster({ f, set }: { f: { from: string; to: string; cur: string; page: 
   const { readOnly, meta } = useData();
   const t = today();
   const { data, error } = useApi<RosterData>(`/roster?${qs({ from: f.from, to: f.to, cur: f.cur, page: f.page, size: f.size })}`);
-  const [cell, setCell] = useState<{ emp: RosterData['employees'][number]; date: string; inst: Inst | undefined; cancelled: boolean } | null>(null);
+  const [cell, setCell] = useState<{ emp: RosterData['employees'][number]; date: string; inst: Inst | undefined; cancelled: boolean; mark: string | null } | null>(null);
   const [plan, setPlan] = useState<{ grid: (string | number | null)[][]; file: string; plan: any; currency: string } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const days: string[] = [];
@@ -38,13 +38,15 @@ function Roster({ f, set }: { f: { from: string; to: string; cur: string; page: 
   const wd = (d: string) => (lang === 'en' ? ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] : ['日', '一', '二', '三', '四', '五', '六'])[weekday(d)];
   const byKey = new Map((data?.instances ?? []).map((i) => [`${i.employee_id}|${i.shift_date}`, i]));
   const otKey = new Map((data?.ot ?? []).map((o) => [`${o.employee_id}|${o.work_date}`, o]));
+  const markKey = new Map((data?.marks ?? []).map((m) => [`${m.employee_id}|${m.mark_date}`, m.code]));
+  const rc = useRosterCode();
   const doExport = async () => {
     try {
-      const r = await api<{ from: string; to: string; employees: { id: number; employee_code: string; name: string; currency_code: string | null }[]; instances: { employee_id: number; shift_date: string; shift_code: string }[] }>(`/roster/export?${qs({ from: f.from, to: f.to, cur: f.cur })}`);
+      const r = await api<{ from: string; to: string; employees: { id: number; employee_code: string; name: string; currency_code: string | null }[]; instances: { employee_id: number; shift_date: string; shift_code: string }[]; marks?: { employee_id: number; mark_date: string; code: string }[] }>(`/roster/export?${qs({ from: f.from, to: f.to, cur: f.cur })}`);
       const ds: string[] = [];
       for (let d = r.from; d <= r.to; d = addDays(d, 1)) ds.push(d);
-      const m = new Map(r.instances.map((i) => [`${i.employee_id}|${i.shift_date}`, i.shift_code]));
-      await exportXLSX(`roster_${r.from}_${r.to}${f.cur ? '_' + f.cur : ''}`, ['PSD ID', 'Employee Name', 'Currency', ...ds], r.employees.map((e) => [e.employee_code, e.name, e.currency_code ?? '', ...ds.map((d) => m.get(`${e.id}|${d}`) ?? 'OFF')]));
+      const m = new Map([...(r.marks ?? []).map((x) => [`${x.employee_id}|${x.mark_date}`, x.code] as [string, string]), ...r.instances.map((i) => [`${i.employee_id}|${i.shift_date}`, i.shift_code] as [string, string])]);
+      await exportXLSX(`roster_${r.from}_${r.to}${f.cur ? '_' + f.cur : ''}`, ['PSD ID', 'Employee Name', 'Currency', ...ds], r.employees.map((e) => [e.employee_code, e.name, e.currency_code ?? '', ...ds.map((d) => m.get(`${e.id}|${d}`) ?? '-')]));
       toast(L(`已导出 ${r.employees.length} 名员工的排班`, `Exported the roster of ${r.employees.length} employees`));
     } catch (e) { toast(L('导出失败', 'Export failed') + ': ' + (e as Error).message); }
   };
@@ -57,7 +59,9 @@ function Roster({ f, set }: { f: { from: string; to: string; cur: string; page: 
       await exportXLSX(`roster_template_${r.from}_${r.to}${f.cur ? '_' + f.cur : ''}`, ['PSD ID', 'Employee Name', 'Currency', ...ds],
         r.employees.map((e) => [e.employee_code, e.name, e.currency_code ?? '', ...ds.map(() => '')]), [
           ['How to use', 'Fill in the shift codes, then Shifts & Roster → Import'],
-          ['Shift codes', `${meta.shifts.filter((s) => s.is_active).map((s) => s.code).join(' / ')} / OFF`],
+          ['Shift codes', meta.shifts.filter((s) => s.is_active).map((s) => `${s.code} = ${s.name}`).join(' / ')],
+          ['Roster codes', (meta.rosterCodes ?? []).map((c) => `${c.code} = ${c.name}`).join(' / ') || '—'],
+          ['-', 'Not scheduled (clears the day)'],
           ['Empty cell', 'An empty cell leaves that day unchanged'],
           ['Dates', 'Each column header is a date (YYYY-MM-DD). You can add or remove date columns'],
           ['Employees', 'Rows can be added or removed; only the PSD ID column is used to find the employee'],
@@ -89,7 +93,12 @@ function Roster({ f, set }: { f: { from: string; to: string; cur: string; page: 
       {data && (
         <>
           <TblTop left={<Cnt n={data.total} />} size={f.size} onSize={(size) => set({ size, page: 1 })} />
-          <div className={`tw roster ${compact ? 'compact' : ''}`}><table><thead><tr>
+          <div className="rlegend">
+            {meta.shifts.filter((s) => s.is_active).map((s) => <span key={s.code}><span className={`cell ${s.code}`}>{s.code}</span>{s.name}</span>)}
+            {(meta.rosterCodes ?? []).map((c) => <span key={c.code}><span className="cell mark" style={rc(c.code)?.style}>{c.code}</span>{c.name}</span>)}
+            <span><span className="cell none">–</span>{L('未排班', 'Not scheduled')}</span>
+          </div>
+          <div className={`tw roster ${compact ? 'compact' : ''}`} style={{ ['--ridw' as string]: `${Math.max(72, Math.ceil(Math.max(0, ...data.employees.map((e) => e.employee_code.length)) * 8.6) + 22)}px` }}><table><thead><tr>
             <th className="rid">{L('PSD ID', 'PSD ID')}</th><th className="rname">{L('员工姓名', 'Employee Name')}</th>{!f.cur && <th>{L('货币', 'Currency')}</th>}
             {days.map((d) => <th key={d} className={`${d === t ? 'today' : ''} ${[0, 6].includes(weekday(d)) ? 'wkend' : ''}`}>{compact ? <><span className="dw">{wd(d)}</span>{Number(d.slice(8))}</> : `${wd(d)} ${d.slice(5)}`}</th>)}
           </tr></thead><tbody>
@@ -101,12 +110,14 @@ function Roster({ f, set }: { f: { from: string; to: string; cur: string; page: 
                   const i = raw && raw.adjustment_status !== 'CANCELLED' ? raw : undefined;
                   const cancelled = !!raw && raw.adjustment_status === 'CANCELLED';
                   const ot = otKey.get(`${e.id}|${d}`);
+                  const mk = i ? null : markKey.get(`${e.id}|${d}`) ?? null;
+                  const mc = rc(mk);
                   return (
-                    <td key={d}><span className={`cell ${i ? i.shift_code : 'OFF'}`} title={i ? `${i.shift_name} ${fmtT(i.scheduled_start_at)}–${fmtT(i.scheduled_end_at)} (LK)${ot?.kind === 'LONG' && ot.actual_out_at
+                    <td key={d}><span className={`cell ${i ? i.shift_code : mk ? 'mark' : 'none'}`} style={{ ...(mc?.style ?? {}), ...(readOnly ? { cursor: 'default' } : {}) }} title={i ? `${i.shift_name} ${fmtT(i.scheduled_start_at)}–${fmtT(i.scheduled_end_at)} (LK)${ot?.kind === 'LONG' && ot.actual_out_at
                         ? L(`\nOT：实际 ${fmtT(ot.actual_in_at)} – ${fmtT(ot.actual_out_at)}，在班 ${fmtDur(ot.actual_out_at - ot.actual_in_at)}（超过 ${rulesOf(meta, e.currency_code).otHours ?? 9} 小时）`, `\nOT: actual ${fmtT(ot.actual_in_at)} – ${fmtT(ot.actual_out_at)}, on shift ${fmtDur(ot.actual_out_at - ot.actual_in_at)} (over ${rulesOf(meta, e.currency_code).otHours ?? 9} h)`) : ''}`
-                      : ot ? L(`休息日上班（OT）：${fmtT(ot.actual_in_at)} – ${ot.actual_out_at ? fmtT(ot.actual_out_at) : '未下班'}`, `Worked on a day off (OT): ${fmtT(ot.actual_in_at)} – ${ot.actual_out_at ? fmtT(ot.actual_out_at) : 'not clocked out'}`) : L('休息', 'Off')}
-                      onClick={() => !readOnly && setCell({ emp: e, date: d, inst: i, cancelled })} style={readOnly ? { cursor: 'default' } : undefined}>
-                      {i ? (compact ? i.shift_code : <>{i.shift_code}<br /><span style={{ fontWeight: 400 }}>{fmtT(i.scheduled_start_at)}</span></>) : (compact ? '–' : 'OFF')}
+                      : ot ? L(`休息日上班（OT）：${fmtT(ot.actual_in_at)} – ${ot.actual_out_at ? fmtT(ot.actual_out_at) : '未下班'}`, `Worked on a day off (OT): ${fmtT(ot.actual_in_at)} – ${ot.actual_out_at ? fmtT(ot.actual_out_at) : 'not clocked out'}`) : mk ? `${mk} · ${mc?.name ?? ''}` : L('未排班', 'Not scheduled')}
+                      onClick={() => !readOnly && setCell({ emp: e, date: d, inst: i, cancelled, mark: mk })}>
+                      {i ? (compact ? i.shift_code : <>{i.shift_code}<br /><span style={{ fontWeight: 400 }}>{fmtT(i.scheduled_start_at)}</span></>) : (mk ?? '–')}
                       {ot && (!i || ot.kind === 'LONG') && <span className="ot">OT</span>}
                     </span></td>
                   );
@@ -123,20 +134,21 @@ function Roster({ f, set }: { f: { from: string; to: string; cur: string; page: 
   );
 }
 
-function CellModal({ emp, date, inst, onClose }: { emp: { id: number; employee_code: string; name: string }; date: string; inst: Inst | undefined; onClose: () => void }) {
+function CellModal({ emp, date, inst, mark, onClose }: { emp: { id: number; employee_code: string; name: string }; date: string; inst: Inst | undefined; mark: string | null; onClose: () => void }) {
   const { L } = useI18n();
   const { meta, refresh } = useData();
   const hist = useApi<{ rows: { created_at: number; actor: string; note: string; before_json: string | null }[] }>(`/roster/history?employeeId=${emp.id}&date=${date}`);
-  const [val, setVal] = useState(inst ? String(inst.shift_id) : '');
+  const rc = useRosterCode();
+  // a shift template id, 'code:XX' for a roster code, or 'none' (not scheduled)
+  const [val, setVal] = useState(inst ? String(inst.shift_id) : mark ? `code:${mark}` : 'none');
   const [reason, setReason] = useState('');
   const [err, setErr] = useState<ApiErr | Error | null>(null);
   const [busy, setBusy] = useState(false);
   const save = async () => {
     if (reason.trim().length < 4) return setErr(new Error(L('请填写原因（至少 4 个字）', 'Please give a reason (at least 4 characters)')));
-    if (!val) return setErr(new Error(L('请选择班次', 'Please choose a shift')));
     setBusy(true);
     try {
-      await api('/roster/cell', { method: 'PUT', body: { employeeId: emp.id, date, value: val === 'OFF' ? 'OFF' : Number(val), reason } });
+      await api('/roster/cell', { method: 'PUT', body: { employeeId: emp.id, date, value: val === 'none' ? '' : val.startsWith('code:') ? val.slice(5) : Number(val), reason } });
       toast(L('班次已调整，考勤已重算', 'Shift changed; attendance recalculated'));
       refresh();
       onClose();
@@ -145,11 +157,12 @@ function CellModal({ emp, date, inst, onClose }: { emp: { id: number; employee_c
   return (
     <Modal onClose={onClose}>
       <h3 style={{ marginTop: 0 }}>{L('调整班次', 'Change shift')} · {emp.employee_code} {emp.name} · {date}</h3>
-      <p>{L('当前：', 'Current: ')}<b>{inst ? `${inst.shift_name} ${fmtDT(inst.scheduled_start_at)} → ${fmtDT(inst.scheduled_end_at)}` : L('OFF（无班次）', 'OFF (no shift)')}</b></p>
+      <p>{L('当前：', 'Current: ')}<b>{inst ? `${inst.shift_name} ${fmtDT(inst.scheduled_start_at)} → ${fmtDT(inst.scheduled_end_at)}` : mark ? `${mark} · ${rc(mark)?.name ?? ''}` : L('未排班', 'Not scheduled')}</b></p>
       {hist.data && hist.data.rows.length > 0 && <div className="note">{hist.data.rows.map((h, i) => <div key={i}>{fmtDT(h.created_at)} {h.actor}：{h.note}</div>)}</div>}
       <div className="fg"><div><label>{L('调整为', 'Change to')}</label><select value={val} onChange={(e) => setVal(e.target.value)}>
-        {!inst && <option value="">—</option>}
-        {meta.shifts.filter((s) => s.is_active).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}<option value="OFF">{L('OFF（取消班次）', 'OFF (cancel shift)')}</option>
+        <optgroup label={L('班次', 'Shifts')}>{meta.shifts.filter((s) => s.is_active).map((s) => <option key={s.id} value={s.id}>{s.code} · {s.name}</option>)}</optgroup>
+        {(meta.rosterCodes ?? []).length > 0 && <optgroup label={L('排班代号', 'Roster codes')}>{(meta.rosterCodes ?? []).map((c) => <option key={c.code} value={`code:${c.code}`}>{c.code} · {c.name}</option>)}</optgroup>}
+        <option value="none">– {L('未排班', 'Not scheduled')}</option>
       </select></div></div>
       <div style={{ marginTop: 10 }}><label className="mut" style={{ fontSize: 12 }}>{L('原因（必填）', 'Reason (required)')}</label><textarea rows={2} value={reason} onChange={(e) => setReason(e.target.value)} /></div>
       <div style={{ marginTop: 8 }}><ErrBox error={err} /></div>
@@ -165,7 +178,8 @@ function ImportModal({ grid, file, plan, currency, onClose }: { grid: (string | 
   const [reason, setReason] = useState('');
   const [err, setErr] = useState<ApiErr | Error | null>(null);
   const [busy, setBusy] = useState(false);
-  const lbl = (c: string) => <span className={`cell ${c}`} style={{ display: 'inline-block', minWidth: 44, padding: '1px 6px' }}>{c}</span>;
+  const rc = useRosterCode();
+  const lbl = (c: string) => <span className={`cell ${c || 'none'}`} style={{ display: 'inline-block', minWidth: 44, padding: '1px 6px', ...(rc(c)?.style ?? {}) }}>{c || '–'}</span>;
   const apply = async () => {
     if (reason.trim().length < 4) return setErr(new Error(L('请填写原因（至少 4 个字）', 'Please give a reason (at least 4 characters)')));
     setBusy(true);
@@ -277,7 +291,8 @@ function History({ q, cur, from, to, page, size, set }: { q: string; cur: string
   const { data, error } = useApi<{ total: number; rows: HistRow[] }>(`/roster/history-log?${qs({ q, cur, from, to, page, size })}`);
   const t = today();
   const parse = (s: string | null) => { try { return s ? JSON.parse(s) : {}; } catch { return {}; } };
-  const chip = (c: string | undefined) => <span className={`cell ${c ?? 'OFF'}`} style={{ display: 'inline-block', minWidth: 40, padding: '1px 6px' }}>{c ?? '—'}</span>;
+  const rc = useRosterCode();
+  const chip = (c: string | undefined) => <span className={`cell ${c || 'none'}`} style={{ display: 'inline-block', minWidth: 40, padding: '1px 6px', ...(rc(c)?.style ?? {}) }}>{c || '–'}</span>;
   return (
     <>
       <div className="card"><div className="row">

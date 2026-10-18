@@ -15,6 +15,7 @@ export interface Meta {
   keywords: Record<'CLOCK_IN' | 'BREAK_START' | 'BREAK_END' | 'CLOCK_OUT', string[]>;
   rules: MetaRules;
   rulesCur?: Record<string, MetaRules>; // each currency's own attendance rules
+  rosterCodes?: { code: string; name: string; color: number }[];
   parser?: { skipLabels: string[]; typoTolerance: boolean; ignoreBrackets: boolean; typedTimeReview: boolean };
   dataVersion: number;
 }

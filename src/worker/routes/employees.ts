@@ -239,6 +239,7 @@ employeeRoutes.post('/employees/:id/delete', async (c) => {
     stmt(db, 'DELETE FROM attendance_adjustments WHERE employee_id = ?', id),
     stmt(db, `DELETE FROM telegram_messages WHERE id IN ${msgSet}`, id, id),
     stmt(db, 'DELETE FROM shift_instances WHERE employee_id = ?', id),
+    stmt(db, 'DELETE FROM roster_marks WHERE employee_id = ?', id),
     stmt(db, 'DELETE FROM employee_shift_assignments WHERE employee_id = ?', id),
     stmt(db, 'DELETE FROM telegram_topic_mappings WHERE employee_id = ?', id),
     stmt(db, 'DELETE FROM employees WHERE id = ?', id),
