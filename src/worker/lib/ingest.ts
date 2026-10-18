@@ -64,7 +64,7 @@ export function replyText(kind: 'ok' | 'sm' | 'unrec' | 'id', data: { type?: Eve
   const label = (c?: string) => (c && (EXCEPTIONS as Record<string, { label: Bi }>)[c]?.label.en) || c || '';
   switch (kind) {
     case 'ok': return `✅ ${EVENT_LABEL[data.type!].en} recorded · ${fmtTime(data.ts!, data.tz)} (${tzLabel})${data.readAs ? `\nRead from: "${data.readAs}"` : ''}${data.typedTime ? `\nNote: the time you wrote (${data.typedTime}) is not used — the Telegram time is recorded.` : ''}`;
-    case 'sm': return `⚠️ ${EVENT_LABEL[data.type!].en} not counted: ${label(data.code)}`;
+    case 'sm': return `⚠️ ${EVENT_LABEL[data.type!].en} not counted: ${label(data.code)}${data.readAs ? `\nRead from: "${data.readAs}"` : ''}`;
     case 'unrec':
       if (data.reason === 'TIME') return '⚠️ Not counted: the message contains a time. The punch time is taken from Telegram automatically — please send it again without the time. An admin has been notified.';
       if (data.reason === 'CONFLICT') return '⚠️ Not counted: the message contains more than one action. Please send one action per message. An admin has been notified.';
@@ -210,7 +210,7 @@ export async function ingestUpdate(env: Env, bot: BotRow, upd: TgUpdate, receive
   const accepted = code === null || code === 'CLOCK_OUT_DURING_BREAK';
   return {
     http: 200, status: 'PROCESSED', codes: code ? [code] : [], event: parsed.type,
-    reply: rules.botReply ? (accepted ? replyText('ok', { type: parsed.type, ts: tgTs, tz, readAs: parsed.norm === parsed.keyword ? undefined : parsed.remark, typedTime: parsed.typedTime }) : replyText('sm', { type: parsed.type, code: code!, tz })) : null,
+    reply: rules.botReply ? (accepted ? replyText('ok', { type: parsed.type, ts: tgTs, tz, readAs: parsed.norm === parsed.keyword ? undefined : parsed.remark, typedTime: parsed.typedTime }) : replyText('sm', { type: parsed.type, code: code!, tz, readAs: parsed.remark })) : null,
   };
 }
 

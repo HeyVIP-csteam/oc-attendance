@@ -29,6 +29,21 @@ export function normText(t: string | null | undefined): string {
     .trim();
 }
 
+/** Little words people add or leave out ("end of shift" = "end shift", "done for the day" = "done for day"). */
+const FILLER = new Set(['of', 'the', 'for', 'a', 'an', 'to']);
+/** Compares keywords and messages without filler words (a text made only of filler words is kept as is). */
+export function canon(n: string): string {
+  const w = n.split(' ').filter((x) => !FILLER.has(x));
+  return w.length ? w.join(' ') : n;
+}
+
+const isLatin = (s: string) => !/[^\x00-\x7f]/.test(s);
+
+function permutations(w: string[]): string[][] {
+  if (w.length <= 1) return [w];
+  return w.flatMap((x, i) => permutations([...w.slice(0, i), ...w.slice(i + 1)]).map((p) => [x, ...p]));
+}
+
 export interface KeywordIndex { map: Map<string, EventType>; sorted: string[]; tokens: Set<string>; rules: ParserRules; label: RegExp | null }
 
 export function buildKeywordIndex(kw: KeywordConfig, parser: Partial<ParserRules> = {}): KeywordIndex {
@@ -36,9 +51,16 @@ export function buildKeywordIndex(kw: KeywordConfig, parser: Partial<ParserRules
   const map = new Map<string, EventType>();
   for (const [type, list] of Object.entries(kw) as [EventType, string[]][]) {
     for (const k of list) {
-      const n = normText(k);
-      if (n) map.set(n, type);
+      const n = canon(normText(k));
+      if (n && !map.has(n)) map.set(n, type);
     }
+  }
+  // word order does not matter for short phrases: "end break" = "BREAK END", "in clock" = "CLOCK IN".
+  // Added after the real keywords, so a keyword the admin typed always wins over a reordered one.
+  for (const [k, type] of [...map]) {
+    const w = k.split(' ');
+    if (w.length < 2 || w.length > 3 || !w.every(isLatin)) continue;
+    for (const p of permutations(w)) { const alias = p.join(' '); if (!map.has(alias)) map.set(alias, type); }
   }
   const sorted = [...map.keys()].sort((a, b) => b.length - a.length); // longest phrase first
   const tokens = new Set<string>();
@@ -53,13 +75,12 @@ export function buildKeywordIndex(kw: KeywordConfig, parser: Partial<ParserRules
 const TIME_RE = /(^|[^\d])\d{1,2}\s*[:：.]\s*\d{2}(?!\d)|(^|[^\d])\d{1,2}\s*(am|pm|a\.m|p\.m)\b/i;
 const MAX_LINE_WORDS = 12;   // longer lines are prose, not a punch
 const SHORT_LINE_WORDS = 4;  // a single-word keyword ("in", "back") only counts on a short line
-const isLatin = (s: string) => !/[^\x00-\x7f]/.test(s);
 
 /** Splits the message into the lines that may carry the action (label lines and bracketed asides removed). */
 function actionLines(text: string, idx: KeywordIndex): { raw: string; norm: string }[] {
   return text.split(/\r?\n/)
     .filter((l) => !idx.label?.test(l))
-    .map((l) => ({ raw: l.trim(), norm: normText(idx.rules.ignoreBrackets ? l.replace(/[(（][^)）]*[)）]?/g, ' ') : l) }))
+    .map((l) => ({ raw: l.trim(), norm: canon(normText(idx.rules.ignoreBrackets ? l.replace(/[(（][^)）]*[)）]?/g, ' ') : l)) }))
     .filter((l) => l.norm);
 }
 
@@ -163,9 +184,9 @@ export function validateKeywords(kw: KeywordConfig): { zh: string; en: string } 
       const n = normText(w);
       if (!n) return { zh: `「${w}」去掉符号后为空`, en: `"${w}" is empty after removing symbols` };
       if (n.split(' ').length > 6) return { zh: `「${w}」太长（最多 6 个词）`, en: `"${w}" is too long (max 6 words)` };
-      const prev = seen.get(n);
+      const prev = seen.get(canon(n));
       if (prev && prev !== type) return { zh: `「${w}」同时出现在 ${prev} 和 ${type}`, en: `"${w}" appears in both ${prev} and ${type}` };
-      seen.set(n, type);
+      seen.set(canon(n), type);
     }
   }
   return null;

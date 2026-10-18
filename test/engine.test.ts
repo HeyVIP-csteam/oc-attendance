@@ -82,6 +82,23 @@ describe('keyword parser', () => {
   it.each(['good morning', 'ok noted', "I'm in the meeting now", 'will be out for lunch later?', '', '👍', 'on', 'it', 'thanks'])('chat "%s" → NONE', (text) => {
     expect(parseText(text, idx).kind).toBe('NONE');
   });
+  it('reads the whole phrase and ignores little words (end shift = END OF SHIFT)', () => {
+    const k = buildKeywordIndex({ ...TEST_KEYWORDS, BREAK_END: [...TEST_KEYWORDS.BREAK_END, 'END'], CLOCK_OUT: [...TEST_KEYWORDS.CLOCK_OUT, 'END OF SHIFT'] }, TEST_PARSER);
+    expect(parseText('end shift', k)).toMatchObject({ kind: 'PUNCH', type: 'CLOCK_OUT' });
+    expect(parseText('End of shift', k)).toMatchObject({ kind: 'PUNCH', type: 'CLOCK_OUT' });
+    expect(parseText('end', k)).toMatchObject({ kind: 'PUNCH', type: 'BREAK_END' });
+    expect(parseText('done for day', k)).toMatchObject({ kind: 'PUNCH', type: 'CLOCK_OUT' });
+    expect(parseText('Done day', k)).toMatchObject({ kind: 'PUNCH', type: 'CLOCK_OUT' });
+    expect(parseText('log in for day', k)).toMatchObject({ kind: 'PUNCH', type: 'CLOCK_IN' });
+    expect(parseText('end break', k)).toMatchObject({ kind: 'PUNCH', type: 'BREAK_END' });
+    expect(parseText('shift end', k)).toMatchObject({ kind: 'PUNCH', type: 'CLOCK_OUT' });
+    expect(parseText('in clock', k)).toMatchObject({ kind: 'PUNCH', type: 'CLOCK_IN' });
+    expect(parseText('break lunch', k)).toMatchObject({ kind: 'PUNCH', type: 'BREAK_START' });
+    expect(parseText('break', k)).toMatchObject({ kind: 'PUNCH', type: 'BREAK_START' });
+    expect(parseText('break start', k)).toMatchObject({ kind: 'PUNCH', type: 'BREAK_START' });
+    expect(validateKeywords({ ...TEST_KEYWORDS, BREAK_END: [...TEST_KEYWORDS.BREAK_END, 'END SHIFT'], CLOCK_OUT: ['END OF SHIFT'] })).not.toBeNull();
+  });
+
   it('custom aliases including non-Latin keywords', () => {
     const i2 = buildKeywordIndex({ ...TEST_KEYWORDS, CLOCK_IN: ['IN', '上班'] }, TEST_PARSER);
     expect(parseText('上班', i2)).toMatchObject({ kind: 'PUNCH', type: 'CLOCK_IN' });
