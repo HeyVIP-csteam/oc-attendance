@@ -92,10 +92,13 @@ tgImportRoutes.post('/telegram-import', async (c) => {
   let hiddenNoTopic = 0;
   let notPunch = 0;
   const parsed = v.messages.map((m) => ({ m, p: parseText(m.text, idx), thread: topicOf(m) }));
-  // messages outside a topic are matched by their sender only while the group had no topics: a group with no bound
-  // topic, or messages sent before its first topic was created (afterwards a punch outside a topic is not accepted,
-  // exactly as when the bot receives it)
-  const bySender = (ts: number) => !maps.length || (v.topicsSince != null && ts < v.topicsSince);
+  // messages outside a topic are matched by their sender / the name in them only for the time before the system
+  // tracked this group: a group with no bound topic, or messages sent before the first topic was bound here (and, when
+  // the export shows it, before the first topic was created). Afterwards a punch outside a topic is not accepted,
+  // exactly as when the bot receives it.
+  const firstBound = maps.length ? Math.min(...maps.map((x) => x.valid_from)) : Infinity;
+  const cutoff = Math.max(firstBound === Infinity ? -Infinity : firstBound, v.topicsSince ?? -Infinity);
+  const bySender = (ts: number) => !maps.length || ts < cutoff;
 
   // ---- a group without topics (or messages outside the bound topics): who is each message about?
   //  • a personal Telegram account (one person): all its messages belong to that person (matched once per account)

@@ -1274,3 +1274,22 @@ describe('telegram history import — one Telegram account shared by the team', 
     expect(h.db.get('SELECT COUNT(*) AS n FROM tg_sender_employees')).toEqual({ n: 0 }); // the shared account itself is never tied to one person
   });
 });
+
+describe('telegram history import — group that has bound topics now', () => {
+  it('messages from before the first topic was bound are matched by name; later ones outside a topic are not', async () => {
+    const { h } = await fixture(); // topics 1001 / 1002 of CHAT are bound at D 05:00
+    const joan = await h.employee('E005', 'Joan Perera', null);
+    await h.employee('E006', 'Darsh Kumar', null);
+    const at = (d: string, hhmm: string) => String(lk(d, hhmm) / 1000);
+    const msg = (id: number, ts: string, text: string) => ({ id, type: 'message', date_unixtime: ts, from: 'ice_csinr1', from_id: 'user8457947482', text });
+    const exp = { name: 'Break Time Records', type: 'public_supergroup', id: Number(String(CHAT).replace('-100', '')), messages: [
+      msg(1, at('2026-10-14', '07:00'), 'IN — Joan'), msg(2, at('2026-10-14', '07:05'), 'IN — Darsh'),
+      msg(3, at(D, '08:00'), 'IN — Joan'), // after the topics were bound, outside a topic
+    ] };
+    const { readTelegramExport } = await import('../src/shared/tgexport');
+    const x = readTelegramExport(exp);
+    const plan = (await h.req('POST', '/api/telegram-import', { chatId: x.chatId, fileName: 'r.json', messages: x.messages, topicsSince: x.topicsSince })).json.plan;
+    expect(plan.rows.find((r: any) => r.id === 1)).toMatchObject({ employeeId: joan, result: 'NEW' });
+    expect(plan.rows.find((r: any) => r.id === 3).result).toBe('NOTOPIC');
+  });
+});
