@@ -47,9 +47,6 @@ function Shift3() {
   const onErr = useErr();
   if (abc.length < 3) return <Empty>{L('找不到 A / B / C 班次模板', 'Shift templates A / B / C not found')}</Empty>;
   const g = (c: string) => ({ s: toMin(v[c].start), e: toMin(v[c].end) });
-  const chain = g('A').e === g('B').s && g('B').e === g('C').s && g('C').e === g('A').s;
-  const total = ['A', 'B', 'C'].reduce((t, c) => { const x = g(c); return t + ((x.e - x.s + 1440) % 1440 || 1440); }, 0);
-  const ok = chain && total === 1440;
   const len = (c: string) => { const x = g(c); let d = x.e - x.s; if (d <= 0) d += 1440; return `${Math.floor(d / 60)}h${d % 60 ? ' ' + String(d % 60).padStart(2, '0') + 'm' : ''}`; };
   const save = async () => {
     for (const c of ['A', 'B', 'C']) if (!v[c].start || !v[c].end || v[c].start === v[c].end) { toast(L(`${c} 班时间无效`, `Invalid time for shift ${c}`)); return; }
@@ -73,10 +70,7 @@ function Shift3() {
           </tr>
         ))}
       </tbody></table></div>
-      <div className={`note ${ok ? 'ok' : 'w'}`}>{ok
-        ? L('✅ A / B / C 班首尾相接，覆盖 24 小时，没有空档或重叠。', '✅ The three shifts join end-to-start and cover 24 hours with no gap or overlap.')
-        : L(`⚠️ A / B / C 班没有完整首尾相接（合计 ${Math.floor(total / 60)}h${total % 60 ? ' ' + (total % 60) + 'm' : ''}）。可以保存，但请确认空档或重叠是有意的。`, `⚠️ The shifts do not join end-to-start (total ${Math.floor(total / 60)}h${total % 60 ? ' ' + (total % 60) + 'm' : ''}). You can still save, but check the gap or overlap is intended.`)}</div>
-      <label style={{ display: 'block', margin: '8px 0', fontSize: 13 }}><input type="checkbox" checked={apply} onChange={(e) => setApply(e.target.checked)} /> {L('同时更新明天及以后的班次实例（今天及以前的考勤不变）', 'Also update shift instances from tomorrow onwards (today and earlier stay unchanged)')}</label>
+      <label style={{ display: 'block', margin: '12px 0 8px', fontSize: 13 }}><input type="checkbox" checked={apply} onChange={(e) => setApply(e.target.checked)} /> {L('同时更新明天及以后的班次实例（今天及以前的考勤不变）', 'Also update shift instances from tomorrow onwards (today and earlier stay unchanged)')}</label>
       {!readOnly && <button className="btn p" disabled={busy} onClick={save}>{L('保存班次时间', 'Save shift times')}</button>}
     </div>
   );

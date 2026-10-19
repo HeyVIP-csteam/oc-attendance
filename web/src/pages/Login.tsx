@@ -38,7 +38,7 @@ export function Login({ onDone }: { onDone: () => void }) {
   return (
     <div className="loginwrap">
       <form className="loginbox" onSubmit={submit}>
-        <div className="brand"><div className="logo">TA</div><div className="bt">TG Attendance<small>{setup ? L('建立第一个管理员', 'Create the first administrator') : L('管理员登录', 'Administrator sign-in')}</small></div></div>
+        <div className="brand"><div className="logo">OC</div><div className="bt">OC Attendance<small>{setup ? L('建立第一个管理员', 'Create the first administrator') : L('管理员登录', 'Administrator sign-in')}</small></div></div>
         {mode === 'setup-off' && <div className="note w">{L('系统还没有管理员。请先在 Cloudflare 设定 SETUP_CODE（见部署说明），重新整理此页即可建立第一个管理员。', 'No administrator exists yet. Set the SETUP_CODE secret in Cloudflare (see the deployment guide), then reload this page to create the first administrator.')}</div>}
         {setup && (
           <>

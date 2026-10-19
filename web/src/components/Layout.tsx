@@ -90,7 +90,7 @@ export function Layout({ page, onNav, paused, onResume, onLogout, children }: { 
   return (
     <div id="app">
       <aside id="side">
-        <div className="brand"><div className="logo">TA</div><div className="bt">TG Attendance<small>{L('考勤管理系统', 'Attendance system')}</small></div></div>
+        <div className="brand"><div className="logo">OC</div><div className="bt">OC Attendance<small>Outsource CS Attendance</small></div></div>
         {nav.map(([k, l], i) => k === 'grp'
           ? <div key={'g' + i} className="grp"><span className="lbl">{l}</span></div>
           : <a key={k} className={page === k ? 'on' : ''} title={l} href={'/' + k} onClick={(e) => { e.preventDefault(); setNavOpen(false); onNav(k); }}><Icon>{NAV_ICON[k]}</Icon><span className="lbl">{l}</span></a>)}
