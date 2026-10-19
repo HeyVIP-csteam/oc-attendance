@@ -175,7 +175,7 @@ describe('shifts, roster and rotation', () => {
     expect((await h.session(e1, D))!.status).toBe('ON_TIME');
     const s2 = (await h.session(e1, D2))!;
     expect(s2.status).toBe('LATE');
-    expect(s2.late_min).toBe(7);
+    expect(s2.late_min).toBe(12); // full minutes from 15:00 (grace only decides it is late)
   });
 
   it('test 6: overnight C shift — OUT after midnight belongs to the night that started on the 15th', async () => {
@@ -466,7 +466,7 @@ describe('dashboard queries', () => {
     const exp = await h.req('GET', `/api/attendance/export?from=${D}&to=${D}`);
     expect(exp.json.rows).toHaveLength(2);
     const ov = await h.req('GET', `/api/overview?date=${D}`);
-    expect(ov.json).toMatchObject({ totalEmployees: 2, expected: 2, late: 1, lateMin: 25, startedPresent: 2, started: 2 });
+    expect(ov.json).toMatchObject({ totalEmployees: 2, expected: 2, late: 1, lateMin: 30, startedPresent: 2, started: 2 });
     const meta = await h.req('GET', '/api/meta');
     expect(meta.json.employees.map((e: any) => e.thread)).toEqual([1001, 1002]);
   });

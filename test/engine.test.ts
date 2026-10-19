@@ -171,17 +171,18 @@ describe('calculations', () => {
     expect(s.netMs).toBe(8 * HOUR - 55 * MIN);
     expect(s.breakExceeded).toBe(false);
   });
-  it('test 3: late minutes = max(0, in − start − grace), partial minutes round up', () => {
+  it('test 3: past the grace, late minutes are the full time from the scheduled start (seconds dropped)', () => {
     const mk = (t: string, sec = 0) => computeSession({ events: [ev('CLOCK_IN', lk(d, t, sec))], instance: A, now: lk(d, '08:00'), rules, tz: TZ })!.lateMin;
     expect(mk('07:05')).toBe(0);       // inside 5-minute grace
-    expect(mk('07:05', 1)).toBe(1);    // 1 second past grace → 1 minute
-    expect(mk('07:20')).toBe(15);
+    expect(mk('07:05', 1)).toBe(5);    // 1 second past grace → late, counted from 07:00
+    expect(mk('07:08', 59)).toBe(8);   // seconds are dropped
+    expect(mk('07:20')).toBe(20);
     expect(mk('06:30')).toBe(0);
   });
-  it('test 4: early leave = max(0, end − grace − out)', () => {
+  it('test 4: past the grace, early leave is the full time to the scheduled end', () => {
     const mk = (t: string) => computeSession({ events: [ev('CLOCK_IN', lk(d, '07:00')), ev('CLOCK_OUT', lk(d, t))], instance: A, now: lk(d, '16:00'), rules, tz: TZ })!;
     expect(mk('14:55').earlyMin).toBe(0);
-    expect(mk('14:30').earlyMin).toBe(25);
+    expect(mk('14:30').earlyMin).toBe(30);
     expect(mk('14:30').status).toBe('EARLY_LEAVE');
   });
   it('test 6: overnight C shift with breaks across midnight', () => {

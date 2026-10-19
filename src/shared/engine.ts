@@ -143,8 +143,10 @@ export function computeSession(input: ComputeInput): SessionSummary | null {
   const { inT, outT } = sm;
   const schedIn = inst ? inst.startAt : null;
   const schedOut = inst ? inst.endAt : null;
-  const lateMin = inst && inT != null ? Math.max(0, Math.ceil((inT - inst.startAt - inst.lateGraceMin * MIN) / MIN)) : null;
-  const earlyMin = inst && outT != null ? Math.max(0, Math.floor((inst.endAt - inst.earlyGraceMin * MIN - outT) / MIN)) : null;
+  // the grace only decides WHETHER it is late / early; the minutes are the full time from the scheduled start / to the
+  // scheduled end (whole minutes, seconds dropped): 14:30 shift, clock in 14:38:40 → 8 min late
+  const lateMin = inst && inT != null ? (inT - inst.startAt > inst.lateGraceMin * MIN ? Math.floor((inT - inst.startAt) / MIN) : 0) : null;
+  const earlyMin = inst && outT != null ? (inst.endAt - outT > inst.earlyGraceMin * MIN ? Math.floor((inst.endAt - outT) / MIN) : 0) : null;
 
   const breaks: BreakRow[] = sm.breaks.map((b, i) => {
     let durMs: number | null = null;
