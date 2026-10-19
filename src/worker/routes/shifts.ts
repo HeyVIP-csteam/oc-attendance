@@ -7,6 +7,7 @@ import { all, chunk, first, stmt } from '../lib/db';
 import { bad, body, clientIp, conflict, intParam, notFound, query, requireAdminRole } from '../lib/http';
 import { assertEmployee, checkCur, inScope, requireOwner, scopeOf, scopeSql } from '../lib/scope';
 import { afterInstancesChanged, cancelInstanceStmt, loadTemplates, type ShiftTemplate, upsertInstanceStmt } from '../lib/roster';
+import { ensureOtMarks } from '../lib/otMarks';
 import type { Key } from '../lib/sessions';
 import { bizTz, loadSettings, rulesFor } from '../lib/settings';
 
@@ -132,7 +133,8 @@ shiftRoutes.get('/roster', async (c) => {
   const counts = Object.fromEntries((per.results as { code: string | null; n: number }[]).map((r) => [r.code ?? '', r.n]));
   const ids = (emps.results as { id: number }[]).map((e) => e.id);
   const inList = ids.map(() => '?').join(',');
-  const [instances, ot, marks] = ids.length ? await Promise.all([
+  if (ids.length) await ensureOtMarks(db);
+  const [instances, ot, marks, otManual] = ids.length ? await Promise.all([
     all(db, `SELECT employee_id, shift_date, shift_id, shift_code, shift_name, scheduled_start_at, scheduled_end_at, adjustment_status, source
       FROM shift_instances WHERE employee_id IN (${inList}) AND shift_date BETWEEN ? AND ?`, ...ids, from, to),
     // OT on the roster: worked on a day off (no active shift), or OT confirmed through the bot's question (ot_ms);
@@ -144,8 +146,37 @@ shiftRoutes.get('/roster', async (c) => {
         AND (s.shift_instance_id IS NULL OR i.adjustment_status = 'CANCELLED' OR s.ot_ms > 0)`,
       ...ids, from, to),
     all(db, `SELECT employee_id, mark_date, code FROM roster_marks WHERE employee_id IN (${inList}) AND mark_date BETWEEN ? AND ?`, ...ids, from, to),
-  ]) : [[], [], []];
-  return c.json({ from, to, total: (cnt.results[0] as { n: number }).n, counts, employees: emps.results, instances, ot, marks });
+    // OT marked by hand on the roster (display only)
+    all(db, `SELECT employee_id, work_date, note, created_by, created_at FROM ot_marks WHERE employee_id IN (${inList}) AND work_date BETWEEN ? AND ?`, ...ids, from, to),
+  ]) : [[], [], [], []];
+  return c.json({ from, to, total: (cnt.results[0] as { n: number }).n, counts, employees: emps.results, instances, ot, marks, otManual });
+});
+
+/** Manual OT mark on a roster day: on = show the red OT badge, off = remove it. Display only; written to the audit log. */
+shiftRoutes.put('/roster/ot', async (c) => {
+  requireAdminRole(c);
+  const v = await body(c, z.object({ employeeId: z.number().int(), date: z.string().refine(isDate), on: z.boolean(), note: z.string().trim().max(200).optional().default('') }));
+  await assertEmployee(c, v.employeeId);
+  const db = c.env.DB;
+  const e = await first<{ employee_code: string }>(db, 'SELECT employee_code FROM employees WHERE id = ?', v.employeeId);
+  if (!e) throw notFound('Employee not found');
+  await ensureOtMarks(db);
+  const cur = await first<{ note: string | null; created_by: string }>(db, 'SELECT note, created_by FROM ot_marks WHERE employee_id = ? AND work_date = ?', v.employeeId, v.date);
+  if (v.on === !!cur && (!v.on || (cur?.note ?? '') === v.note)) return c.json({ ok: true, unchanged: true });
+  const now = Date.now();
+  const actor = c.get('admin').username;
+  await db.batch([
+    v.on
+      ? stmt(db, `INSERT INTO ot_marks (employee_id, work_date, note, created_by, created_at) VALUES (?,?,?,?,?)
+                  ON CONFLICT (employee_id, work_date) DO UPDATE SET note = excluded.note, created_by = excluded.created_by, created_at = excluded.created_at`,
+          v.employeeId, v.date, v.note || null, actor, now)
+      : stmt(db, 'DELETE FROM ot_marks WHERE employee_id = ? AND work_date = ?', v.employeeId, v.date),
+    auditStmt(db, { actor, action: v.on ? 'OT_MARK_ADDED' : 'OT_MARK_REMOVED', entityType: 'shift_instance', entityId: `${e.employee_code}@${v.date}`,
+      before: cur ? { ot: true, note: cur.note ?? '' } : { ot: false }, after: v.on ? { ot: true, note: v.note } : { ot: false },
+      note: v.on ? `OT marked${v.note ? ` — ${v.note}` : ''}` : 'OT mark removed', ip: clientIp(c), at: now }),
+    bump(db, now),
+  ]);
+  return c.json({ ok: true });
 });
 
 shiftRoutes.get('/roster/export', async (c) => {

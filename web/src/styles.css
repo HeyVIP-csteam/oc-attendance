@@ -123,7 +123,7 @@ sup.dd{color:var(--info);font-weight:700;font-size:10px;margin-left:1px}
 .tabs + :not(.card):not(.tw){margin-top:0;border-top:2px solid var(--pri);padding-top:14px}
 .roster td{padding:4px;text-align:center}
 .cell{display:block;border-radius:6px;padding:4px 2px;font-size:11.5px;font-weight:600;cursor:pointer;min-width:62px;background:#e2e8f0;color:#334155}
-.cell.A{background:#dbeafe;color:#1e40af}.cell.B{background:#fef3c7;color:#92400e}.cell.C{background:#e0e7ff;color:#3730a3}.cell.OFF{background:var(--greyb);color:var(--mut);font-weight:400}
+.cell.A{background:#93c5fd;color:#1e3a8a}.cell.B{background:#fcd34d;color:#78350f}.cell.C{background:#c69c72;color:#3b1f0e}.cell.OFF{background:var(--greyb);color:var(--mut);font-weight:400}
 .cell.adj{outline:2px dashed #db2777;outline-offset:-2px}
 .cell{position:relative}
 .cell .ot{position:absolute;top:-6px;right:-5px;background:#dc2626;color:#fff;font-size:9px;font-weight:700;line-height:13px;padding:0 4px;border-radius:7px;box-shadow:0 0 0 2px var(--card);letter-spacing:.02em}
@@ -424,3 +424,9 @@ select.need{border-color:#f59e0b;background:#fffbeb}
 .bmbtns{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}
 @media (max-width:900px){.bmgrid{grid-template-columns:1fr}}
 .imppend{display:flex;gap:10px;align-items:center;justify-content:space-between;background:var(--warnb);color:var(--warn);border-radius:8px;padding:8px 12px;margin-bottom:12px;font-size:12.5px}
+/* manual OT mark in the roster cell popup */
+.otbox{margin-top:14px;border:1px solid #fecaca;background:#fef2f2;border-radius:10px;padding:10px 12px}
+.otbox-h{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px}.otbox-h .mut{font-size:12px}
+.otpill{background:#dc2626;color:#fff;font-size:9px;font-weight:700;line-height:13px;padding:0 4px;border-radius:7px}
+.otbox-r{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}.otbox-r input{flex:1;min-width:160px}
+.btn.otadd{background:#dc2626;border-color:#dc2626;color:#fff}.btn.otadd:hover{background:#b91c1c}

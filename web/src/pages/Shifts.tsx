@@ -8,7 +8,9 @@ import { useI18n } from '../lib/i18n';
 import { type MetaShift, rulesOf, toast, useApi, useData, usePageState } from '../lib/store';
 
 interface Inst { employee_id: number; shift_date: string; shift_id: number; shift_code: string; shift_name: string; scheduled_start_at: number; scheduled_end_at: number; adjustment_status: string; source: string }
-interface RosterData { counts?: Record<string, number>; ot?: { employee_id: number; work_date: string; actual_in_at: number; actual_out_at: number | null; ot_ms?: number | null; kind: 'OFF' | 'LONG' }[]; from: string; to: string; total: number; employees: { id: number; employee_code: string; name: string; currency_code: string | null; employment_status: string }[]; instances: Inst[]; marks?: { employee_id: number; mark_date: string; code: string }[] }
+interface RosterData { counts?: Record<string, number>; ot?: { employee_id: number; work_date: string; actual_in_at: number; actual_out_at: number | null; ot_ms?: number | null; kind: 'OFF' | 'LONG' }[]; from: string; to: string; total: number; employees: { id: number; employee_code: string; name: string; currency_code: string | null; employment_status: string }[]; instances: Inst[]; marks?: { employee_id: number; mark_date: string; code: string }[]; otManual?: OtManual[] }
+/** OT marked by hand on the roster (display only). */
+interface OtManual { employee_id: number; work_date: string; note: string | null; created_by: string; created_at: number }
 
 export function Shifts() {
   const { L } = useI18n();
@@ -27,7 +29,7 @@ function Roster({ f, set }: { f: { from: string; to: string; cur: string; page: 
   const { readOnly, meta } = useData();
   const t = today();
   const { data, error } = useApi<RosterData>(`/roster?${qs({ from: f.from, to: f.to, cur: f.cur, page: f.page, size: f.size })}`);
-  const [cell, setCell] = useState<{ emp: RosterData['employees'][number]; date: string; inst: Inst | undefined; cancelled: boolean; mark: string | null } | null>(null);
+  const [cell, setCell] = useState<{ emp: RosterData['employees'][number]; date: string; inst: Inst | undefined; cancelled: boolean; mark: string | null; manual: OtManual | null } | null>(null);
   const [plan, setPlan] = useState<{ grid: (string | number | null)[][]; file: string; plan: any; currency: string } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const days: string[] = [];
@@ -39,6 +41,8 @@ function Roster({ f, set }: { f: { from: string; to: string; cur: string; page: 
   const byKey = new Map((data?.instances ?? []).map((i) => [`${i.employee_id}|${i.shift_date}`, i]));
   const otKey = new Map((data?.ot ?? []).map((o) => [`${o.employee_id}|${o.work_date}`, o]));
   const markKey = new Map((data?.marks ?? []).map((m) => [`${m.employee_id}|${m.mark_date}`, m.code]));
+  const manualKey = new Map((data?.otManual ?? []).map((m) => [`${m.employee_id}|${m.work_date}`, m]));
+  const manualText = (m: OtManual) => L(`OT（管理员手动标记 · ${m.created_by}${m.note ? ` · ${m.note}` : ''}）`, `OT (marked by hand · ${m.created_by}${m.note ? ` · ${m.note}` : ''})`);
   const rc = useRosterCode();
   // OT tooltip: dates and times in Sri Lanka time, plus the same moments in the viewer's own time zone (e.g. GMT+8, as Telegram shows them)
   const otText = (ot: NonNullable<RosterData['ot']>[number], cur: string | null, long: boolean) => {
@@ -117,12 +121,15 @@ function Roster({ f, set }: { f: { from: string; to: string; cur: string; page: 
                   const ot = otKey.get(`${e.id}|${d}`);
                   const mk = i ? null : markKey.get(`${e.id}|${d}`) ?? null;
                   const mc = rc(mk);
+                  const man = manualKey.get(`${e.id}|${d}`) ?? null;
+                  const badge = !!man || (!!ot && (!i || ot.kind === 'LONG'));
+                  const base = i ? `${i.shift_name} ${fmtT(i.scheduled_start_at)}–${fmtT(i.scheduled_end_at)} (LK)${ot ? '\n' + otText(ot, e.currency_code, true) : ''}`
+                    : ot ? otText(ot, e.currency_code, false) : mk ? `${mk} · ${mc?.name ?? ''}` : L('未排班', 'Not scheduled');
                   return (
-                    <td key={d}><span className={`cell ${i ? i.shift_code : mk ? 'mark' : 'none'}`} style={{ ...(mc?.style ?? {}), ...(readOnly ? { cursor: 'default' } : {}) }} title={i ? `${i.shift_name} ${fmtT(i.scheduled_start_at)}–${fmtT(i.scheduled_end_at)} (LK)${ot ? '\n' + otText(ot, e.currency_code, true) : ''}`
-                      : ot ? otText(ot, e.currency_code, false) : mk ? `${mk} · ${mc?.name ?? ''}` : L('未排班', 'Not scheduled')}
-                      onClick={() => !readOnly && setCell({ emp: e, date: d, inst: i, cancelled, mark: mk })}>
+                    <td key={d}><span className={`cell ${i ? i.shift_code : mk ? 'mark' : 'none'}`} style={{ ...(mc?.style ?? {}), ...(readOnly ? { cursor: 'default' } : {}) }} title={man ? `${base}\n${manualText(man)}` : base}
+                      onClick={() => !readOnly && setCell({ emp: e, date: d, inst: i, cancelled, mark: mk, manual: man })}>
                       {i ? (compact ? i.shift_code : <>{i.shift_code}<br /><span style={{ fontWeight: 400 }}>{fmtT(i.scheduled_start_at)}</span></>) : (mk ?? '–')}
-                      {ot && (!i || ot.kind === 'LONG') && <span className="ot">OT</span>}
+                      {badge && <span className="ot">OT</span>}
                     </span></td>
                   );
                 })}
@@ -138,7 +145,7 @@ function Roster({ f, set }: { f: { from: string; to: string; cur: string; page: 
   );
 }
 
-function CellModal({ emp, date, inst, mark, onClose }: { emp: { id: number; employee_code: string; name: string }; date: string; inst: Inst | undefined; mark: string | null; onClose: () => void }) {
+function CellModal({ emp, date, inst, mark, manual, onClose }: { emp: { id: number; employee_code: string; name: string }; date: string; inst: Inst | undefined; mark: string | null; manual: OtManual | null; onClose: () => void }) {
   const { L } = useI18n();
   const { meta, refresh } = useData();
   const hist = useApi<{ rows: { created_at: number; actor: string; note: string; before_json: string | null }[] }>(`/roster/history?employeeId=${emp.id}&date=${date}`);
@@ -148,6 +155,17 @@ function CellModal({ emp, date, inst, mark, onClose }: { emp: { id: number; empl
   const [reason, setReason] = useState('');
   const [err, setErr] = useState<ApiErr | Error | null>(null);
   const [busy, setBusy] = useState(false);
+  // manual OT mark: saved on its own (no shift change, no reason needed)
+  const [otNote, setOtNote] = useState(manual?.note ?? '');
+  const setOt = async (on: boolean) => {
+    setBusy(true); setErr(null);
+    try {
+      await api('/roster/ot', { method: 'PUT', body: { employeeId: emp.id, date, on, note: otNote.trim() } });
+      toast(on ? L('已标记 OT', 'Marked as OT') : L('已移除 OT 标记', 'OT mark removed'));
+      refresh();
+      onClose();
+    } catch (e) { setErr(e as ApiErr); } finally { setBusy(false); }
+  };
   const save = async () => {
     if (reason.trim().length < 4) return setErr(new Error(L('请填写原因（至少 4 个字）', 'Please give a reason (at least 4 characters)')));
     setBusy(true);
@@ -169,8 +187,18 @@ function CellModal({ emp, date, inst, mark, onClose }: { emp: { id: number; empl
         <option value="none">– {L('未排班', 'Not scheduled')}</option>
       </select></div></div>
       <div style={{ marginTop: 10 }}><label className="mut" style={{ fontSize: 12 }}>{L('原因（必填）', 'Reason (required)')}</label><textarea rows={2} value={reason} onChange={(e) => setReason(e.target.value)} /></div>
+      <div className="otbox">
+        <div className="otbox-h"><span className="otpill">OT</span><b>{L('OT 标记', 'OT mark')}</b>
+          <span className="mut">{manual ? L(`已标记 · ${manual.created_by} · ${fmtDT(manual.created_at).slice(0, 16)}`, `Marked · ${manual.created_by} · ${fmtDT(manual.created_at).slice(0, 16)}`) : L('只在排班表显示红色 OT，不影响考勤数字', 'Shows the red OT badge on the roster only; attendance figures are not changed')}</span></div>
+        <div className="otbox-r">
+          <input type="text" maxLength={200} value={otNote} placeholder={L('备注（可选），例如：加班 2 小时', 'Note (optional), e.g. 2 hours overtime')} onChange={(e) => setOtNote(e.target.value)} />
+          {manual
+            ? <><button className="btn" disabled={busy || otNote.trim() === (manual.note ?? '')} onClick={() => setOt(true)}>{L('更新备注', 'Update note')}</button><button className="btn d" disabled={busy} onClick={() => setOt(false)}>{L('移除 OT', 'Remove OT')}</button></>
+            : <button className="btn otadd" disabled={busy} onClick={() => setOt(true)}>{L('标记 OT', 'Mark as OT')}</button>}
+        </div>
+      </div>
       <div style={{ marginTop: 8 }}><ErrBox error={err} /></div>
-      <ModalActions onCancel={onClose} onOk={save} busy={busy} />
+      <ModalActions onCancel={onClose} onOk={save} busy={busy} okLabel={L('保存班次', 'Save shift')} />
     </Modal>
   );
 }

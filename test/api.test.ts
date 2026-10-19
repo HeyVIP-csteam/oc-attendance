@@ -706,6 +706,28 @@ describe('roster hides deactivated employees', () => {
   });
 });
 
+describe('manual OT mark on the roster', () => {
+  it('an admin marks any day as OT by hand (no punches needed), can change the note and remove it; audited', async () => {
+    const { h, e1 } = await fixture();
+    await h.roster(e1, D, 'A');
+    const man = async () => (await h.req('GET', `/api/roster?from=${D}&to=${D}`)).json.otManual.map((m: any) => [m.employee_id, m.work_date, m.note]);
+    expect(await man()).toEqual([]);
+    expect((await h.req('PUT', '/api/roster/ot', { employeeId: e1, date: D, on: true, note: '2h overtime' })).status).toBe(200);
+    expect(await man()).toEqual([[e1, D, '2h overtime']]);
+    expect((await h.req('PUT', '/api/roster/ot', { employeeId: e1, date: D, on: true, note: '3h' })).status).toBe(200);
+    expect(await man()).toEqual([[e1, D, '3h']]);
+    // display only: the attendance figures are untouched
+    expect((await h.session(e1, D))?.ot_ms ?? null).toBeNull();
+    expect((await h.req('PUT', '/api/roster/ot', { employeeId: e1, date: D, on: false })).status).toBe(200);
+    expect(await man()).toEqual([]);
+    expect(h.db.rows("SELECT action FROM audit_logs WHERE action LIKE 'OT_MARK_%' ORDER BY id").map((r: any) => r.action)).toEqual(['OT_MARK_ADDED', 'OT_MARK_ADDED', 'OT_MARK_REMOVED']);
+    // the employee can still be deleted with a mark on file
+    await h.req('PUT', '/api/roster/ot', { employeeId: e1, date: D, on: true });
+    const code = h.db.get<any>('SELECT employee_code FROM employees WHERE id = ?', e1).employee_code;
+    expect((await h.req('POST', `/api/employees/${e1}/delete`, { confirm: code })).status).toBe(200);
+  });
+});
+
 describe('roster OT tag', () => {
   it('worked on a day off → OT; a long day is OT only when confirmed through the bot; no clock out → never OT', async () => {
     const { h, e1, e2 } = await fixture();
