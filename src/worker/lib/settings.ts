@@ -20,10 +20,14 @@ export function parseSettings(rows: { key: string; value: string }[]): Settings 
   if (!(Number(rules.earlyAskMin) >= 0)) rules.earlyAskMin = DEFAULT_RULES.earlyAskMin;
   if (rules.answerBy !== 'own') rules.answerBy = 'any';
   delete (rules as { allowedChats?: unknown }).allowedChats; // retired setting: a group is accepted once an employee topic is bound in it
+  // retired settings: the shift matching window is fixed (FIXED.shiftWindowHours); the OT question uses outAskMin
+  const retired = ['windowHours', 'windowUnit', 'forgotOutHours', 'forgotOutUnit'] as const;
+  for (const k of retired) delete (rules as Partial<Rules>)[k];
   const rulesCur: Record<string, Rules> = {};
   for (const [cur, r] of Object.entries(safe<Record<string, Partial<Rules>>>(m.get('rules_cur'), {}))) {
     if (!r || typeof r !== 'object') continue;
     const x = { ...rules, ...r } as Rules;
+    for (const k of retired) delete (x as Partial<Rules>)[k];
     if (!(Number(x.otHours) > 0)) x.otHours = rules.otHours;
     if (!(Number(x.outAskMin) >= 0)) x.outAskMin = rules.outAskMin;
     if (!(Number(x.earlyAskMin) >= 0)) x.earlyAskMin = rules.earlyAskMin;

@@ -117,8 +117,6 @@ settingsRoutes.put('/settings/parser', async (c) => {
 });
 
 const RulesSchema = z.object({
-  windowHours: z.number().min(5 / 60).max(8).refine((h) => Math.abs(h * 60 - Math.round(h * 60)) < 1e-6, 'whole minutes only'),
-  windowUnit: z.enum(['h', 'm']).optional().default('h'),
   lateAsException: z.boolean(),
   botReply: z.boolean(),
   otHours: z.number().min(1).max(24).optional().default(9),
@@ -143,7 +141,7 @@ settingsRoutes.put('/settings/rules', async (c) => {
   const before = await loadSettings(db);
   const since = addDays(localDate(now, bizTz(c.env)), -31);
   // only rules that change computed results need a recalculation (the OT question time does not)
-  const changed = (a: Pick<Rules, 'lateAsException' | 'windowHours' | 'breakMinutes'>, b: typeof a) => a.lateAsException !== b.lateAsException || a.windowHours !== b.windowHours || a.breakMinutes !== b.breakMinutes;
+  const changed = (a: Pick<Rules, 'lateAsException' | 'breakMinutes'>, b: typeof a) => a.lateAsException !== b.lateAsException || a.breakMinutes !== b.breakMinutes;
   const statements: D1PreparedStatement[] = [];
   if (currency) {
     // one currency's own rules (each currency is set on its own)

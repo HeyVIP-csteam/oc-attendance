@@ -30,11 +30,11 @@ export const toEngineInstance = (i: InstanceRow): EngineInstance => ({
 /**
  * Chooses the work date for an event:
  *   1. BREAK / RESUME / OUT join a session that is still open (started < 20 h earlier);
- *   2. otherwise the shift instance whose window [start − W, end + W] contains the event (closest start wins);
+ *   2. otherwise the shift instance whose window [start − W, end + W] contains the event (closest start wins; W = FIXED.shiftWindowHours);
  *   3. otherwise an open session (duplicate IN);
  *   4. otherwise the business-time-zone calendar date (an unscheduled punch).
  */
-export function chooseWorkDate(ev: { type: EventType; ts: number }, ctx: CtxEvent[], instances: InstanceRow[], windowHours: number, tz: string): string {
+export function chooseWorkDate(ev: { type: EventType; ts: number }, ctx: CtxEvent[], instances: InstanceRow[], tz: string): string {
   const openDate = (): string | null => {
     const by = new Map<string, CtxEvent[]>();
     for (const c of ctx) {
@@ -52,7 +52,7 @@ export function chooseWorkDate(ev: { type: EventType; ts: number }, ctx: CtxEven
     return null;
   };
   const findInstance = (): InstanceRow | null => {
-    const W = windowHours * HOUR;
+    const W = FIXED.shiftWindowHours * HOUR;
     let best: InstanceRow | null = null;
     let bestD = Infinity;
     for (const i of instances) {
@@ -88,7 +88,7 @@ export async function assignmentContext(db: D1Database, employeeId: number, ts: 
  * the event updates plus every session key that has to be recomputed.
  */
 export async function reassignEvents(db: D1Database, employeeIds: number[], fromDate: string, toDate: string, o: { rules: Rules; byCur?: Record<string, Rules> }, tz: string): Promise<{ updates: D1PreparedStatement[]; keys: Key[] }> {
-  const rulesOf = await rulesLookup(db, employeeIds, o);
+  void o; // the matching window is fixed (FIXED.shiftWindowHours); the rules are not needed to assign events
   const updates: D1PreparedStatement[] = [];
   const keys = new Map<string, Key>();
   const add = (k: Key) => keys.set(keyStr(k), k);
@@ -111,7 +111,7 @@ export async function reassignEvents(db: D1Database, employeeIds: number[], from
       const ctx: CtxEvent[] = [];
       for (const e of evs) {
         let d = e.work_date;
-        if (e.source === 'TELEGRAM') d = chooseWorkDate({ type: e.event_type, ts: e.event_ts }, ctx, instByEmp.get(empId) ?? [], rulesOf(empId).windowHours, tz);
+        if (e.source === 'TELEGRAM') d = chooseWorkDate({ type: e.event_type, ts: e.event_ts }, ctx, instByEmp.get(empId) ?? [], tz);
         ctx.push({ id: e.id, type: e.event_type, ts: e.event_ts, tgMessageId: e.tg_message_id, workDate: d, source: e.source });
         if (d !== e.work_date) {
           updates.push(stmt(db, 'UPDATE attendance_events SET work_date = ? WHERE id = ?', d, e.id));

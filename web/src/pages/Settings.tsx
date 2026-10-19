@@ -172,7 +172,6 @@ function Rules() {
   const hm = (m: number) => (m % 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m / 60}h`);
   const fmtMin = (m: number | null | undefined, u?: 'h' | 'm') => (m == null ? L('不限', 'No limit') : u === 'h' ? hm(m) : `${m} min`);
   const rows: [string, (r: MetaRules) => string][] = [
-    [L('班次匹配窗口', 'Shift matching window'), (r) => (r.windowUnit === 'm' ? `${Math.round(r.windowHours * 60)} min` : hm(Math.round(r.windowHours * 60)))],
     [L('每日休息时间', 'Break time per day'), (r) => fmtMin(r.breakMinutes === undefined ? 90 : r.breakMinutes, r.breakUnit)],
     [L('迟到/早退列为异常', 'Late / early leave as exceptions'), (r) => (r.lateAsException ? L('是', 'Yes') : L('否', 'No'))],
     [L('Bot 回复', 'Bot replies'), (r) => (r.botReply ? L('开启', 'On') : L('关闭', 'Off'))],
@@ -207,20 +206,13 @@ function RulesForm({ cur }: { cur: string }) {
   const r0 = rulesOf(meta, cur);
   const brMin0 = r0.breakMinutes === undefined ? 90 : r0.breakMinutes;
   const brUnit0: 'h' | 'm' = r0.breakUnit ?? 'm';
-  const unit0: 'h' | 'm' = r0.windowUnit ?? (Number.isInteger(r0.windowHours) ? 'h' : 'm');
   const oaUnit0: 'h' | 'm' = r0.outAskUnit ?? 'm';
-  const [v, setV] = useState({ unit: unit0, win: String(unit0 === 'm' ? Math.round(r0.windowHours * 60) : r0.windowHours), bunit: brUnit0, br: brMin0 == null ? '' : String(brUnit0 === 'h' ? Math.round((brMin0 / 60) * 100) / 100 : brMin0), lx: r0.lateAsException ? '1' : '0', bot: r0.botReply ? '1' : '0', ea: String(r0.earlyAskMin ?? 30), ab: r0.answerBy ?? 'any', ounit: oaUnit0, oa: String(oaUnit0 === 'h' ? Math.round(((r0.outAskMin ?? 45) / 60) * 100) / 100 : r0.outAskMin ?? 45) });
+  const [v, setV] = useState({ bunit: brUnit0, br: brMin0 == null ? '' : String(brUnit0 === 'h' ? Math.round((brMin0 / 60) * 100) / 100 : brMin0), lx: r0.lateAsException ? '1' : '0', bot: r0.botReply ? '1' : '0', ea: String(r0.earlyAskMin ?? 30), ab: r0.answerBy ?? 'any', ounit: oaUnit0, oa: String(oaUnit0 === 'h' ? Math.round(((r0.outAskMin ?? 45) / 60) * 100) / 100 : r0.outAskMin ?? 45) });
   const [err, setErr] = useState('');
   const onErr = useErr();
-  const winH = () => {
-    const n = Number(v.win) || 0;
-    const mins = Math.round(v.unit === 'm' ? n : n * 60);
-    return Math.min(480, Math.max(5, mins)) / 60;
-  };
   const brMin = () => (v.br.trim() === '' ? null : Math.min(1440, Math.max(0, Math.round((Number(v.br) || 0) * (v.bunit === 'h' ? 60 : 1)))));
   const conv = (val: string, u: 'h' | 'm') => { if (val.trim() === '') return ''; const n = Number(val) || 0; return String(u === 'm' ? Math.round(n * 60) : Math.round((n / 60) * 100) / 100); };
   const save = async () => {
-    // OT question with no clock out: minutes after the scheduled shift end (0–480); never changed silently
     // hours or minutes; stored as whole minutes 0–480 (8 h). Never changed silently: a bad value is refused.
     const n = Number(v.oa);
     const oaRaw = v.ounit === 'h' ? n * 60 : n;
@@ -231,7 +223,7 @@ function RulesForm({ cur }: { cur: string }) {
         : L('「超时未下班问 OT」请填 0–480 的整数分钟', '"Ask OT with no clock out": a whole number of minutes from 0 to 480'));
     setErr('');
     try {
-      await api('/settings/rules', { method: 'PUT', body: { currency: cur, windowHours: winH(), windowUnit: v.unit, breakMinutes: brMin(), breakUnit: v.bunit, lateAsException: v.lx === '1', botReply: v.bot === '1', outAskMin: oa, outAskUnit: v.ounit, earlyAskMin: Math.min(240, Math.max(0, Math.round(Number(v.ea) || 0))), answerBy: v.ab } });
+      await api('/settings/rules', { method: 'PUT', body: { currency: cur, breakMinutes: brMin(), breakUnit: v.bunit, lateAsException: v.lx === '1', botReply: v.bot === '1', outAskMin: oa, outAskUnit: v.ounit, earlyAskMin: Math.min(240, Math.max(0, Math.round(Number(v.ea) || 0))), answerBy: v.ab } });
       toast(L(`${cur} 规则已保存，${cur} 员工的考勤会重新计算`, `${cur} rules saved; ${cur} attendance is being recalculated`));
       await reloadMeta();
     } catch (e) { onErr(e); }
@@ -239,7 +231,6 @@ function RulesForm({ cur }: { cur: string }) {
   return (
     <>
       <div className="setlist">
-        <div className="setrow"><label htmlFor="stWin">{L('班次匹配窗口（排班前后）', 'Shift matching window (before/after the shift)')}</label><div className="setctl unitctl"><input id="stWin" type="number" min={v.unit === 'm' ? 5 : 1} max={v.unit === 'm' ? 480 : 8} step={v.unit === 'm' ? 5 : 0.5} value={v.win} disabled={readOnly} onChange={(e) => setV({ ...v, win: e.target.value })} /><select aria-label={L('单位', 'Unit')} value={v.unit} disabled={readOnly} onChange={(e) => { const u = e.target.value as 'h' | 'm'; setV({ ...v, unit: u, win: conv(v.win, u) || v.win }); }}><option value="h">{L('小时', 'Hours')}</option><option value="m">{L('分钟', 'Minutes')}</option></select></div></div>
         <div className="setrow"><label htmlFor="stBr">{L('每日休息时间（总计；留空 = 不限）', 'Break time per day (total; empty = no limit)')}</label><div className="setctl unitctl"><input id="stBr" type="number" min={0} step={v.bunit === 'm' ? 5 : 0.25} placeholder={L('不限', 'No limit')} value={v.br} disabled={readOnly} onChange={(e) => setV({ ...v, br: e.target.value })} /><select aria-label={L('单位', 'Unit')} value={v.bunit} disabled={readOnly} onChange={(e) => { const u = e.target.value as 'h' | 'm'; setV({ ...v, bunit: u, br: conv(v.br, u) }); }}><option value="h">{L('小时', 'Hours')}</option><option value="m">{L('分钟', 'Minutes')}</option></select></div></div>
         <div className="setrow"><label htmlFor="stLx">{L('迟到/早退是否也列为异常', 'Also list late / early leave as exceptions')}</label><div className="setctl"><select id="stLx" value={v.lx} disabled={readOnly} onChange={(e) => setV({ ...v, lx: e.target.value })}><option value="0">{L('否，只显示状态', 'No, status only')}</option><option value="1">{L('是', 'Yes')}</option></select></div></div>
         <div className="setrow"><label htmlFor="stBot">{L('Bot 在 Topic 回复确认', 'Bot replies in the topic')}</label><div className="setctl"><select id="stBot" value={v.bot} disabled={readOnly} onChange={(e) => setV({ ...v, bot: e.target.value })}><option value="1">{L('开启', 'On')}</option><option value="0">{L('关闭', 'Off')}</option></select></div></div>

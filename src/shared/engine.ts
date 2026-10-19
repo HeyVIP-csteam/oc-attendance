@@ -33,7 +33,7 @@ export interface EngineInstance {
   breakMinutes: number | null;
 }
 
-export interface EngineRules { windowHours: number; lateAsException: boolean; breakMinutes?: number | null }
+export interface EngineRules { lateAsException: boolean; breakMinutes?: number | null }
 /** A question the bot asked in the topic and its answer (null = not answered yet). */
 export interface EngineQuestion { kind: 'EARLY' | 'LATE'; answer: OtAnswer | null; askedAt: number }
 
@@ -175,7 +175,7 @@ export function computeSession(input: ComputeInput): SessionSummary | null {
     if (breakExceeded) flags.push({ code: 'BREAK_LIMIT_EXCEEDED', ts: inT ?? inst.startAt, eventId: null, detail: bi(`当日合计 ${fmtDuration(totalBreakMs)} > ${quota}m`, `daily total ${fmtDuration(totalBreakMs)} > ${quota}m`) });
   }
 
-  const windowMs = rules.windowHours * HOUR;
+  const windowMs = FIXED.shiftWindowHours * HOUR;
   const checks: number[] = [];
   let status: SessionStatus;
   let missing: MissingKind = 'NONE';

@@ -62,7 +62,7 @@ exceptionRoutes.get('/exceptions/:id/fix', async (c) => {
   if (x.source === 'INGEST') {
     const { ctx, instances } = await assignmentContext(db, x.employee_id, x.telegram_message_ts ?? x.occurred_at);
     const emp = await first<{ currency_code: string | null }>(db, 'SELECT currency_code FROM employees WHERE id = ?', x.employee_id);
-    workDate = chooseWorkDate({ type: 'CLOCK_OUT', ts: x.telegram_message_ts ?? x.occurred_at }, ctx, instances, rulesFor(settings, emp?.currency_code).windowHours, tz);
+    workDate = chooseWorkDate({ type: 'CLOCK_OUT', ts: x.telegram_message_ts ?? x.occurred_at }, ctx, instances, tz);
   }
   const s = await first<{ scheduled_start_at: number | null; scheduled_end_at: number | null; actual_out_at: number | null; id: number }>(db,
     'SELECT id, scheduled_start_at, scheduled_end_at, actual_out_at FROM attendance_sessions WHERE employee_id = ? AND work_date = ?', x.employee_id, workDate);

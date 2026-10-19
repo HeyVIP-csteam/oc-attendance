@@ -71,8 +71,9 @@ export type MissingKind = 'NONE' | 'MISSING_IN' | 'MISSING_OUT' | 'BREAK_NOT_END
 export interface KeywordConfig { CLOCK_IN: string[]; BREAK_START: string[]; BREAK_END: string[]; CLOCK_OUT: string[] }
 
 export interface Rules {
-  windowHours: number;        // shift matching window (hours before/after the scheduled shift; may be a fraction, e.g. 0.5 = 30 min)
-  windowUnit?: 'h' | 'm';     // how the admin entered it (display only)
+  /** @deprecated the shift matching window is fixed (FIXED.shiftWindowHours); kept only so old saved settings still parse */
+  windowHours?: number;
+  windowUnit?: 'h' | 'm';
   lateAsException: boolean;   // also list late / early leave as exceptions
   botReply: boolean;          // bot replies in the topic
   breakMinutes: number | null; // total break allowed per day, in minutes (null = no limit); applies to every shift
@@ -97,6 +98,8 @@ export const FIXED = {
   otAnswerWaitMin: 120,     // an OT question still unanswered after this → OT_NO_ANSWER
   delayThresholdMin: 5,     // received_at − telegram time above this → DELAYED_DELIVERY
   openSessionMaxHours: 20,  // a BREAK/RESUME/OUT is attached to an open session started within this many hours
+  shiftWindowHours: 4,      // a punch belongs to a shift from this long before its start to this long after its end;
+                            // from this long before the start a missing clock in shows as NOT_CLOCKED_IN
 } as const;
 
 /** Fallback only — the real keyword list lives in the database (Settings → Punch keywords, seeded by migrations). */
@@ -116,7 +119,7 @@ export interface ParserRules {
   typedTimeReview: boolean;
 }
 export const DEFAULT_PARSER: ParserRules = { skipLabels: [], typoTolerance: true, ignoreBrackets: true, typedTimeReview: true };
-export const DEFAULT_RULES: Rules = { windowHours: 4, windowUnit: 'h', lateAsException: false, botReply: true, otHours: 9, breakMinutes: 90, breakUnit: 'm', outAskMin: 45, earlyAskMin: 30, answerBy: 'any' };
+export const DEFAULT_RULES: Rules = { lateAsException: false, botReply: true, otHours: 9, breakMinutes: 90, breakUnit: 'm', outAskMin: 45, earlyAskMin: 30, answerBy: 'any' };
 
 export const BIZ_TZ_DEFAULT = 'Asia/Colombo';
 

@@ -722,14 +722,15 @@ describe('roster OT tag', () => {
 });
 
 
-describe('shift matching window in minutes', () => {
-  it('accepts a 30-minute window and keeps the chosen unit', async () => {
-    const { h } = await fixture();
-    expect((await h.req('PUT', '/api/settings/rules', { windowHours: 0.5, windowUnit: 'm', lateAsException: false, botReply: true })).status).toBe(200);
-    const m = await h.req('GET', '/api/meta');
-    expect(m.json.rules).toMatchObject({ windowHours: 0.5, windowUnit: 'm' });
-    expect((await h.req('PUT', '/api/settings/rules', { windowHours: 0.51, lateAsException: false, botReply: true })).status).toBe(400);
-    expect((await h.req('PUT', '/api/settings/rules', { windowHours: 9, lateAsException: false, botReply: true })).status).toBe(400);
+describe('shift matching window (fixed, no longer a setting)', () => {
+  it('is always 4 hours: a saved window is ignored, a punch 3h 50m before the shift still belongs to it', async () => {
+    const { h, e1 } = await fixture();
+    // an old client sending windowHours is accepted, the value is not stored and not used
+    expect((await h.req('PUT', '/api/settings/rules', { currency: 'LKR', windowHours: 1, lateAsException: false, botReply: true })).status).toBe(200);
+    expect((await h.req('GET', '/api/meta')).json.rulesCur.LKR.windowHours).toBeUndefined();
+    await h.roster(e1, D, 'B'); // 15:00–23:00
+    await h.send({ text: 'IN', ts: lk(D, '11:10'), thread: 1001 });
+    expect((await h.session(e1, D))!.shift_instance_id).not.toBeNull();
   });
 });
 

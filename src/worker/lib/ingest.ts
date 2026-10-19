@@ -191,7 +191,7 @@ export async function ingestUpdate(env: Env, bot: BotRow, upd: TgUpdate, receive
   // ---------------------------------------------------------------- punch: event
   const empId = id.employeeId;
   const { ctx, instances } = await assignmentContext(db, empId, tgTs);
-  const workDate = chooseWorkDate({ type: parsed.type, ts: tgTs }, ctx, instances, rules.windowHours, tz);
+  const workDate = chooseWorkDate({ type: parsed.type, ts: tgTs }, ctx, instances, tz);
   const r = await write([
     rawInsert('PROCESSED', null, empId, parsed.type),
     stmt(db, `INSERT INTO attendance_events (message_id, employee_id, work_date, event_type, event_ts, tg_message_id, received_at, source, created_at)
@@ -252,7 +252,7 @@ export async function reparsePending(env: Env, actor: string, now: number): Prom
       continue;
     }
     const { ctx, instances } = await assignmentContext(db, id.employeeId, m.telegram_message_ts);
-    const workDate = chooseWorkDate({ type: p.type, ts: m.telegram_message_ts }, ctx, instances, rulesFor(settings, mapping?.currency_code).windowHours, tz);
+    const workDate = chooseWorkDate({ type: p.type, ts: m.telegram_message_ts }, ctx, instances, tz);
     await db.batch([
       stmt(db, "UPDATE telegram_messages SET processing_status = 'REPARSED', error_code = NULL, parsed_event_type = ?, employee_id = ?, processed_at = ? WHERE id = ?", p.type, id.employeeId, now, m.id),
       stmt(db, `INSERT INTO attendance_events (message_id, employee_id, work_date, event_type, event_ts, tg_message_id, received_at, source, created_at)
