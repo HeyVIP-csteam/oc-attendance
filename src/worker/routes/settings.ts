@@ -101,6 +101,9 @@ const RulesSchema = z.object({
   otHours: z.number().min(1).max(24).optional().default(9),
   breakMinutes: z.number().int().min(0).max(1440).nullable().optional().default(90),
   breakUnit: z.enum(['h', 'm']).optional().default('m'),
+  // a clock out attaches to an open session up to 20 h after clock in, so the reminder must come before that
+  forgotOutHours: z.number().min(1).max(20).refine((h) => Math.abs(h * 60 - Math.round(h * 60)) < 1e-6, 'whole minutes only').optional().default(14),
+  forgotOutUnit: z.enum(['h', 'm']).optional().default('h'),
   currency: z.string().trim().toUpperCase().max(10).optional(), // set → these are that currency's own rules
 });
 
@@ -114,7 +117,7 @@ settingsRoutes.put('/settings/rules', async (c) => {
   const actor = c.get('admin').username;
   const before = await loadSettings(db);
   const since = addDays(localDate(now, bizTz(c.env)), -31);
-  const changed = (a: Pick<Rules, 'lateAsException' | 'windowHours' | 'breakMinutes'>, b: typeof a) => a.lateAsException !== b.lateAsException || a.windowHours !== b.windowHours || a.breakMinutes !== b.breakMinutes;
+  const changed = (a: Pick<Rules, 'lateAsException' | 'windowHours' | 'breakMinutes' | 'forgotOutHours'>, b: typeof a) => a.lateAsException !== b.lateAsException || a.windowHours !== b.windowHours || a.breakMinutes !== b.breakMinutes || a.forgotOutHours !== b.forgotOutHours;
   const statements: D1PreparedStatement[] = [];
   if (currency) {
     // one currency's own rules (each currency is set on its own)

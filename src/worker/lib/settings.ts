@@ -16,12 +16,14 @@ export function parseSettings(rows: { key: string; value: string }[]): Settings 
   const safe = <T>(s: string | undefined, d: T): T => { try { return s ? { ...d, ...JSON.parse(s) } : d; } catch { return d; } };
   const rules = safe<Rules>(m.get('rules'), DEFAULT_RULES);
   if (!(Number(rules.otHours) > 0)) rules.otHours = DEFAULT_RULES.otHours;
+  if (!(Number(rules.forgotOutHours) > 0)) rules.forgotOutHours = DEFAULT_RULES.forgotOutHours;
   delete (rules as { allowedChats?: unknown }).allowedChats; // retired setting: a group is accepted once an employee topic is bound in it
   const rulesCur: Record<string, Rules> = {};
   for (const [cur, r] of Object.entries(safe<Record<string, Partial<Rules>>>(m.get('rules_cur'), {}))) {
     if (!r || typeof r !== 'object') continue;
     const x = { ...rules, ...r } as Rules;
     if (!(Number(x.otHours) > 0)) x.otHours = rules.otHours;
+    if (!(Number(x.forgotOutHours) > 0)) x.forgotOutHours = rules.forgotOutHours;
     rulesCur[cur] = x;
   }
   return {

@@ -162,7 +162,8 @@ export async function recomputeMany(db: D1Database, keys: Key[], o: RecomputeOpt
     const w = pairsWhere(part);
     const wi = pairsWhere(part, 'employee_id', 'shift_date');
     const ws = pairsWhere(part, 's.employee_id', 's.work_date');
-    const [instR, evR, brR, exR, adjR] = await db.batch([
+    const wm = pairsWhere(part, 'employee_id', 'mark_date');
+    const [instR, evR, brR, exR, adjR, mkR] = await db.batch([
       stmt(db, `SELECT * FROM shift_instances WHERE adjustment_status <> 'CANCELLED' AND ${wi.sql}`, ...wi.params),
       // a message imported from a Telegram export was not "delivered late": its arrival time is its Telegram time
       stmt(db, `SELECT id, employee_id, work_date, event_type, event_ts, tg_message_id,
@@ -174,7 +175,10 @@ export async function recomputeMany(db: D1Database, keys: Key[], o: RecomputeOpt
       stmt(db, `SELECT id, employee_id, work_date, dedupe_key, status, occurred_at, detail FROM attendance_exceptions
                 WHERE source = 'COMPUTED' AND ${w.sql}`, ...w.params),
       stmt(db, `SELECT employee_id, work_date, COUNT(*) AS n FROM attendance_adjustments WHERE ${w.sql} GROUP BY employee_id, work_date`, ...w.params),
+      // roster code OT = overtime on a day off
+      stmt(db, `SELECT employee_id, mark_date FROM roster_marks WHERE code = 'OT' AND ${wm.sql}`, ...wm.params),
     ]);
+    const otDays = new Set((mkR.results as { employee_id: number; mark_date: string }[]).map((r) => `${r.employee_id}|${r.mark_date}`));
     const group = <T extends { employee_id: number }>(rows: T[], dateField: keyof T) => {
       const m = new Map<string, T[]>();
       for (const r of rows) { const k = `${r.employee_id}|${r[dateField] as string}`; m.set(k, [...(m.get(k) ?? []), r]); }
@@ -193,7 +197,7 @@ export async function recomputeMany(db: D1Database, keys: Key[], o: RecomputeOpt
       const inst = insts.get(ks)?.[0] ?? null;
       const evRows = evs.get(ks) ?? [];
       const engineEvents: EngineEvent[] = evRows.map((e) => ({ id: e.id, type: e.event_type, ts: e.event_ts, tgMessageId: e.tg_message_id, receivedAt: e.received_at, source: e.source, voided: e.is_voided === 1 }));
-      const summary = computeSession({ events: engineEvents, instance: inst ? toEngineInstance(inst) : null, now: o.now, rules: rulesOf(empId), tz: o.tz });
+      const summary = computeSession({ events: engineEvents, instance: inst ? toEngineInstance(inst) : null, now: o.now, rules: rulesOf(empId), tz: o.tz, otDay: otDays.has(ks) });
       out.set(ks, { key, summary, instance: inst });
       const existingEx = exs.get(ks) ?? [];
 

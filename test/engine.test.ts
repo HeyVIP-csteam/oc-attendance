@@ -192,12 +192,15 @@ describe('calculations', () => {
     expect(s.shiftDurMs).toBe(8 * HOUR + 5 * MIN);
     expect(s.netMs).toBe(7 * HOUR + 35 * MIN);
   });
-  it('test 8: missing clock-out becomes INCOMPLETE only after end + 4 h, and net is not shown', () => {
+  it('test 8: missing clock-out becomes INCOMPLETE only after the forgot clock-out time (default 14 h after clock in), and net is not shown', () => {
     const evs = [ev('CLOCK_IN', lk(d, '07:00'))];
-    const working = computeSession({ events: evs, instance: A, now: lk(d, '18:00'), rules, tz: TZ })!;
+    const working = computeSession({ events: evs, instance: A, now: lk(d, '20:00'), rules, tz: TZ })!;
     expect(working.status).toBe('WORKING');
-    expect(working.nextCheckAt).toBe(A.endAt + 4 * HOUR + 1);
-    const later = computeSession({ events: evs, instance: A, now: lk(d, '19:01'), rules, tz: TZ })!;
+    expect(working.nextCheckAt).toBe(lk(d, '21:00') + 1);
+    const short = computeSession({ events: evs, instance: A, now: lk(d, '17:01'), rules: { ...rules, forgotOutHours: 10 }, tz: TZ })!;
+    expect(short.missing).toBe('MISSING_OUT');
+    expect(short.flags.find((f) => f.code === 'MISSING_CLOCK_OUT')!.detail!.en).toBe('No clock out 10h after clock in (07:00)');
+    const later = computeSession({ events: evs, instance: A, now: lk(d, '21:01'), rules, tz: TZ })!;
     expect(later.status).toBe('INCOMPLETE');
     expect(later.missing).toBe('MISSING_OUT');
     expect(later.netMs).toBeNull();

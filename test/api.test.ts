@@ -253,7 +253,9 @@ describe('missing punches and the cron job', () => {
     await h.cron(lk(D, '09:15'));
     expect((await h.session(e2, D))!.status).toBe('ABSENT');
     expect((await h.session(e1, D))!.status).toBe('WORKING');
-    await h.cron(lk(D, '19:15'));
+    await h.cron(lk(D, '20:45'));
+    expect((await h.session(e1, D))!.status).toBe('WORKING'); // 14 h after clock in (default) is 21:00
+    await h.cron(lk(D, '21:15'));
     expect((await h.session(e1, D))).toMatchObject({ status: 'INCOMPLETE', missing: 'MISSING_OUT' });
     const ex = await h.req('GET', '/api/exceptions?status=OPEN');
     expect(ex.json.rows.map((x: any) => x.code).sort()).toEqual(['MISSING_CLOCK_OUT', 'NO_SHOW']);
@@ -328,7 +330,7 @@ describe('admin corrections and audit (test 16)', () => {
     const { h, e1 } = await fixture();
     await h.roster(e1, D, 'A');
     await h.send({ text: 'IN', ts: lk(D, '07:00'), thread: 1001 });
-    await h.cron(lk(D, '19:30'));
+    await h.cron(lk(D, '21:30'));
     const ex = (await h.req('GET', '/api/exceptions?code=MISSING_CLOCK_OUT')).json.rows[0];
     const fix = (await h.req('GET', `/api/exceptions/${ex.id}/fix`)).json.fix;
     expect(fix).toMatchObject({ employeeId: e1, workDate: D, type: 'CLOCK_OUT', ts: lk(D, '15:00'), on: true });
@@ -711,6 +713,9 @@ describe('roster OT tag', () => {
     await h.send({ text: 'IN', ts: lk(D, '05:00'), thread: 1001 });
     await h.send({ text: 'OUT', ts: lk(D, '15:30'), thread: 1001 }); // 10h30m on shift
     await h.send({ text: 'IN', ts: lk(D, '09:00'), thread: 1002 }); // E002 has no shift: day off
+    // no clock out yet (or forgot to clock out) → not OT
+    expect((await h.req('GET', `/api/roster?from=${D}&to=${D}`)).json.ot.map((o: any) => [o.employee_id, o.kind])).toEqual([[e1, 'LONG']]);
+    await h.send({ text: 'OUT', ts: lk(D, '13:00'), thread: 1002 });
     const r = await h.req('GET', `/api/roster?from=${D}&to=${D}`);
     const ot = r.json.ot.map((o: any) => [o.employee_id, o.kind]).sort();
     expect(ot).toEqual([[e1, 'LONG'], [e2, 'OFF']].sort());
@@ -1045,5 +1050,70 @@ describe('currency access (owner / limited admin)', () => {
     await h.login('pkr', 'pkr-password-12');
     expect((await h.req('GET', '/api/meta')).json.currencies.length).toBeGreaterThan(1);
     expect((await h.req('GET', '/api/bots')).status).toBe(403); // all currencies, but still not the owner
+  });
+});
+
+describe('forgot clock-out reminder', () => {
+  const reminders = (h: Harness) => h.tg.filter((x) => x.method === 'sendMessage' && String(x.body.text).startsWith('⏰'));
+
+  it('reminds once in the topic after the set hours; the exception appears at the same time', async () => {
+    const { h, e1 } = await fixture();
+    await h.roster(e1, D, 'A');
+    await h.send({ text: 'IN', ts: lk(D, '07:00'), thread: 1001 });
+    await h.req('PUT', '/api/settings/rules', { currency: 'LKR', windowHours: 4, lateAsException: false, botReply: true, forgotOutHours: 12 });
+    await h.cron(lk(D, '18:50'));
+    expect(reminders(h)).toHaveLength(0);
+    await h.cron(lk(D, '19:05'));
+    const r = reminders(h);
+    expect(r).toHaveLength(1);
+    expect(r[0].body).toMatchObject({ chat_id: CHAT, message_thread_id: 1001 });
+    expect(r[0].body.text).toBe('⏰ Reminder: you clocked in at 07:00 and have not clocked out for over 12 hours. Did you forget to clock out? Please tell your team leader your actual clock-out time.');
+    expect((await h.session(e1, D))).toMatchObject({ missing: 'MISSING_OUT' });
+    await h.cron(lk(D, '19:20'));
+    await h.cron(lk(D, '19:35'));
+    expect(reminders(h)).toHaveLength(1); // only once
+  });
+
+  it('no reminder when bot replies are off, or when the employee clocked out', async () => {
+    const { h, e1, e2 } = await fixture();
+    await h.send({ text: 'IN', ts: lk(D, '07:00'), thread: 1001 });
+    await h.send({ text: 'IN', ts: lk(D, '07:00'), thread: 1002 });
+    await h.send({ text: 'OUT', ts: lk(D, '15:00'), thread: 1002 });
+    await h.req('PUT', '/api/settings/rules', { currency: 'LKR', windowHours: 4, lateAsException: false, botReply: false, forgotOutHours: 14 });
+    await h.cron(lk(D, '21:05'));
+    expect(reminders(h)).toHaveLength(0);
+    expect((await h.session(e1, D))!.missing).toBe('MISSING_OUT'); // the exception still appears
+    expect((await h.session(e2, D))!.missing).toBe('NONE');
+  });
+
+  it('old open sessions are never reminded (e.g. right after a deploy)', async () => {
+    const { h } = await fixture();
+    await h.send({ text: 'IN', ts: lk(D, '07:00'), thread: 1001 });
+    await h.cron(lk(D, '23:30')); // due 21:00, more than 2 h ago
+    expect(reminders(h)).toHaveLength(0);
+  });
+
+  it('the setting is limited to 1–20 hours', async () => {
+    const { h } = await fixture();
+    expect((await h.req('PUT', '/api/settings/rules', { currency: 'LKR', windowHours: 4, lateAsException: false, botReply: true, forgotOutHours: 21 })).status).toBe(400);
+    expect((await h.req('PUT', '/api/settings/rules', { currency: 'LKR', windowHours: 4, lateAsException: false, botReply: true, forgotOutHours: 13.5, forgotOutUnit: 'm' })).status).toBe(200);
+    expect((await h.req('GET', '/api/meta')).json.rulesCur.LKR).toMatchObject({ forgotOutHours: 13.5, forgotOutUnit: 'm' });
+  });
+});
+
+describe('roster code OT (overtime on a day off)', () => {
+  it('punches on an OT day are not an unscheduled punch, and the roster shows OT once clocked out', async () => {
+    const { h, e1, e2 } = await fixture();
+    await h.req('POST', '/api/roster-codes', { code: 'OT', name: 'Overtime', color: 3 });
+    await h.req('PUT', '/api/roster/cell', { employeeId: e1, date: D, value: 'OT', reason: 'overtime day' });
+    await h.send({ text: 'IN', ts: lk(D, '09:00'), thread: 1001 });
+    await h.send({ text: 'OUT', ts: lk(D, '17:00'), thread: 1001 });
+    await h.send({ text: 'IN', ts: lk(D, '09:00'), thread: 1002 }); // E002: nothing on the roster
+    await h.send({ text: 'OUT', ts: lk(D, '17:00'), thread: 1002 });
+    const codes = (id: number) => h.db.rows<{ code: string }>("SELECT code FROM attendance_exceptions WHERE employee_id = ? AND status = 'OPEN'", id).map((x) => x.code);
+    expect(codes(e1)).not.toContain('UNSCHEDULED_PUNCH');
+    expect(codes(e2)).toContain('UNSCHEDULED_PUNCH');
+    const ot = (await h.req('GET', `/api/roster?from=${D}&to=${D}`)).json.ot.map((o: any) => o.employee_id).sort();
+    expect(ot).toEqual([e1, e2].sort());
   });
 });

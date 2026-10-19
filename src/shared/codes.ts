@@ -76,15 +76,15 @@ export interface Rules {
   breakMinutes: number | null; // total break allowed per day, in minutes (null = no limit); applies to every shift
   breakUnit?: 'h' | 'm';      // how the admin entered it (display only)
   otHours: number;            // on-shift time (clock in → clock out) above this many hours is tagged OT on the roster
+  forgotOutHours: number;     // no clock out this many hours after clock in → MISSING_CLOCK_OUT + a reminder in the topic (if bot replies are on)
+  forgotOutUnit?: 'h' | 'm';  // how the admin entered it (display only)
 }
 
 /** Fixed thresholds (not user-editable; removed from the UI by request). */
 export const FIXED = {
   missingInHours: 2,        // no clock-in this long after scheduled start → ABSENT / NO_SHOW
-  missingOutHours: 4,       // no clock-out this long after scheduled end → MISSING_CLOCK_OUT
   breakNotEndedMin: 120,    // an open break older than this → BREAK_NOT_ENDED
   delayThresholdMin: 5,     // received_at − telegram time above this → DELAYED_DELIVERY
-  unscheduledMaxHours: 16,  // without a shift, an open session is considered missing OUT after this
   openSessionMaxHours: 20,  // a BREAK/RESUME/OUT is attached to an open session started within this many hours
 } as const;
 
@@ -105,7 +105,7 @@ export interface ParserRules {
   typedTimeReview: boolean;
 }
 export const DEFAULT_PARSER: ParserRules = { skipLabels: [], typoTolerance: true, ignoreBrackets: true, typedTimeReview: true };
-export const DEFAULT_RULES: Rules = { windowHours: 4, windowUnit: 'h', lateAsException: false, botReply: true, otHours: 9, breakMinutes: 90, breakUnit: 'm' };
+export const DEFAULT_RULES: Rules = { windowHours: 4, windowUnit: 'h', lateAsException: false, botReply: true, otHours: 9, breakMinutes: 90, breakUnit: 'm', forgotOutHours: 14, forgotOutUnit: 'h' };
 
 export const BIZ_TZ_DEFAULT = 'Asia/Colombo';
 

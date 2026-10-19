@@ -141,11 +141,12 @@ shiftRoutes.get('/roster', async (c) => {
   const [instances, ot, marks] = ids.length ? await Promise.all([
     all(db, `SELECT employee_id, shift_date, shift_id, shift_code, shift_name, scheduled_start_at, scheduled_end_at, adjustment_status, source
       FROM shift_instances WHERE employee_id IN (${inList}) AND shift_date BETWEEN ? AND ?`, ...ids, from, to),
-    // OT on the roster: worked on a day off (no active shift), or on shift longer than the OT threshold (clock in → out)
+    // OT on the roster: worked on a day off (no active shift), or on shift longer than the OT threshold (clock in → out);
+    // a day without a clock out (forgot to clock out) is never OT
     all(db, `SELECT s.employee_id, s.work_date, s.actual_in_at, s.actual_out_at, s.shift_duration_ms,
         CASE WHEN s.shift_instance_id IS NULL OR i.adjustment_status = 'CANCELLED' THEN 'OFF' ELSE 'LONG' END AS kind
       FROM attendance_sessions s LEFT JOIN shift_instances i ON i.id = s.shift_instance_id JOIN employees e ON e.id = s.employee_id
-      WHERE s.employee_id IN (${inList}) AND s.work_date BETWEEN ? AND ? AND s.actual_in_at IS NOT NULL
+      WHERE s.employee_id IN (${inList}) AND s.work_date BETWEEN ? AND ? AND s.actual_in_at IS NOT NULL AND s.actual_out_at IS NOT NULL
         AND (s.shift_instance_id IS NULL OR i.adjustment_status = 'CANCELLED' OR (s.actual_out_at IS NOT NULL AND s.actual_out_at - s.actual_in_at > ${otCase}))`,
       ...ids, from, to, ...otParams),
     all(db, `SELECT employee_id, mark_date, code FROM roster_marks WHERE employee_id IN (${inList}) AND mark_date BETWEEN ? AND ?`, ...ids, from, to),

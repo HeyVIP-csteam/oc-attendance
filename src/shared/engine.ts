@@ -12,7 +12,7 @@
 //   Net Worked          = Total Shift − Total Break  (only when the session is complete and no break is open)
 
 import { type Bi, bi, type EventType, type ExceptionCode, exceptionSeverity, FIXED, type MissingKind, type SessionState, type SessionStatus } from './codes';
-import { fmtDuration, fmtTime, HOUR, MIN } from './time';
+import { fmtDuration, fmtHm, fmtTime, HOUR, MIN } from './time';
 
 export interface EngineEvent {
   id: number;
@@ -33,7 +33,7 @@ export interface EngineInstance {
   breakMinutes: number | null;
 }
 
-export interface EngineRules { windowHours: number; lateAsException: boolean; breakMinutes?: number | null }
+export interface EngineRules { windowHours: number; lateAsException: boolean; breakMinutes?: number | null; forgotOutHours?: number }
 
 export interface Flag { code: ExceptionCode; ts: number; eventId: number | null; detail: Bi | null }
 
@@ -118,6 +118,7 @@ export interface ComputeInput {
   now: number;
   rules: EngineRules;
   tz: string;                     // display time zone for detail texts
+  otDay?: boolean;                // the roster marks this day OT (overtime on a day off): punches without a shift are expected
 }
 
 export function computeSession(input: ComputeInput): SessionSummary | null {
@@ -181,8 +182,13 @@ export function computeSession(input: ComputeInput): SessionSummary | null {
       else { status = 'SCHEDULED'; checks.push(inst.startAt - windowMs); }
     } else return null;
   } else if (outT == null) {
-    const deadline = inst ? inst.endAt + FIXED.missingOutHours * HOUR : inT + FIXED.unscheduledMaxHours * HOUR;
-    if (now > deadline) { missing = 'MISSING_OUT'; status = 'INCOMPLETE'; flags.push({ code: 'MISSING_CLOCK_OUT', ts: deadline, eventId: null, detail: null }); }
+    // Settings → Attendance rules: no clock out this long after clock in (the same moment the bot sends its reminder)
+    const forgotMs = Math.round((rules.forgotOutHours ?? 14) * 60) * MIN;
+    const deadline = inT + forgotMs;
+    if (now > deadline) {
+      missing = 'MISSING_OUT'; status = 'INCOMPLETE';
+      flags.push({ code: 'MISSING_CLOCK_OUT', ts: deadline, eventId: null, detail: bi(`上班 ${fmtTime(inT, tz)} 后 ${fmtHm(forgotMs)} 没有下班打卡`, `No clock out ${fmtHm(forgotMs)} after clock in (${fmtTime(inT, tz)})`) });
+    }
     else { status = sm.state === 'ON_BREAK' ? 'ON_BREAK' : 'WORKING'; checks.push(deadline + 1); }
   } else if (open.length) status = 'INCOMPLETE';
   else if (!inst) status = 'NO_SCHEDULE';
@@ -196,7 +202,7 @@ export function computeSession(input: ComputeInput): SessionSummary | null {
       flags.push({ code: 'BREAK_NOT_ENDED', ts: ob.start, eventId: null, detail: bi(`第 ${ob.seq} 次休息开始于 ${fmtTime(ob.start, tz)}，没有 RESUME`, `Break #${ob.seq} started ${fmtTime(ob.start, tz)} with no RESUME`) });
     } else checks.push(limitAt + 1);
   }
-  if (!inst && active.length) flags.push({ code: 'UNSCHEDULED_PUNCH', ts: active[0].ts, eventId: null, detail: bi('当天没有该员工的班次', 'No shift scheduled for this employee on this date') });
+  if (!inst && !input.otDay && active.length) flags.push({ code: 'UNSCHEDULED_PUNCH', ts: active[0].ts, eventId: null, detail: bi('当天没有该员工的班次', 'No shift scheduled for this employee on this date') });
   if (rules.lateAsException) {
     if (lateMin && lateMin > 0) flags.push({ code: 'LATE', ts: inT!, eventId: null, detail: bi(`迟到 ${lateMin} 分钟`, `${lateMin} min late`) });
     if (earlyMin && earlyMin > 0) flags.push({ code: 'EARLY_LEAVE', ts: outT!, eventId: null, detail: bi(`早退 ${earlyMin} 分钟`, `left ${earlyMin} min early`) });

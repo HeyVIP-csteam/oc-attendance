@@ -56,6 +56,11 @@ export async function loadBot(db: D1Database, code: string): Promise<BotRow | nu
   return first<BotRow>(db, 'SELECT * FROM telegram_bots WHERE currency_code = ?', code.toUpperCase());
 }
 
+/** Sends a message (not a reply) into a forum topic. */
+export async function sendTopicMessage(token: string, chatId: number, threadId: number | null, text: string): Promise<void> {
+  await tgCall(token, 'sendMessage', { chat_id: chatId, ...(threadId != null ? { message_thread_id: threadId } : {}), text }, 5000);
+}
+
 /** Sends a reply into the same forum topic. Failures are logged by the caller and never affect attendance data. */
 export async function sendReply(token: string, chatId: number, threadId: number | null, replyTo: number, text: string): Promise<void> {
   await tgCall(token, 'sendMessage', {

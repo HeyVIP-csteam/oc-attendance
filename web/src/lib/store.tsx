@@ -3,7 +3,7 @@ import { api, type ApiErr } from './api';
 
 export interface MetaEmployee { id: number; code: string; name: string; currency: string | null; status: string; thread: number | null }
 export interface MetaShift { id: number; code: string; name: string; start_time: string; end_time: string; late_grace_min: number; early_grace_min: number; break_minutes: number | null; is_active: number; created_at: number; timezone: string }
-export interface MetaRules { windowHours: number; windowUnit?: 'h' | 'm'; breakMinutes?: number | null; breakUnit?: 'h' | 'm'; lateAsException: boolean; botReply: boolean; otHours?: number }
+export interface MetaRules { windowHours: number; windowUnit?: 'h' | 'm'; breakMinutes?: number | null; breakUnit?: 'h' | 'm'; lateAsException: boolean; botReply: boolean; otHours?: number; forgotOutHours?: number; forgotOutUnit?: 'h' | 'm' }
 /** The attendance rules of one currency. */
 export const rulesOf = (m: Pick<Meta, 'rules' | 'rulesCur'>, cur: string | null | undefined): MetaRules => (cur && m.rulesCur?.[cur]) || m.rules;
 export interface Meta {

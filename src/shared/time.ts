@@ -103,6 +103,13 @@ export function fmtDateTime(ms: number | null | undefined, tz: string): string {
   return `${p.y}-${pad(p.m)}-${pad(p.d)} ${pad(p.h)}:${pad(p.mi)}:${pad(p.s)}`;
 }
 
+/** A setting-style duration: 14h, 13h 30m, 45m. */
+export function fmtHm(ms: number): string {
+  const m = Math.round(ms / MIN);
+  const h = Math.floor(m / 60);
+  return h && m % 60 ? `${h}h ${m % 60}m` : h ? `${h}h` : `${m}m`;
+}
+
 export function fmtDuration(ms: number | null | undefined): string {
   if (ms == null) return '—';
   const m = Math.round(ms / MIN);

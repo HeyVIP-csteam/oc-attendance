@@ -2,17 +2,19 @@
 //   1. materialise sessions for today's / yesterday's shift instances (so no-shows become visible)
 //   2. recompute sessions whose status can change with time (next_check_at), explicit dirty marks, and crash recovery
 //   3. once per business day: generate instances from default-shift assignments and purge expired admin sessions
+//   4. forgot clock-out reminders in the employees' topics (Settings → Attendance rules)
 // Each run uses a bounded number of D1 queries (well below the per-invocation limits of the free plan).
 
 import { addDays, localDate } from '../shared/time';
 import type { Env } from './env';
 import { log } from './lib/audit';
 import { first, stmt } from './lib/db';
+import { sendOutReminders } from './lib/reminders';
 import { generateFromAssignments } from './lib/roster';
 import { dueSessionKeys, recomputeMany } from './lib/sessions';
 import { bizTz, loadSettings } from './lib/settings';
 
-export async function runCron(env: Env, now = Date.now()): Promise<{ materialised: number; recomputed: number; generated: number }> {
+export async function runCron(env: Env, now = Date.now()): Promise<{ materialised: number; recomputed: number; generated: number; reminders: number }> {
   const db = env.DB;
   const tz = bizTz(env);
   const today = localDate(now, tz);
@@ -36,7 +38,11 @@ export async function runCron(env: Env, now = Date.now()): Promise<{ materialise
   const keys = await dueSessionKeys(db, now, 200);
   if (keys.length) await recomputeMany(db, keys, { now, tz, rules: settings.rules, byCur: settings.rulesCur });
 
-  const res = { materialised: mat.meta.changes ?? 0, recomputed: keys.length, generated };
+  // 4. forgot clock-out reminders in the employees' topics (never affects attendance data)
+  let reminders = 0;
+  try { reminders = await sendOutReminders(env, settings, now); } catch (e) { log('warn', 'out_reminders_failed', { error: String((e as Error).message).slice(0, 200) }); }
+
+  const res = { materialised: mat.meta.changes ?? 0, recomputed: keys.length, generated, reminders };
   log('info', 'cron', res);
   return res;
 }
