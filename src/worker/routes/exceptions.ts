@@ -10,6 +10,7 @@ import { bad, body, clientIp, intParam, notFound, query, requireAdminRole } from
 import { assignmentContext, chooseWorkDate } from '../lib/sessions';
 import { bizTz, loadSettings, rulesFor } from '../lib/settings';
 import { applyAdjustment } from './attendance';
+import { assertEmployee, scopeOf, scopeSql } from '../lib/scope';
 
 export const exceptionRoutes = new Hono<AppBindings>();
 
@@ -27,6 +28,8 @@ exceptionRoutes.get('/exceptions', async (c) => {
   if (f.sev) { cond.push('x.severity = ?'); p.push(f.sev); }
   if (f.status) { cond.push('x.status = ?'); p.push(f.status); }
   if (f.q) { cond.push("(e.employee_code LIKE ? ESCAPE '\\' OR e.name LIKE ? ESCAPE '\\')"); p.push(likeEsc(f.q), likeEsc(f.q)); }
+  const sc = scopeSql(c);
+  if (sc.sql) { cond.push('x.employee_id IS NOT NULL' + sc.sql); p.push(...sc.params); }
   const FROM = 'FROM attendance_exceptions x LEFT JOIN employees e ON e.id = x.employee_id LEFT JOIN telegram_messages m ON m.id = x.message_id';
   const db = c.env.DB;
   const [cnt, rows] = await db.batch([
@@ -52,6 +55,7 @@ exceptionRoutes.get('/exceptions/:id/fix', async (c) => {
   const tz = bizTz(c.env);
   const x = await first<ExRow>(db, `SELECT x.*, m.raw_text, m.telegram_message_ts FROM attendance_exceptions x LEFT JOIN telegram_messages m ON m.id = x.message_id WHERE x.id = ?`, id);
   if (!x) throw notFound();
+  await assertEmployee(c, x.employee_id);
   if (!x.employee_id) return c.json({ fix: null });
   const settings = await loadSettings(db);
   let workDate = x.work_date;
@@ -102,6 +106,7 @@ exceptionRoutes.put('/exceptions/:id', async (c) => {
   const ip = clientIp(c);
   const x = await first<ExRow>(db, 'SELECT * FROM attendance_exceptions WHERE id = ?', id);
   if (!x) throw notFound();
+  await assertEmployee(c, x.employee_id);
   if (v.fix && x.employee_id && x.employee_id !== v.fix.employeeId) throw bad('VALIDATION', '员工不一致', 'Employee mismatch');
   const now = Date.now();
   const setStatus = (status: string, note: string | null, by: string | null, at: number | null) => status === 'OPEN'
@@ -125,24 +130,66 @@ exceptionRoutes.put('/exceptions/:id', async (c) => {
   return c.json({ ok: true });
 });
 
+/** Audit lines that concern the given currencies: their employees (and those employees' sessions, shifts, topics and
+ *  exceptions), those currencies' attendance rules and roster imports, plus the account's own actions. */
+function auditScope(cur: string[], actor: string): { sql: string; params: unknown[] } {
+  if (!cur.length) return { sql: 'a.actor = ?', params: [actor] };
+  const q = cur.map(() => '?').join(',');
+  return {
+    sql: `(a.actor = ?
+      OR (a.entity_type IN ('employee','attendance_session','shift_instance','employee_shift_assignment','telegram_topic_mapping')
+          AND EXISTS (SELECT 1 FROM employees e WHERE e.currency_code IN (${q})
+                      AND (a.entity_id = e.employee_code OR substr(a.entity_id, 1, length(e.employee_code) + 1) = e.employee_code || '@')))
+      OR (a.entity_type = 'attendance_exception'
+          AND EXISTS (SELECT 1 FROM attendance_exceptions x JOIN employees e ON e.id = x.employee_id
+                      WHERE x.id = CAST(a.entity_id AS INTEGER) AND e.currency_code IN (${q})))
+      OR (a.entity_type = 'system_settings' AND a.entity_id IN (${cur.map(() => "'rules:' || ?").join(',')}))
+      OR (a.action = 'ROSTER_IMPORTED' AND json_valid(a.after_json) AND json_extract(a.after_json, '$.currency') IN (${q})))`,
+    params: [actor, ...cur, ...cur, ...cur, ...cur],
+  };
+}
+
 exceptionRoutes.get('/audit', async (c) => {
   const f = query(c, z.object(Page));
   const db = c.env.DB;
+  const cur = scopeOf(c);
+  const cols = 'SELECT a.id, a.created_at, a.actor, a.action, a.entity_type, a.entity_id, a.before_json, a.after_json, a.note FROM audit_logs a';
+  if (cur !== null) {
+    const w = auditScope(cur, c.get('admin').username);
+    const [cnt, rows] = await db.batch([
+      stmt(db, `SELECT COUNT(*) AS n FROM audit_logs a WHERE ${w.sql}`, ...w.params),
+      stmt(db, `${cols} WHERE ${w.sql} ORDER BY a.created_at DESC, a.id DESC LIMIT ? OFFSET ?`, ...w.params, f.size, (f.page - 1) * f.size),
+    ]);
+    return c.json({ total: (cnt.results[0] as { n: number }).n, rows: rows.results });
+  }
   const [cnt, rows] = await db.batch([
     // append-only table: MAX(id) equals the row count and reads one row instead of scanning the table
     stmt(db, 'SELECT COALESCE(MAX(id), 0) AS n FROM audit_logs'),
-    stmt(db, 'SELECT id, created_at, actor, action, entity_type, entity_id, before_json, after_json, note FROM audit_logs ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?', f.size, (f.page - 1) * f.size),
+    stmt(db, `${cols} ORDER BY a.created_at DESC, a.id DESC LIMIT ? OFFSET ?`, f.size, (f.page - 1) * f.size),
   ]);
   return c.json({ total: (cnt.results[0] as { n: number }).n, rows: rows.results });
 });
 
+const MSG_COLS = `SELECT m.id, m.received_at, m.telegram_message_ts, m.message_id, m.message_thread_id, m.from_user_id, m.raw_text, m.parsed_event_type, m.processing_status, m.error_code, m.is_edit
+              FROM telegram_messages m`;
+
 exceptionRoutes.get('/messages', async (c) => {
   const f = query(c, z.object(Page));
   const db = c.env.DB;
+  const sc = scopeSql(c);
+  if (sc.sql) {
+    // a limited account sees the messages of topics bound to its currencies' employees
+    const w = `EXISTS (SELECT 1 FROM telegram_topic_mappings t JOIN employees e ON e.id = t.employee_id
+                       WHERE t.chat_id = m.chat_id AND t.message_thread_id = m.message_thread_id${sc.sql})`;
+    const [cnt, rows] = await db.batch([
+      stmt(db, `SELECT COUNT(*) AS n FROM telegram_messages m WHERE ${w}`, ...sc.params),
+      stmt(db, `${MSG_COLS} WHERE ${w} ORDER BY m.received_at DESC, m.id DESC LIMIT ? OFFSET ?`, ...sc.params, f.size, (f.page - 1) * f.size),
+    ]);
+    return c.json({ total: (cnt.results[0] as { n: number }).n, rows: rows.results });
+  }
   const [cnt, rows] = await db.batch([
     stmt(db, 'SELECT COALESCE(MAX(id), 0) AS n FROM telegram_messages'), // append-only
-    stmt(db, `SELECT id, received_at, telegram_message_ts, message_id, message_thread_id, from_user_id, raw_text, parsed_event_type, processing_status, error_code, is_edit
-              FROM telegram_messages ORDER BY received_at DESC, id DESC LIMIT ? OFFSET ?`, f.size, (f.page - 1) * f.size),
+    stmt(db, `${MSG_COLS} ORDER BY m.received_at DESC, m.id DESC LIMIT ? OFFSET ?`, f.size, (f.page - 1) * f.size),
   ]);
   return c.json({ total: (cnt.results[0] as { n: number }).n, rows: rows.results });
 });

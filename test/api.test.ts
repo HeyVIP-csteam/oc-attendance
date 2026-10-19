@@ -956,3 +956,94 @@ describe('roster history', () => {
     expect((await h.req('GET', '/api/roster/history-log?from=2026-10-15&to=2026-10-01')).json.total).toBe(2);
   });
 });
+
+describe('currency access (owner / limited admin)', () => {
+  async function scoped() {
+    const { h, e1, e2 } = await fixture();
+    await h.req('POST', '/api/currencies', { code: 'PKR' });
+    const p1 = await h.employee('P001', 'Ahad Ali', 2001, 'PKR');
+    await h.roster(p1, '2026-10-15', 'B');
+    await h.roster(e1, '2026-10-15', 'B');
+    expect((await h.req('POST', '/api/admins', { username: 'pkr', password: 'pkr-password-12', role: 'admin', currencies: ['PKR'] })).status).toBe(200);
+    await h.login('pkr', 'pkr-password-12');
+    return { h, e1, e2, p1 };
+  }
+
+  it('a PKR-only account sees and changes only PKR data on every page', async () => {
+    const { h, e1, p1 } = await scoped();
+    const me = (await h.req('GET', '/api/auth/me')).json;
+    expect(me).toMatchObject({ currencies: ['PKR'], owner: false });
+    const meta = (await h.req('GET', '/api/meta')).json;
+    expect(meta.currencies.map((c: any) => c.code)).toEqual(['PKR']);
+    expect(meta.employees.map((e: any) => e.code)).toEqual(['P001']);
+    expect(Object.keys(meta.rulesCur)).toEqual(['PKR']);
+    const R = 'from=2026-10-01&to=2026-10-31';
+    expect((await h.req('GET', `/api/employees`)).json.rows.map((r: any) => r.employee_code)).toEqual(['P001']);
+    expect((await h.req('GET', `/api/roster?${R}`)).json.employees.map((r: any) => r.employee_code)).toEqual(['P001']);
+    expect((await h.req('GET', `/api/roster?${R}`)).json.counts).toEqual({ PKR: 1 });
+    expect((await h.req('GET', `/api/roster/export?${R}`)).json.employees.length).toBe(1);
+    for (const path of ['/api/attendance', '/api/reports', '/api/breaks', '/api/attendance/export']) {
+      const r = await h.req('GET', `${path}?${R}`);
+      expect(r.status, path).toBe(200);
+      expect(JSON.stringify(r.json), path).not.toContain('E001');
+    }
+    // asking for another currency, or another currency's employee, is refused
+    expect((await h.req('GET', `/api/attendance?${R}&cur=LKR`)).status).toBe(403);
+    expect((await h.req('GET', `/api/roster?${R}&cur=LKR`)).status).toBe(403);
+    expect((await h.req('GET', `/api/employees/${e1}`)).status).toBe(403);
+    expect((await h.req('GET', `/api/sessions/${e1}/2026-10-15`)).status).toBe(403);
+    expect((await h.req('PUT', '/api/roster/cell', { employeeId: e1, date: '2026-10-16', value: 'OFF', reason: 'not mine' })).status).toBe(403);
+    expect((await h.req('POST', `/api/employees/${e1}/deactivate`, { reason: 'not mine at all' })).status).toBe(403);
+    expect((await h.req('POST', '/api/employees', { code: 'L009', name: 'X', currency: 'LKR', timezone: 'Asia/Colombo', chatId: String(CHAT), threadId: '' })).status).toBe(403);
+    // own currency works
+    expect((await h.req('PUT', '/api/roster/cell', { employeeId: p1, date: '2026-10-16', value: 'OFF', reason: 'day off' })).status).toBe(200);
+    expect((await h.req('GET', `/api/sessions/${p1}/2026-10-15`)).status).toBe(200);
+    // settings: only its own currency's attendance rules
+    expect((await h.req('PUT', '/api/settings/rules', { lateAsException: true, botReply: false, windowHours: 6, currency: 'PKR' })).status).toBe(200);
+    expect((await h.req('PUT', '/api/settings/rules', { lateAsException: true, botReply: false, windowHours: 6, currency: 'LKR' })).status).toBe(403);
+    expect((await h.req('PUT', '/api/settings/rules', { lateAsException: true, botReply: false, windowHours: 6 })).status).toBe(403);
+    expect((await h.req('PUT', '/api/settings/keywords', TEST_KEYWORDS)).status).toBe(403);
+    expect((await h.req('GET', '/api/bots')).status).toBe(403);
+    expect((await h.req('GET', '/api/admins')).status).toBe(403);
+    expect((await h.req('POST', '/api/currencies', { code: 'INR' })).status).toBe(403);
+    // roster import: rows of other currencies are skipped
+    const imp = (await h.req('POST', '/api/roster/import', { grid: [['PSD ID', '2026-10-20'], ['E001', 'B'], ['P001', 'B']] })).json.plan;
+    expect(imp.changeCount).toBe(1);
+    expect(imp.changes[0].code).toBe('P001');
+  });
+
+  it('a limited account sees only the audit lines and messages of its currency', async () => {
+    const { h, e1 } = await scoped();
+    await h.send({ text: 'IN', ts: lk('2026-10-15', '09:00'), thread: 1001 });
+    await h.send({ text: 'IN', ts: lk('2026-10-15', '09:01'), thread: 2001 });
+    const audit = (await h.req('GET', '/api/audit?size=100')).json;
+    const ids = audit.rows.map((r: any) => String(r.entity_id));
+    expect(ids).toContain('P001@2026-10-15');
+    expect(ids).toContain('P001');
+    expect(ids.some((x: string) => x.startsWith('E00'))).toBe(false);
+    expect(ids).not.toContain('LKR');
+    expect(audit.total).toBe(audit.rows.length);
+    const msgs = (await h.req('GET', '/api/messages')).json;
+    expect(msgs.rows.map((m: any) => m.message_thread_id)).toEqual([2001]);
+    expect(JSON.stringify((await h.req('GET', '/api/exceptions?size=100')).json)).not.toContain('E001');
+    await h.login();
+    expect((await h.req('GET', '/api/audit?size=100')).json.rows.some((r: any) => String(r.entity_id).startsWith('E001'))).toBe(true);
+    expect((await h.req('GET', `/api/employees/${e1}`)).status).toBe(200);
+  });
+
+  it('the owner cannot be limited or disabled; only the owner manages accounts', async () => {
+    const { h } = await scoped();
+    await h.login();
+    const list = (await h.req('GET', '/api/admins')).json.rows;
+    const owner = list.find((r: any) => r.username === 'owner');
+    expect(owner.is_owner).toBe(1);
+    expect(list.find((r: any) => r.username === 'pkr').currencies).toEqual(['PKR']);
+    expect((await h.req('PUT', `/api/admins/${owner.id}`, { role: 'admin', isActive: true, currencies: ['PKR'] })).status).toBe(400);
+    const pkr = list.find((r: any) => r.username === 'pkr');
+    // widening access signs the account out so the new access applies at once
+    expect((await h.req('PUT', `/api/admins/${pkr.id}`, { role: 'admin', isActive: true, currencies: null })).status).toBe(200);
+    await h.login('pkr', 'pkr-password-12');
+    expect((await h.req('GET', '/api/meta')).json.currencies.length).toBeGreaterThan(1);
+    expect((await h.req('GET', '/api/bots')).status).toBe(403); // all currencies, but still not the owner
+  });
+});

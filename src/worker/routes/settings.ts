@@ -8,6 +8,7 @@ import { auditStmt } from '../lib/audit';
 import { encryptString, randomBytes, webhookSecret } from '../lib/crypto';
 import { all, first, stmt } from '../lib/db';
 import { ApiError, bad, body, clientIp, conflict, notFound, requireAdminRole } from '../lib/http';
+import { checkCur, requireOwner, scopeSql } from '../lib/scope';
 import { reparsePending } from '../lib/ingest';
 import { bizTz, loadSettings, rulesFor } from '../lib/settings';
 import { ALLOWED_UPDATES, type BotRow, botToken, hasSecretToken, loadBot, TelegramError, tgCall, type TgUser, type TgWebhookInfo, TOKEN_RE } from '../lib/telegram';
@@ -20,13 +21,16 @@ const bump = (db: D1Database, now: number) => stmt(db, "UPDATE system_settings S
 settingsRoutes.get('/meta', async (c) => {
   const db = c.env.DB;
   const tz = bizTz(c.env);
+  // a limited account only gets its own currencies and their employees
+  const sc = scopeSql(c);
+  const scC = scopeSql(c, 'c.code');
   const [cur, sh, emps] = await db.batch([
     stmt(db, `SELECT c.code, c.name, (SELECT COUNT(*) FROM employees e WHERE e.currency_code = c.code) AS employees,
                 (SELECT COUNT(*) FROM employees e WHERE e.currency_code = c.code AND e.employment_status = 'ACTIVE') AS active_employees
-              FROM currencies c ORDER BY c.code`),
+              FROM currencies c WHERE 1 = 1${scC.sql} ORDER BY c.code`, ...scC.params),
     stmt(db, 'SELECT * FROM shift_templates ORDER BY code'),
     stmt(db, `SELECT e.id, e.employee_code AS code, e.name, e.currency_code AS currency, e.employment_status AS status, m.message_thread_id AS thread
-              FROM employees e LEFT JOIN telegram_topic_mappings m ON m.employee_id = e.id AND m.is_active = 1 ORDER BY COALESCE(e.sort_order, 1000000000), e.employee_code`),
+              FROM employees e LEFT JOIN telegram_topic_mappings m ON m.employee_id = e.id AND m.is_active = 1 WHERE 1 = 1${sc.sql} ORDER BY COALESCE(e.sort_order, 1000000000), e.employee_code`, ...sc.params),
   ]);
   const settings = await loadSettings(db);
   return c.json({
@@ -48,6 +52,7 @@ const KwSchema = z.object(Object.fromEntries(EVENT_TYPES.map((k) => [k, z.array(
 
 settingsRoutes.put('/settings/keywords', async (c) => {
   requireAdminRole(c);
+  requireOwner(c);
   const { keywords } = await body(c, z.object({ keywords: KwSchema }));
   const kw = Object.fromEntries(Object.entries(keywords).map(([k, v]) => [k, [...new Set(v)]])) as unknown as KeywordConfig;
   const err = validateKeywords(kw);
@@ -72,6 +77,7 @@ const ParserSchema = z.object({
 
 settingsRoutes.put('/settings/parser', async (c) => {
   requireAdminRole(c);
+  requireOwner(c);
   const v = await body(c, ParserSchema);
   const parser = { ...v, skipLabels: [...new Set(v.skipLabels.map((l) => l.replace(/[:：]\s*$/, '').trim()).filter(Boolean))] };
   const db = c.env.DB;
@@ -101,6 +107,8 @@ const RulesSchema = z.object({
 settingsRoutes.put('/settings/rules', async (c) => {
   requireAdminRole(c);
   const { currency, ...rules } = await body(c, RulesSchema);
+  // a limited account may only change its own currencies' rules; the base rules are for the owner
+  if (currency) checkCur(c, currency); else requireOwner(c);
   const db = c.env.DB;
   const now = Date.now();
   const actor = c.get('admin').username;
@@ -135,6 +143,7 @@ settingsRoutes.put('/settings/rules', async (c) => {
 
 settingsRoutes.post('/messages/reparse', async (c) => {
   requireAdminRole(c);
+  requireOwner(c);
   const now = Date.now();
   const n = await reparsePending(c.env, c.get('admin').username, now);
   if (n) await auditStmt(c.env.DB, { actor: c.get('admin').username, action: 'MESSAGES_REPARSED', entityType: 'telegram_messages', entityId: 'pending', after: { count: n }, ip: clientIp(c), at: now }).run();
@@ -164,6 +173,7 @@ async function checkCode(db: D1Database, code: string) {
 }
 settingsRoutes.post('/roster-codes', async (c) => {
   requireAdminRole(c);
+  requireOwner(c);
   const v = await body(c, CodeSchema);
   const before = (await loadSettings(c.env.DB)).rosterCodes;
   if (before.some((x) => x.code === v.code)) throw conflict('EXISTS', `${v.code} 已存在`, `${v.code} already exists`);
@@ -173,6 +183,7 @@ settingsRoutes.post('/roster-codes', async (c) => {
 });
 settingsRoutes.put('/roster-codes/:code', async (c) => {
   requireAdminRole(c);
+  requireOwner(c);
   const old = c.req.param('code').toUpperCase();
   const v = await body(c, CodeSchema);
   const db = c.env.DB;
@@ -189,6 +200,7 @@ settingsRoutes.put('/roster-codes/:code', async (c) => {
 });
 settingsRoutes.delete('/roster-codes/:code', async (c) => {
   requireAdminRole(c);
+  requireOwner(c);
   const code = c.req.param('code').toUpperCase();
   const db = c.env.DB;
   const before = (await loadSettings(db)).rosterCodes;
@@ -202,6 +214,7 @@ settingsRoutes.delete('/roster-codes/:code', async (c) => {
 // ---------------------------------------------------------------- currencies
 settingsRoutes.post('/currencies', async (c) => {
   requireAdminRole(c);
+  requireOwner(c);
   const v = await body(c, z.object({ code: z.string().trim().toUpperCase().regex(/^[A-Z0-9]{2,10}$/), name: z.string().trim().max(60).optional().default('') }));
   const db = c.env.DB;
   const now = Date.now();
@@ -216,6 +229,7 @@ settingsRoutes.post('/currencies', async (c) => {
 
 settingsRoutes.delete('/currencies/:code', async (c) => {
   requireAdminRole(c);
+  requireOwner(c);
   const code = c.req.param('code').toUpperCase();
   const db = c.env.DB;
   const now = Date.now();
@@ -284,6 +298,7 @@ function botView(env: Env, b: BotRow & { employees?: number }, url: string) {
 }
 
 settingsRoutes.get('/bots', async (c) => {
+  requireOwner(c);
   const rows = await all<BotRow & { employees: number }>(c.env.DB, `SELECT b.*, (SELECT COUNT(*) FROM employees e WHERE e.currency_code = b.currency_code AND e.employment_status = 'ACTIVE') AS employees
     FROM telegram_bots b ORDER BY b.currency_code`);
   return c.json({ rows: rows.map((b) => botView(c.env, b, defaultUrl(c, b.currency_code))) });
@@ -318,6 +333,7 @@ async function releaseIfUnused(c: Context<AppBindings>, token: string | null, tg
 
 settingsRoutes.put('/bots/:code', async (c) => {
   requireAdminRole(c);
+  requireOwner(c);
   const code = c.req.param('code').toUpperCase();
   const v = await body(c, z.object({ token: z.string().trim().max(200).optional().default(''), webhookUrl: z.string().trim().max(300), force: z.boolean().optional().default(false) }));
   const db = c.env.DB;
@@ -403,6 +419,7 @@ async function botAction(c: Context<AppBindings>, action: 'check' | 'stop' | 'st
       return c.json({ ok: true, pending: info.pending_update_count, url: info.url, canReadAllGroupMessages: !!me.can_read_all_group_messages, lastError: lastErr });
     }
     requireAdminRole(c);
+    requireOwner(c);
     if (action === 'stop') {
       // only this currency stops; the bot stays connected while another currency still runs on it
       await stmt(db, "UPDATE telegram_bots SET status = 'DISABLED', last_error = NULL, last_checked_at = ?, updated_at = ? WHERE id = ?", now, now, bot.id).run();
@@ -467,6 +484,7 @@ const wipeStmt = (db: D1Database, id: number, now: number) => stmt(db, `UPDATE t
  */
 settingsRoutes.post('/bots/:code/clean', async (c) => {
   requireAdminRole(c);
+  requireOwner(c);
   const code = c.req.param('code').toUpperCase();
   const db = c.env.DB;
   const now = Date.now();

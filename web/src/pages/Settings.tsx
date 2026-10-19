@@ -11,17 +11,22 @@ type Tab = 'shift3' | 'cur' | 'kw' | 'rules' | 'codes' | 'bot' | 'admins';
 
 export function SettingsPage() {
   const { L } = useI18n();
+  const { owner } = useData();
   const [s, set] = usePageState('st', () => ({ tab: 'shift3' as Tab }));
+  const all: [Tab, string][] = [['shift3', L('班次设置', 'Shift Setting')], ['cur', L('货币', 'Currency')], ['kw', L('打卡关键词', 'Punch keywords')], ['rules', L('考勤与异常规则', 'Attendance rules')], ['codes', L('排班代号', 'Roster codes')], ['bot', L('Bot 设置', 'Bot Setting')], ['admins', L('管理员账号', 'Admin accounts')]];
+  // accounts other than the owner only set their own currencies' attendance rules
+  const tabs = owner ? all : all.filter(([k]) => k === 'rules');
+  const tab: Tab = tabs.some(([k]) => k === s.tab) ? s.tab : tabs[0][0];
   return (
     <>
-      <Tabs items={[['shift3', L('班次设置', 'Shift Setting')], ['cur', L('货币', 'Currency')], ['kw', L('打卡关键词', 'Punch keywords')], ['rules', L('考勤与异常规则', 'Attendance rules')], ['codes', L('排班代号', 'Roster codes')], ['bot', L('Bot 设置', 'Bot Setting')], ['admins', L('管理员账号', 'Admin accounts')]]} value={s.tab} onChange={(tab) => set({ tab })} />
-      {s.tab === 'shift3' && <Shift3 />}
-      {s.tab === 'cur' && <Currencies />}
-      {s.tab === 'kw' && <Keywords />}
-      {s.tab === 'rules' && <Rules />}
-      {s.tab === 'codes' && <RosterCodes />}
-      {s.tab === 'bot' && <Bots />}
-      {s.tab === 'admins' && <Admins />}
+      <Tabs items={tabs} value={tab} onChange={(t) => set({ tab: t })} />
+      {tab === 'shift3' && <Shift3 />}
+      {tab === 'cur' && <Currencies />}
+      {tab === 'kw' && <Keywords />}
+      {tab === 'rules' && <Rules />}
+      {tab === 'codes' && <RosterCodes />}
+      {tab === 'bot' && <Bots />}
+      {tab === 'admins' && <Admins />}
     </>
   );
 }
@@ -429,7 +434,14 @@ function BotModal({ b, onClose }: { b: BotView; onClose: () => void }) {
 }
 
 // ---------------------------------------------------------------- Admin accounts (D1 table admin_users)
-interface AdminRow { id: number; username: string; role: 'admin' | 'viewer'; is_active: number; last_login_at: number | null; locked_until: number | null; created_at: number }
+interface AdminRow { id: number; username: string; role: 'admin' | 'viewer'; is_active: number; is_owner: number; currencies: string[] | null; last_login_at: number | null; locked_until: number | null; created_at: number }
+
+function Access({ a }: { a: AdminRow }) {
+  const { L } = useI18n();
+  if (a.is_owner || a.currencies === null) return <span className="b ok">{L('全部货币', 'All currencies')}</span>;
+  if (!a.currencies.length) return <Mut />;
+  return <>{a.currencies.map((c) => <span key={c} className="b cur" style={{ margin: '0 2px' }}>{c}</span>)}</>;
+}
 
 function Admins() {
   const { L } = useI18n();
@@ -441,12 +453,13 @@ function Admins() {
       <ErrBox error={error} />
       {data && (
         <div className="tw"><table className="tpltbl"><thead><tr>
-          <th>{L('账号', 'Username')}</th><th>{L('权限', 'Role')}</th><th>{L('状态', 'Status')}</th><th>{L('最后登录', 'Last sign-in')}</th><th>{L('建立日期', 'Created')}</th><th className="c">{L('操作', 'Action')}</th>
+          <th>{L('账号', 'Username')}</th><th>{L('权限', 'Role')}</th><th>{L('可查看货币', 'Access')}</th><th>{L('状态', 'Status')}</th><th>{L('最后登录', 'Last sign-in')}</th><th>{L('建立日期', 'Created')}</th><th className="c">{L('操作', 'Action')}</th>
         </tr></thead><tbody>
           {data.rows.map((a) => (
             <tr key={a.id}>
               <td><b>{a.username}</b>{a.id === data.me && <> <span className="b i">{L('你', 'you')}</span></>}</td>
-              <td>{a.role === 'admin' ? <span className="b v">{L('管理员', 'Admin')}</span> : <span className="b">{L('只读', 'Read-only')}</span>}</td>
+              <td>{a.is_owner ? <span className="b own">Owner</span> : a.role === 'admin' ? <span className="b v">{L('管理员', 'Admin')}</span> : <span className="b">{L('只读', 'Read-only')}</span>}</td>
+              <td><Access a={a} /></td>
               <td>{!a.is_active ? <span className="b">{L('已停用', 'Disabled')}</span> : a.locked_until && a.locked_until > Date.now() ? <span className="b r">{L('暂时锁定', 'Locked')}</span> : <span className="b ok">{L('启用', 'Active')}</span>}</td>
               <td>{a.last_login_at ? fmtDT(a.last_login_at) : <Mut />}</td><td>{fmtDT(a.created_at).slice(0, 10)}</td>
               <td>{!readOnly && <button className="btn sm" onClick={() => setEdit(a)}>{L('编辑', 'Edit')}</button>}</td>
@@ -462,21 +475,29 @@ function Admins() {
 
 function AdminModal({ a, isMe, onClose }: { a: AdminRow | null; isMe: boolean; onClose: () => void }) {
   const { L } = useI18n();
+  const { meta } = useData();
+  const isOwner = !!a?.is_owner;
   const [username, setUsername] = useState(a?.username ?? '');
   const [role, setRole] = useState<'admin' | 'viewer'>(a?.role ?? 'admin');
   const [active, setActive] = useState(a ? !!a.is_active : true);
+  // a new account starts limited: the owner ticks the currencies it may see, or opens access to all currencies
+  const [allCur, setAllCur] = useState(a ? a.currencies === null : false);
+  const [curs, setCurs] = useState<string[]>(a?.currencies ?? []);
   const [pw, setPw] = useState('');
   const [pw2, setPw2] = useState('');
   const [err, setErr] = useState<ApiErr | Error | null>(null);
   const [busy, setBusy] = useState(false);
+  const toggle = (c: string) => setCurs((x) => (x.includes(c) ? x.filter((y) => y !== c) : [...x, c]));
   const save = async () => {
     if (!a && !/^[A-Za-z0-9_.@-]{3,64}$/.test(username.trim())) return setErr(new Error(L('账号需为 3–64 个英文字母、数字或 _ . @ -', 'Username: 3–64 letters, digits or _ . @ -')));
     if ((!a || pw) && pw.length < 10) return setErr(new Error(L('密码至少 10 个字符', 'Password needs at least 10 characters')));
     if (pw !== pw2) return setErr(new Error(L('两次输入的密码不同', 'The passwords do not match')));
+    if (!isOwner && !allCur && !curs.length) return setErr(new Error(L('请至少勾选一个货币', 'Tick at least one currency')));
+    const currencies = isOwner || allCur ? null : curs;
     setBusy(true);
     try {
-      if (a) await api(`/admins/${a.id}`, { method: 'PUT', body: { role, isActive: active, password: pw } });
-      else await api('/admins', { method: 'POST', body: { username: username.trim(), password: pw, role } });
+      if (a) await api(`/admins/${a.id}`, { method: 'PUT', body: { role: isOwner ? 'admin' : role, isActive: isOwner ? true : active, password: pw, currencies } });
+      else await api('/admins', { method: 'POST', body: { username: username.trim(), password: pw, role, currencies } });
       toast(L('账号已保存，并写入 Audit Log', 'Account saved and written to the audit log'));
       onClose();
     } catch (e) { setErr(e as ApiErr); } finally { setBusy(false); }
@@ -486,8 +507,21 @@ function AdminModal({ a, isMe, onClose }: { a: AdminRow | null; isMe: boolean; o
       <h3 style={{ marginTop: 0 }}>{a ? L('编辑账号 ', 'Edit account ') + a.username : L('新增账号', 'Add account')}</h3>
       <div className="fg">
         <div><label>{L('账号', 'Username')}</label><input type="text" value={username} disabled={!!a} autoComplete="off" onChange={(e) => setUsername(e.target.value)} /></div>
-        <div><label>{L('权限', 'Role')}</label><select value={role} disabled={isMe} onChange={(e) => setRole(e.target.value as 'admin' | 'viewer')}><option value="admin">{L('管理员（可修改）', 'Admin (can edit)')}</option><option value="viewer">{L('只读（只能查看）', 'Read-only (view only)')}</option></select></div>
-        {a && <div><label>{L('状态', 'Status')}</label><select value={active ? '1' : '0'} disabled={isMe} onChange={(e) => setActive(e.target.value === '1')}><option value="1">{L('启用', 'Active')}</option><option value="0">{L('停用', 'Disabled')}</option></select></div>}
+        <div><label>{L('权限', 'Role')}</label>{isOwner
+          ? <select disabled value="owner"><option value="owner">Owner</option></select>
+          : <select value={role} disabled={isMe} onChange={(e) => setRole(e.target.value as 'admin' | 'viewer')}><option value="admin">{L('管理员（可修改）', 'Admin (can edit)')}</option><option value="viewer">{L('只读（只能查看）', 'Read-only (view only)')}</option></select>}</div>
+        {a && <div><label>{L('状态', 'Status')}</label><select value={active ? '1' : '0'} disabled={isMe || isOwner} onChange={(e) => setActive(e.target.value === '1')}><option value="1">{L('启用', 'Active')}</option><option value="0">{L('停用', 'Disabled')}</option></select></div>}
+        <div className="full"><label>{L('可查看货币', 'Access')}</label>
+          {isOwner ? <div className="accbox"><span className="b ok">{L('全部货币', 'All currencies')}</span> <span className="mut" style={{ fontSize: 12 }}>{L('Owner 固定看得到全部资料', 'The owner always sees everything')}</span></div> : (
+            <div className="accbox">
+              <label className="ck"><input type="checkbox" checked={allCur} onChange={(e) => setAllCur(e.target.checked)} /> {L('全部货币', 'All currencies')}</label>
+              <span className="accsep" />
+              {meta.currencies.map((c) => (
+                <label key={c.code} className={`ck ${allCur ? 'dis' : ''}`}><input type="checkbox" disabled={allCur} checked={allCur || curs.includes(c.code)} onChange={() => toggle(c.code)} /> {c.code}</label>
+              ))}
+            </div>
+          )}
+        </div>
         <div><label>{a ? L('新密码（留空 = 不更改）', 'New password (empty = unchanged)') : L('密码（至少 10 个字符）', 'Password (min. 10 characters)')}</label><input type="password" autoComplete="new-password" value={pw} onChange={(e) => setPw(e.target.value)} /></div>
         <div><label>{L('再次输入密码', 'Repeat password')}</label><input type="password" autoComplete="new-password" value={pw2} onChange={(e) => setPw2(e.target.value)} /></div>
       </div>

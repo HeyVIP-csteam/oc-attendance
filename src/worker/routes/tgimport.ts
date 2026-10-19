@@ -13,6 +13,7 @@ import { all, chunk, stmt } from '../lib/db';
 import { bad, body, clientIp, requireAdminRole } from '../lib/http';
 import { type Key, reassignEvents, recomputeOrDefer } from '../lib/sessions';
 import { bizTz, loadSettings } from '../lib/settings';
+import { inScope, scopeOf } from '../lib/scope';
 
 export const tgImportRoutes = new Hono<AppBindings>();
 
@@ -46,8 +47,8 @@ tgImportRoutes.post('/telegram-import', async (c) => {
   const settings = await loadSettings(db);
   const idx = buildKeywordIndex(settings.keywords, settings.parser);
   const [maps, have] = await Promise.all([
-    all<{ employee_id: number; message_thread_id: number; valid_from: number; valid_until: number | null; employee_code: string; name: string; employment_status: string; deactivated_at: number | null }>(db,
-      `SELECT m.employee_id, m.message_thread_id, m.valid_from, m.valid_until, e.employee_code, e.name, e.employment_status, e.deactivated_at
+    all<{ employee_id: number; message_thread_id: number; valid_from: number; valid_until: number | null; employee_code: string; name: string; employment_status: string; deactivated_at: number | null; currency_code: string | null }>(db,
+      `SELECT m.employee_id, m.message_thread_id, m.valid_from, m.valid_until, e.employee_code, e.name, e.employment_status, e.deactivated_at, e.currency_code
        FROM telegram_topic_mappings m JOIN employees e ON e.id = m.employee_id WHERE m.chat_id = ? ORDER BY m.valid_from`, v.chatId),
     all<{ message_id: number }>(db, 'SELECT message_id FROM telegram_messages WHERE chat_id = ? AND is_edit = 0', v.chatId),
   ]);
@@ -73,6 +74,9 @@ tgImportRoutes.post('/telegram-import', async (c) => {
     return list.find((m) => m.valid_from <= ts && (m.valid_until == null || m.valid_until > ts)) ?? list.find((m) => m.valid_from > ts) ?? null;
   };
 
+  // a limited account only sees and imports the topics of its currencies' employees; other messages are left out
+  const limited = scopeOf(c) !== null;
+  let hiddenNoTopic = 0;
   const rows: Row[] = [];
   let notPunch = 0;
   for (const m of v.messages) {
@@ -80,8 +84,9 @@ tgImportRoutes.post('/telegram-import', async (c) => {
     if (p.kind === 'NONE') { notPunch++; continue; }
     const thread = topicOf(m);
     const base = { id: m.id, ts: m.ts, text: m.text.slice(0, 200), thread, employeeId: null, code: null, name: null, type: p.kind === 'PUNCH' ? p.type : null };
-    if (thread == null) { rows.push({ ...base, result: 'NOTOPIC' }); continue; }
+    if (thread == null) { if (limited) hiddenNoTopic++; else rows.push({ ...base, result: 'NOTOPIC' }); continue; }
     const o = ownerAt(thread, m.ts)!;
+    if (!inScope(c, o.currency_code)) continue;
     const who = { employeeId: o.employee_id, code: o.employee_code, name: o.name };
     if (known.has(m.id)) { rows.push({ ...base, ...who, result: 'DUP' }); continue; }
     if (m.fwd) { rows.push({ ...base, ...who, result: 'UNTRUSTED' }); continue; }
@@ -92,7 +97,7 @@ tgImportRoutes.post('/telegram-import', async (c) => {
   const add = rows.filter((x) => x.result === 'NEW');
   const ts = v.messages.map((m) => m.ts);
   const plan = {
-    messages: v.messages.length, toAdd: add.length, already: count('DUP'), unclear: count('UNREC') + count('UNTRUSTED'), noTopic: count('NOTOPIC'), inactive: count('INACTIVE'), notPunch,
+    messages: v.messages.length, toAdd: add.length, already: count('DUP'), unclear: count('UNREC') + count('UNTRUSTED'), noTopic: count('NOTOPIC') + hiddenNoTopic, inactive: count('INACTIVE'), notPunch,
     from: ts.length ? localDate(Math.min(...ts), tz) : null, to: ts.length ? localDate(Math.max(...ts), tz) : null,
     rows: rows.slice(0, 3000).map((x) => ({ ...x, time: fmtDateTime(x.ts, tz), workDate: localDate(x.ts, tz) })),
   };

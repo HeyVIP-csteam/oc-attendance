@@ -2,6 +2,7 @@ import { type Context, Hono } from 'hono';
 import { z } from 'zod';
 import { addDays, localDate } from '../../shared/time';
 import type { AppBindings } from '../env';
+import { assertEmployee, checkCur, inScope, scopeOf, scopeSql } from '../lib/scope';
 import { auditStmt } from '../lib/audit';
 import { all, chunk, first, stmt } from '../lib/db';
 import { ApiError, bad, body, clientIp, conflict, intParam, notFound, query, requireAdminRole } from '../lib/http';
@@ -23,6 +24,7 @@ employeeRoutes.get('/employees', async (c) => {
   const p: unknown[] = [];
   if (f.status) { cond.push('e.employment_status = ?'); p.push(f.status); }
   if (f.cur) { cond.push('e.currency_code = ?'); p.push(f.cur); }
+  { checkCur(c, f.cur); const sc = scopeSql(c); if (sc.sql) { cond.push(sc.sql.slice(5)); p.push(...sc.params); } }
   if (f.q) { cond.push("(e.employee_code LIKE ? ESCAPE '\\' OR e.name LIKE ? ESCAPE '\\' OR CAST(m.message_thread_id AS TEXT) LIKE ? ESCAPE '\\')"); p.push(likeEsc(f.q), likeEsc(f.q), likeEsc(f.q)); }
   const FROM = 'FROM employees e LEFT JOIN telegram_topic_mappings m ON m.employee_id = e.id AND m.is_active = 1';
   const db = c.env.DB;
@@ -37,6 +39,7 @@ employeeRoutes.get('/employees', async (c) => {
 
 employeeRoutes.get('/employees/:id', async (c) => {
   const id = intParam(c, 'id');
+  await assertEmployee(c, id);
   const db = c.env.DB;
   const [e, maps] = await db.batch([
     stmt(db, 'SELECT * FROM employees WHERE id = ?', id),
@@ -64,6 +67,9 @@ async function saveEmployee(c: Context<AppBindings>, id: number | null) {
   requireAdminRole(c);
   const v = await body(c, EmpSchema);
   const db = c.env.DB;
+  // a currency-limited account only adds / edits employees of its currencies (and cannot move one to another currency)
+  if (id) await assertEmployee(c, id);
+  if (scopeOf(c) !== null && !inScope(c, v.currency ?? null)) throw new ApiError(403, 'FORBIDDEN_CURRENCY', { zh: '你的账号没有权限使用这个货币', en: 'Your account has no access to this currency' });
   const actor = c.get('admin').username;
   const ip = clientIp(c);
   const now = Date.now();
@@ -157,6 +163,7 @@ employeeRoutes.put('/employees/:id', (c) => saveEmployee(c, intParam(c, 'id')));
 employeeRoutes.post('/employees/:id/deactivate', async (c) => {
   requireAdminRole(c);
   const id = intParam(c, 'id');
+  await assertEmployee(c, id);
   const { reason } = await body(c, z.object({ reason: z.string().trim().min(2).max(300) }));
   const db = c.env.DB;
   const now = Date.now();
@@ -183,6 +190,7 @@ employeeRoutes.post('/employees/:id/deactivate', async (c) => {
 employeeRoutes.post('/employees/:id/activate', async (c) => {
   requireAdminRole(c);
   const id = intParam(c, 'id');
+  await assertEmployee(c, id);
   const db = c.env.DB;
   const now = Date.now();
   const actor = c.get('admin').username;
@@ -211,6 +219,7 @@ employeeRoutes.post('/employees/:id/activate', async (c) => {
 employeeRoutes.post('/employees/:id/delete', async (c) => {
   requireAdminRole(c);
   const id = intParam(c, 'id');
+  await assertEmployee(c, id);
   const { confirm } = await body(c, z.object({ confirm: z.string().trim().max(32) }));
   const db = c.env.DB;
   const now = Date.now();
@@ -259,6 +268,7 @@ employeeRoutes.get('/export/employees', async (c) => {
   const p: unknown[] = [];
   if (f.status) { cond.push('e.employment_status = ?'); p.push(f.status); }
   if (f.cur) { cond.push('e.currency_code = ?'); p.push(f.cur); }
+  { checkCur(c, f.cur); const sc = scopeSql(c); if (sc.sql) { cond.push(sc.sql.slice(5)); p.push(...sc.params); } }
   if (f.q) { cond.push("(e.employee_code LIKE ? ESCAPE '\\' OR e.name LIKE ? ESCAPE '\\')"); p.push(likeEsc(f.q), likeEsc(f.q)); }
   const rows = await all(c.env.DB, `SELECT e.employee_code, e.name, e.currency_code, e.employment_status, m.chat_id, m.message_thread_id
     FROM employees e LEFT JOIN telegram_topic_mappings m ON m.employee_id = e.id AND m.is_active = 1
@@ -329,6 +339,7 @@ employeeRoutes.post('/employees/import', async (c) => {
       if (!/^-100\d{5,17}$/.test(chatRaw)) { e('Chat ID 格式错误（超级群组是 -100 开头）', 'Invalid Chat ID (supergroup ids start with -100)'); continue; }
       chatId = Number(chatRaw); threadId = Number(threadRaw);
     }
+    if ((old && !inScope(c, old.currency_code)) || !inScope(c, currency)) { e('你的账号没有权限处理这个货币的员工', 'Your account has no access to this currency'); continue; }
     if (old && old.employment_status !== 'ACTIVE') { e('员工已停用，请先在页面上重新启用', 'Employee is deactivated; reactivate them first'); continue; }
     rows.push({ row: r + 1, code: old?.employee_code ?? code, name, currency, chatId, threadId, topicGiven });
   }
@@ -343,7 +354,7 @@ employeeRoutes.post('/employees/import', async (c) => {
       const k = `${x.chatId}|${x.threadId}`;
       const holder = finalTopic.get(k);
       if (holder && holder.toLowerCase() !== x.code.toLowerCase()) {
-        errs.push({ where: `Row ${x.row} · ${x.code}`, msg: { zh: `Topic #${x.threadId} 已属于 ${holder}`, en: `Topic #${x.threadId} already belongs to ${holder}` } });
+        errs.push({ where: `Row ${x.row} · ${x.code}`, msg: scopeOf(c) === null ? { zh: `Topic #${x.threadId} 已属于 ${holder}`, en: `Topic #${x.threadId} already belongs to ${holder}` } : { zh: `Topic #${x.threadId} 已属于其他员工`, en: `Topic #${x.threadId} already belongs to another employee` } });
         continue;
       }
       finalTopic.set(k, x.code);

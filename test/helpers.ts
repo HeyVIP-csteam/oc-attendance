@@ -68,8 +68,11 @@ export class Harness {
     return { status: res.status, json };
   }
 
-  async createAdmin(username = 'owner', password = 'correct-horse-battery', role: 'admin' | 'viewer' = 'admin') {
-    this.db.x('INSERT INTO admin_users (username, password_hash, role, created_at, updated_at) VALUES (?,?,?,?,?)', username, await hashPassword(password), role, Date.now(), Date.now());
+  /** The first admin created is the owner (as migration 0012 makes the earliest admin the owner). */
+  async createAdmin(username = 'owner', password = 'correct-horse-battery', role: 'admin' | 'viewer' = 'admin', currencies: string[] | null = null) {
+    const hasOwner = !!this.db.get('SELECT 1 AS x FROM admin_users WHERE is_owner = 1');
+    this.db.x('INSERT INTO admin_users (username, password_hash, role, created_at, updated_at, is_owner, currencies) VALUES (?,?,?,?,?,?,?)',
+      username, await hashPassword(password), role, Date.now(), Date.now(), hasOwner || role !== 'admin' ? 0 : 1, currencies ? JSON.stringify(currencies) : null);
   }
 
   async login(username = 'owner', password = 'correct-horse-battery') {

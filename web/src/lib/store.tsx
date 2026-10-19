@@ -7,7 +7,8 @@ export interface MetaRules { windowHours: number; windowUnit?: 'h' | 'm'; breakM
 /** The attendance rules of one currency. */
 export const rulesOf = (m: Pick<Meta, 'rules' | 'rulesCur'>, cur: string | null | undefined): MetaRules => (cur && m.rulesCur?.[cur]) || m.rules;
 export interface Meta {
-  user: { id: number; username: string; role: 'admin' | 'viewer' };
+  /** currencies: null = all currencies; owner: settings, accounts and bots. */
+  user: { id: number; username: string; role: 'admin' | 'viewer'; currencies: string[] | null; owner: boolean };
   tz: string; today: string;
   currencies: { code: string; name: string; employees: number; active_employees: number }[];
   shifts: MetaShift[];
@@ -20,7 +21,7 @@ export interface Meta {
   dataVersion: number;
 }
 
-interface DataCtxT { meta: Meta; reloadMeta: () => Promise<void>; tick: number; refresh: () => void; readOnly: boolean }
+interface DataCtxT { meta: Meta; reloadMeta: () => Promise<void>; tick: number; refresh: () => void; readOnly: boolean; owner: boolean }
 export const DataCtx = createContext<DataCtxT>(null as unknown as DataCtxT);
 export const useData = () => useContext(DataCtx);
 

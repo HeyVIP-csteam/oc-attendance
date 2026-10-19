@@ -5,6 +5,7 @@ import type { AppBindings } from '../env';
 import { auditStmt } from '../lib/audit';
 import { all, chunk, first, stmt } from '../lib/db';
 import { bad, body, clientIp, conflict, intParam, notFound, query, requireAdminRole } from '../lib/http';
+import { assertEmployee, checkCur, inScope, requireOwner, scopeOf, scopeSql } from '../lib/scope';
 import { afterInstancesChanged, cancelInstanceStmt, loadTemplates, type ShiftTemplate, upsertInstanceStmt } from '../lib/roster';
 import type { Key } from '../lib/sessions';
 import { bizTz, loadSettings, rulesFor } from '../lib/settings';
@@ -78,8 +79,8 @@ async function saveTemplate(c: Context<AppBindings>, id: number | null, v: z.inf
   return { count: r.count };
 }
 
-shiftRoutes.post('/shifts', async (c) => { requireAdminRole(c); return c.json(await saveTemplate(c, null, await body(c, ShiftSchema))); });
-shiftRoutes.put('/shifts/:id', async (c) => { requireAdminRole(c); return c.json(await saveTemplate(c, intParam(c, 'id'), await body(c, ShiftSchema))); });
+shiftRoutes.post('/shifts', async (c) => { requireAdminRole(c); requireOwner(c); return c.json(await saveTemplate(c, null, await body(c, ShiftSchema))); });
+shiftRoutes.put('/shifts/:id', async (c) => { requireAdminRole(c); requireOwner(c); return c.json(await saveTemplate(c, intParam(c, 'id'), await body(c, ShiftSchema))); });
 
 const BulkSchema = z.object({
   items: z.array(z.object({ id: z.number().int(), name: z.string().trim().min(1).max(40), start: z.string().refine(isHHMM), end: z.string().refine(isHHMM) })).min(1).max(10),
@@ -87,6 +88,7 @@ const BulkSchema = z.object({
 });
 shiftRoutes.put('/shifts-bulk', async (c) => {
   requireAdminRole(c);
+  requireOwner(c);
   const v = await body(c, BulkSchema);
   const tpls = new Map((await loadTemplates(c.env.DB)).map((t) => [t.id, t]));
   let count = 0;
@@ -117,13 +119,15 @@ shiftRoutes.get('/roster', async (c) => {
   const f = query(c, RosterQ);
   const [from, to] = rosterRange(f.from, f.to);
   const db = c.env.DB;
+  checkCur(c, f.cur);
+  const sc = scopeSql(c, 'currency_code');
   // deactivated employees are not shown in the roster (their attendance history stays in Attendance / Reports)
-  const cond = `WHERE employment_status = 'ACTIVE'${f.cur ? ' AND currency_code = ?' : ''}`;
-  const p = f.cur ? [f.cur] : [];
+  const cond = `WHERE employment_status = 'ACTIVE'${f.cur ? ' AND currency_code = ?' : ''}${sc.sql}`;
+  const p = [...(f.cur ? [f.cur] : []), ...sc.params];
   const [cnt, emps, per] = await db.batch([
     stmt(db, `SELECT COUNT(*) AS n FROM employees ${cond}`, ...p),
     stmt(db, `SELECT id, employee_code, name, currency_code, employment_status FROM employees ${cond} ORDER BY COALESCE(sort_order, 1000000000), employee_code LIMIT ? OFFSET ?`, ...p, f.size, (f.page - 1) * f.size),
-    stmt(db, "SELECT currency_code AS code, COUNT(*) AS n FROM employees WHERE employment_status = 'ACTIVE' GROUP BY currency_code"),
+    stmt(db, `SELECT currency_code AS code, COUNT(*) AS n FROM employees WHERE employment_status = 'ACTIVE'${sc.sql} GROUP BY currency_code`, ...sc.params),
   ]);
   const counts = Object.fromEntries((per.results as { code: string | null; n: number }[]).map((r) => [r.code ?? '', r.n]));
   const ids = (emps.results as { id: number }[]).map((e) => e.id);
@@ -153,8 +157,10 @@ shiftRoutes.get('/roster/export', async (c) => {
   const f = query(c, RosterQ.omit({ page: true, size: true }));
   const [from, to] = rosterRange(f.from, f.to);
   const db = c.env.DB;
-  const cond = f.cur ? 'AND e.currency_code = ?' : '';
-  const p = f.cur ? [f.cur] : [];
+  checkCur(c, f.cur);
+  const sc = scopeSql(c);
+  const cond = (f.cur ? 'AND e.currency_code = ?' : '') + sc.sql;
+  const p = [...(f.cur ? [f.cur] : []), ...sc.params];
   const [emps, inst, marks] = await db.batch([
     stmt(db, `SELECT id, employee_code, name, currency_code FROM employees e WHERE e.employment_status = 'ACTIVE' ${cond} ORDER BY COALESCE(e.sort_order, 1000000000), e.employee_code`, ...p),
     stmt(db, `SELECT i.employee_id, i.shift_date, i.shift_code FROM shift_instances i JOIN employees e ON e.id = i.employee_id
@@ -167,6 +173,7 @@ shiftRoutes.get('/roster/export', async (c) => {
 
 shiftRoutes.get('/roster/history', async (c) => {
   const f = query(c, z.object({ employeeId: z.coerce.number().int(), date: z.string().refine(isDate) }));
+  await assertEmployee(c, f.employeeId);
   const e = await first<{ employee_code: string }>(c.env.DB, 'SELECT employee_code FROM employees WHERE id = ?', f.employeeId);
   if (!e) throw notFound();
   const rows = await all(c.env.DB, "SELECT created_at, actor, note, before_json, after_json FROM audit_logs WHERE entity_type = 'shift_instance' AND entity_id = ? ORDER BY id DESC LIMIT 20", `${e.employee_code}@${f.date}`);
@@ -194,6 +201,7 @@ shiftRoutes.put('/roster/cell', async (c) => {
   requireAdminRole(c);
   // value: a shift template id, a roster code ('OFF', 'VL' …) or '' (not scheduled)
   const v = await body(c, z.object({ employeeId: z.number().int(), date: z.string().refine(isDate), value: z.union([z.string().trim().toUpperCase().max(6), z.number().int()]), reason: z.string().trim().min(4).max(300) }));
+  await assertEmployee(c, v.employeeId);
   const db = c.env.DB;
   const now = Date.now();
   const tz = bizTz(c.env);
@@ -243,6 +251,10 @@ const ImportSchema = z.object({
 shiftRoutes.post('/roster/import', async (c) => {
   requireAdminRole(c);
   const v = await body(c, ImportSchema);
+  checkCur(c, v.currency);
+  // an account limited to one currency always imports into that currency
+  const scope = scopeOf(c);
+  if (!v.currency && scope?.length === 1) v.currency = scope[0];
   const db = c.env.DB;
   const now = Date.now();
   const tz = bizTz(c.env);
@@ -279,6 +291,11 @@ shiftRoutes.post('/roster/import', async (c) => {
     if (v.currency && e.currency_code !== v.currency) {
       skipped++;
       errs.push({ where: `Row ${r + 1} · ${e.employee_code}`, msg: { zh: `属于 ${e.currency_code ?? '—'}，不是 ${v.currency}，已跳过`, en: `belongs to ${e.currency_code ?? '—'}, not ${v.currency} — skipped` } });
+      continue;
+    }
+    if (!inScope(c, e.currency_code)) {
+      skipped++;
+      errs.push({ where: `Row ${r + 1} · ${e.employee_code}`, msg: { zh: '你的账号没有权限修改这个员工，已跳过', en: 'Your account has no access to this employee — skipped' } });
       continue;
     }
     if (!fileOrder.includes(e.id)) fileOrder.push(e.id);
@@ -341,6 +358,14 @@ shiftRoutes.get('/roster/history-log', async (c) => {
   const [d1, d2] = f.from && f.to && f.from > f.to ? [f.to, f.from] : [f.from, f.to];
   if (d1) { cond.push('a.created_at >= ?'); p.push(zonedToUtc(d1, '00:00', tz)); }
   if (d2) { cond.push('a.created_at < ?'); p.push(zonedToUtc(addDays(d2, 1), '00:00', tz)); }
+  checkCur(c, f.cur);
+  const scope = scopeOf(c);
+  if (scope !== null) {
+    // a limited account: changes of its currencies' employees, imports made for its currencies, and its own imports
+    const q = scope.map(() => '?').join(',') || 'NULL';
+    cond.push(`((a.action = 'ROSTER_IMPORTED' AND (a.actor = ? OR (json_valid(a.after_json) AND json_extract(a.after_json, '$.currency') IN (${q})))) OR (a.action <> 'ROSTER_IMPORTED' AND e.currency_code IN (${q})))`);
+    p.push(c.get('admin').username, ...scope, ...scope);
+  }
   if (f.cur) {
     // a shift change of that currency's employee, or an import made for that currency (or for all currencies)
     cond.push(`((a.action = 'ROSTER_IMPORTED' AND (COALESCE(a.after_json, '') LIKE ? OR COALESCE(a.after_json, '') NOT LIKE '%"currency":%')) OR (a.action <> 'ROSTER_IMPORTED' AND e.currency_code = ?))`);

@@ -389,3 +389,12 @@ table.grid td{white-space:normal}
 @media (max-width:780px){.impsteps{grid-template-columns:1fr}.impkv{grid-template-columns:repeat(2,minmax(0,1fr))}}
 
 .b.mk{font-weight:700}
+/* admin accounts: currency access */
+.fg .full{grid-column:1 / -1}
+.accbox{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;border:1px solid var(--line);border-radius:8px;padding:9px 12px;background:#fafbfd}
+.fg .accbox label.ck{display:inline-flex;align-items:center;gap:6px;margin:0;font-size:13px;color:var(--ink);cursor:pointer}
+.fg .accbox label.ck input{width:auto;margin:0}
+.fg .accbox label.ck.dis{color:var(--mut);cursor:default}
+.accsep{width:1px;height:18px;background:var(--line)}
+.b.own{background:#0f172a;color:#fff}
+.b.cur{background:var(--pri2);color:var(--pri)}

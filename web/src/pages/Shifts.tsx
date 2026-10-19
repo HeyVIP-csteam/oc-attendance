@@ -224,7 +224,7 @@ function ImportModal({ grid, file, plan, currency, onClose }: { grid: (string | 
 
 function Templates() {
   const { L } = useI18n();
-  const { meta, readOnly } = useData();
+  const { meta, readOnly, owner } = useData();
   const [edit, setEdit] = useState<MetaShift | 'new' | null>(null);
   const date = (ms: number) => fmtDT(ms).slice(0, 10);
   return (
@@ -238,7 +238,7 @@ function Templates() {
             <td><span className={`chip cell ${s.code}`}>{s.code}</span></td><td>{s.name}</td><td>{s.start_time}–{s.end_time}</td><td className="n">{s.late_grace_min}m</td><td className="n">{s.early_grace_min}m</td>
             <td>{date(s.created_at)}</td>
             <td>{s.is_active ? <span className="b ok">Active</span> : <span className="b">Off</span>}</td>
-            <td>{!readOnly && <button className="btn sm" onClick={() => setEdit(s)}>{L('编辑', 'Edit')}</button>}</td>
+            <td>{!readOnly && owner && <button className="btn sm" onClick={() => setEdit(s)}>{L('编辑', 'Edit')}</button>}</td>
           </tr>
         ))}
       </tbody></table></div>

@@ -103,7 +103,7 @@ export function App() {
       {auth === 'loading' && <div className="loadbar" />}
       {auth === 'out' && <Login onDone={() => reloadMeta().then(() => setAuth('in'))} />}
       {auth === 'in' && meta && (
-        <DataCtx.Provider value={{ meta, reloadMeta, tick, refresh, readOnly: meta.user.role !== 'admin' }}>
+        <DataCtx.Provider value={{ meta, reloadMeta, tick, refresh, readOnly: meta.user.role !== 'admin', owner: !!meta.user.owner }}>
           <Layout page={page} onNav={nav} paused={paused} onResume={() => { lastActive.current = Date.now(); setPaused(false); refresh(); }} onLogout={logout}>
             {content()}
           </Layout>

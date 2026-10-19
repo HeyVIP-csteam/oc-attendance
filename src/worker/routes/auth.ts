@@ -57,7 +57,7 @@ authRoutes.post('/logout', requireSession, async (c) => {
 
 authRoutes.get('/me', requireSession, (c) => {
   const a = c.get('admin');
-  return c.json({ id: a.id, username: a.username, role: a.role });
+  return c.json({ id: a.id, username: a.username, role: a.role, currencies: a.currencies, owner: a.owner });
 });
 
 const PwSchema = z.object({ current: z.string().min(1).max(200), next: z.string().min(10).max(200) });

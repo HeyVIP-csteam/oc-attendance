@@ -113,7 +113,7 @@ export function Layout({ page, onNav, paused, onResume, onLogout, children }: { 
               </button>
               {menu && (
                 <div className="menu" role="menu">
-                  <div className="who">{meta.user.username} · {meta.user.role === 'admin' ? L('管理员', 'Admin') : L('只读', 'Read-only')}</div>
+                  <div className="who">{meta.user.username} · {meta.user.owner ? 'Owner' : meta.user.role === 'admin' ? L('管理员', 'Admin') : L('只读', 'Read-only')}{meta.user.currencies && <> · {meta.user.currencies.join(', ') || L('无货币', 'no currency')}</>}</div>
                   <button role="menuitem" onClick={() => { setMenu(false); setPw(true); }}>{L('更改密码', 'Change password')}</button>
                   <button role="menuitem" onClick={() => { setMenu(false); onLogout(); }}>{L('登出', 'Sign out')}</button>
                 </div>

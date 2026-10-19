@@ -17,6 +17,10 @@ export interface AdminPrincipal {
   id: number;
   username: string;
   role: 'admin' | 'viewer';
+  /** null = every currency; otherwise only these currencies' employees and data are visible */
+  currencies: string[] | null;
+  /** the owner: every setting and admin account */
+  owner: boolean;
   sessionId: string;
 }
 

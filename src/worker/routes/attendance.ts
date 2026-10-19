@@ -4,6 +4,7 @@ import { EVENT_TYPES } from '../../shared/codes';
 import { buildKeywordIndex, punchRemark } from '../../shared/parser';
 import { addDays, dayDiff, fmtDateTime, isDate, localDate, MIN, zonedToUtc } from '../../shared/time';
 import type { AppBindings } from '../env';
+import { assertEmployee, checkCur, type Ctx, scopeSql } from '../lib/scope';
 import { auditStmt } from '../lib/audit';
 import { all, first, stmt } from '../lib/db';
 import { bad, body, clientIp, intParam, notFound, query, requireAdminRole } from '../lib/http';
@@ -58,14 +59,23 @@ export function sessionWhere(f: { from: string; to: string; cur?: string; shift?
 }
 
 const todayOf = (c: { env: { BIZ_TZ?: string } }) => localDate(Date.now(), c.env.BIZ_TZ || 'Asia/Colombo');
+/** sessionWhere + the account's currency access. */
+function sw(c: Ctx, f: Parameters<typeof sessionWhere>[0]) {
+  checkCur(c, f.cur);
+  const w = sessionWhere(f, todayOf(c));
+  const s = scopeSql(c);
+  return { sql: w.sql + s.sql, params: [...w.params, ...s.params] };
+}
 
 // ---------------------------------------------------------------- Overview
 attendanceRoutes.get('/overview', async (c) => {
   const f = query(c, z.object({ date: dateStr, cur: z.string().max(10).optional().default(''), shift: z.string().max(10).optional().default('') }));
   const db = c.env.DB;
   const now = Date.now();
-  const empCond = f.cur ? ' AND e.currency_code = ?' : '';
-  const empP = f.cur ? [f.cur] : [];
+  checkCur(c, f.cur);
+  const sc = scopeSql(c);
+  const empCond = (f.cur ? ' AND e.currency_code = ?' : '') + sc.sql;
+  const empP = [...(f.cur ? [f.cur] : []), ...sc.params];
   const shiftCond = f.shift && f.shift !== 'none' ? ' AND i.shift_id = ?' : f.shift === 'none' ? ' AND 0' : '';
   const shiftP = f.shift && f.shift !== 'none' ? [Number(f.shift)] : [];
   const sShift = f.shift === 'none' ? ' AND s.shift_instance_id IS NULL' : f.shift ? ' AND i.shift_id = ?' : '';
@@ -92,7 +102,7 @@ attendanceRoutes.get('/overview', async (c) => {
 // ---------------------------------------------------------------- Attendance list + export
 attendanceRoutes.get('/attendance', async (c) => {
   const f = query(c, Filters);
-  const w = sessionWhere(f, todayOf(c));
+  const w = sw(c, f);
   const order = `${SORT[f.sort] ?? 's.work_date'} ${f.dir > 0 ? 'ASC' : 'DESC'}, s.work_date DESC, e.employee_code ASC`;
   const db = c.env.DB;
   const [cnt, rows] = await db.batch([
@@ -104,7 +114,7 @@ attendanceRoutes.get('/attendance', async (c) => {
 
 attendanceRoutes.get('/attendance/export', async (c) => {
   const f = query(c, Filters.omit({ page: true, size: true }));
-  const w = sessionWhere(f, todayOf(c));
+  const w = sw(c, f);
   const rows = await all(c.env.DB, `${ROW_SELECT} WHERE ${w.sql} ORDER BY s.work_date DESC, e.employee_code ASC LIMIT 20000`, ...w.params);
   const now = Date.now();
   await auditStmt(c.env.DB, { actor: c.get('admin').username, action: 'DATA_EXPORTED', entityType: 'report', entityId: `attendance_${f.from}_${f.to}`, after: { rows: rows.length, filters: f }, ip: clientIp(c), at: now }).run();
@@ -116,6 +126,7 @@ attendanceRoutes.get('/sessions/:emp/:date', async (c) => {
   const emp = intParam(c, 'emp');
   const date = c.req.param('date');
   if (!isDate(date)) throw bad('VALIDATION', '日期无效', 'Invalid date');
+  await assertEmployee(c, emp);
   const db = c.env.DB;
   const [empR, instR, sessR, evR, brR, exR, adjR] = await db.batch([
     stmt(db, 'SELECT id, employee_code, name, currency_code, employment_status FROM employees WHERE id = ?', emp),
@@ -214,6 +225,7 @@ attendanceRoutes.post('/sessions/:emp/:date/adjustments', async (c) => {
   const emp = intParam(c, 'emp');
   const date = c.req.param('date');
   if (!isDate(date)) throw bad('VALIDATION', '日期无效', 'Invalid date');
+  await assertEmployee(c, emp);
   const a = await body(c, AdjSchema);
   return c.json(await applyAdjustment(c.env, c.get('admin').username, clientIp(c), emp, date, a));
 });
@@ -232,7 +244,7 @@ async function withRemarks<T extends { start_text: string | null }>(db: D1Databa
 
 attendanceRoutes.get('/breaks', async (c) => {
   const f = query(c, Filters.pick({ from: true, to: true, cur: true, q: true, page: true, size: true }));
-  const w = sessionWhere(f, todayOf(c));
+  const w = sw(c, f);
   const db = c.env.DB;
   const cond = `${w.sql} AND (s.break_count + s.open_break_count) > 0`;
   const [cnt, rows] = await db.batch([
@@ -248,7 +260,7 @@ attendanceRoutes.get('/breaks', async (c) => {
 // ---------------------------------------------------------------- Reports
 attendanceRoutes.get('/reports', async (c) => {
   const f = query(c, Filters);
-  const w = sessionWhere(f, todayOf(c));
+  const w = sw(c, f);
   const db = c.env.DB;
   const FROM = 'FROM attendance_sessions s JOIN employees e ON e.id = s.employee_id LEFT JOIN shift_instances i ON i.id = s.shift_instance_id';
   if (!f.status) {

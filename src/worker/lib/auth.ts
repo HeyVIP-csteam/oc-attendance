@@ -32,9 +32,9 @@ export const requireSession: MiddlewareHandler<AppBindings> = async (c, next) =>
   if (!token) throw new ApiError(401, 'UNAUTHENTICATED', { zh: '请先登录', en: 'Please sign in' });
   const id = await sha256Hex(token);
   const now = Date.now();
-  const row = await first<{ id: string; admin_id: number; created_at: number; expires_at: number; last_seen_at: number; username: string; role: 'admin' | 'viewer'; is_active: number }>(
+  const row = await first<{ id: string; admin_id: number; created_at: number; expires_at: number; last_seen_at: number; username: string; role: 'admin' | 'viewer'; is_active: number; currencies: string | null; is_owner: number }>(
     c.env.DB,
-    `SELECT s.id, s.admin_id, s.created_at, s.expires_at, s.last_seen_at, u.username, u.role, u.is_active
+    `SELECT s.id, s.admin_id, s.created_at, s.expires_at, s.last_seen_at, u.username, u.role, u.is_active, u.currencies, u.is_owner
      FROM admin_sessions s JOIN admin_users u ON u.id = s.admin_id WHERE s.id = ?`, id);
   if (!row || row.expires_at < now || row.created_at + SESSION_MAX_MS < now || !row.is_active) {
     clearSessionCookie(c);
@@ -49,6 +49,12 @@ export const requireSession: MiddlewareHandler<AppBindings> = async (c, next) =>
     const touch = stmt(c.env.DB, 'UPDATE admin_sessions SET last_seen_at = ?, expires_at = ? WHERE id = ?', now, Math.min(now + SESSION_TTL_MS, row.created_at + SESSION_MAX_MS), id).run();
     try { c.executionCtx.waitUntil(touch); } catch { await touch; }
   }
-  c.set('admin', { id: row.admin_id, username: row.username, role: row.role, sessionId: id });
+  c.set('admin', { id: row.admin_id, username: row.username, role: row.role, currencies: row.is_owner ? null : parseCurrencies(row.currencies), owner: !!row.is_owner, sessionId: id });
   await next();
 };
+
+/** admin_users.currencies → null (all) or a non-empty list. A broken value fails closed (no currency). */
+export function parseCurrencies(v: string | null | undefined): string[] | null {
+  if (v == null || v === '') return null;
+  try { const a = JSON.parse(v); return Array.isArray(a) ? a.filter((x) => typeof x === 'string') : []; } catch { return []; }
+}
