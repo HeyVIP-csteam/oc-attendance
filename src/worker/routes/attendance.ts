@@ -261,6 +261,22 @@ attendanceRoutes.get('/breaks', async (c) => {
   return c.json({ total: (cnt.results[0] as { n: number }).n, rows: rows.results, breaks: await withRemarks(c.env.DB, breaks) });
 });
 
+/** Breaks of a date range for the HTML export (every session with a break, all its breaks). */
+attendanceRoutes.get('/breaks/export', async (c) => {
+  const f = query(c, Filters.pick({ from: true, to: true, cur: true }));
+  const w = sw(c, f);
+  const db = c.env.DB;
+  const rows = await all<{ session_id: number }>(db, `${ROW_SELECT} WHERE ${w.sql} AND (s.break_count + s.open_break_count) > 0 ORDER BY s.work_date DESC, e.employee_code ASC LIMIT 5000`, ...w.params);
+  const breaks: { start_text: string | null }[] = [];
+  const ids = rows.map((r) => r.session_id);
+  for (let k = 0; k < ids.length; k += 90) {
+    const part = ids.slice(k, k + 90);
+    breaks.push(...await all<{ start_text: string | null }>(db, `SELECT b.session_id, b.seq, b.start_at, b.end_at, b.duration_ms, b.status, ${BREAK_TEXT} AS start_text
+      FROM break_sessions b JOIN attendance_sessions s ON s.id = b.session_id WHERE b.session_id IN (${part.map(() => '?').join(',')}) ORDER BY b.session_id, b.seq`, ...part));
+  }
+  return c.json({ rows, breaks: await withRemarks(db, breaks) });
+});
+
 // ---------------------------------------------------------------- Reports
 attendanceRoutes.get('/reports', async (c) => {
   const f = query(c, Filters);
@@ -284,4 +300,18 @@ attendanceRoutes.get('/reports', async (c) => {
     stmt(db, `${ROW_SELECT} WHERE ${w.sql} ORDER BY s.work_date DESC, e.employee_code ASC LIMIT ? OFFSET ?`, ...w.params, f.size, (f.page - 1) * f.size),
   ]);
   return c.json({ mode: 'detail', total: (cnt.results[0] as { n: number }).n, rows: rows.results });
+});
+
+/** Per-employee summary of a date range for the HTML export (all employees, no paging). */
+attendanceRoutes.get('/reports/export', async (c) => {
+  const f = query(c, Filters.pick({ from: true, to: true, cur: true }));
+  const w = sw(c, f);
+  const rows = await all(c.env.DB, `SELECT e.id AS employee_id, e.employee_code, e.name, e.currency_code,
+      COUNT(s.shift_instance_id) AS scheduled, SUM(s.actual_in_at IS NOT NULL) AS present, SUM(s.status = 'ABSENT') AS absent,
+      SUM(s.late_min > 0) AS late_times, SUM(COALESCE(s.late_min, 0)) AS late_min, SUM(s.early_min > 0) AS early_times, SUM(COALESCE(s.early_min, 0)) AS early_min,
+      SUM(s.break_count) AS breaks, SUM(s.total_break_ms) AS break_ms, SUM(COALESCE(s.net_worked_ms, 0)) AS net_ms,
+      SUM(CASE WHEN s.net_worked_ms IS NOT NULL THEN s.shift_duration_ms ELSE 0 END) AS shift_ms, SUM(s.missing <> 'NONE') AS missing, SUM(s.exception_count) AS exceptions
+    FROM attendance_sessions s JOIN employees e ON e.id = s.employee_id LEFT JOIN shift_instances i ON i.id = s.shift_instance_id
+    WHERE ${w.sql} GROUP BY e.id ORDER BY COALESCE(e.sort_order, 1000000000), e.employee_code`, ...w.params);
+  return c.json({ rows });
 });

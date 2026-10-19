@@ -411,3 +411,7 @@ table.grid td{white-space:normal}
 .impwarn{color:var(--warn);font-size:12.5px;margin:4px 0 6px}
 select.need{border-color:#f59e0b;background:#fffbeb}
 .impsnd td:first-child,.impsnd th:first-child{text-align:left}
+/* Export HTML dialog */
+.xfg{grid-template-columns:1fr 1fr}.xfg .full{grid-column:1 / -1}
+.xquick{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap}
+.xhint{color:var(--mut);font-size:12.5px;margin-top:10px}

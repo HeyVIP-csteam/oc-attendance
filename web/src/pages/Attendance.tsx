@@ -3,7 +3,8 @@ import { EVENT_LABEL, EVENT_TYPES, type EventType, STATUSES } from '../../../src
 import { addDays } from '../../../src/shared/time';
 import { Cnt, CurB, CurrencyOptions, Drawer, EmpSearch, Empty, ErrBox, ExB, Field, Modal, Mut, Pager, ShiftName, ShiftOptions, StatusBadge, StatusOptions, TblTop } from '../components/ui';
 import { api, type ApiErr, qs } from '../lib/api';
-import { exportCSV, exportXLSX } from '../lib/files';
+import { ExportHtmlButton } from '../components/ExportHtml';
+import { countAttendance, exportAttendance } from '../lib/exports';
 import { fmtDT, fmtDur, fmtMin, fmtT, fromLocalInput, LATE_RED, toLocalInput, today, TZ } from '../lib/format';
 import { parseBi, useI18n } from '../lib/i18n';
 import { rulesOf, toast, useApi, useData, usePageState } from '../lib/store';
@@ -38,20 +39,8 @@ export function Attendance() {
   const [f, set] = usePageState('at', () => ({ from: addDays(t, -6), to: t, cur: '', shift: '', status: '', q: '', sort: 'workDate', dir: -1, page: 1, size: 10 }));
   const { data, error } = useApi<{ total: number; rows: AttRow[] }>(`/attendance?${qs(f)}`);
   const [open, setOpen] = useState<{ emp: number; date: string } | null>(null);
-  const ex = useDetailExport();
+  const { meta } = useData();
   const setF = (p: Partial<typeof f>) => set({ ...p, page: 1 });
-  const doExport = async (fmt: 'csv' | 'xlsx') => {
-    try {
-      const { page: _p, size: _s, ...rest } = f;
-      const r = await api<{ rows: AttRow[] }>(`/attendance/export?${qs(rest)}`);
-      const sl = (s: string) => dt((STATUSES as any)[s]?.label ?? s);
-      const name = `attendance_${f.from}_${f.to}`;
-      const rows = r.rows.map((x) => ex.row(x, sl));
-      if (fmt === 'csv') exportCSV(name, ex.cols(), rows);
-      else await exportXLSX(name, ex.cols(), rows, [['Generated', fmtDT(Date.now())], ['Time zone', TZ], ['Rows', String(rows.length)]]);
-      toast(L(`已导出 ${rows.length} 行`, `Exported ${rows.length} rows`));
-    } catch (e) { toast(dt((e as ApiErr).msg ?? { zh: '导出失败', en: 'Export failed' })); }
-  };
   const sortBy = (k: string) => set({ sort: k, dir: f.sort === k ? -f.dir : 1, page: 1 });
   const num = (v: number | null) => (v ? <b style={{ color: LATE_RED }}>{fmtMin(v)}</b> : v === 0 ? '0' : '—');
   return (
@@ -63,7 +52,7 @@ export function Attendance() {
         <Field label={L('班次', 'Shift')}><select value={f.shift} onChange={(e) => setF({ shift: e.target.value })}><ShiftOptions withNone /></select></Field>
         <Field label={L('状态', 'Status')}><select value={f.status} onChange={(e) => setF({ status: e.target.value })}><StatusOptions all={L('全部状态', 'All statuses')} /></select></Field>
         <Field label={L('搜索', 'Search')}><EmpSearch value={f.q} onChange={(q) => setF({ q })} /></Field>
-        <div className="rowact"><button className="btn" onClick={() => doExport('csv')}>{L('导出 CSV', 'Export CSV')}</button><button className="btn" onClick={() => doExport('xlsx')}>{L('导出 XLSX', 'Export XLSX')}</button></div>
+        <div className="rowact"><ExportHtmlButton title={L('导出考勤报表', 'Export attendance report')} init={{ from: f.from, to: f.to, cur: f.cur }} count={countAttendance} run={(q) => exportAttendance({ L, dt, meta }, q)} /></div>
       </div></div>
       <ErrBox error={error} />
       {data && (data.rows.length === 0 ? <Empty>{L('没有符合条件的考勤记录', 'No attendance records match these filters')}</Empty> : (

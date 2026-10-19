@@ -4,13 +4,16 @@ import { Cnt, CurrencyOptions, EmpSearch, Empty, ErrBox, Field, Mut, Pager, Shif
 import { qs } from '../lib/api';
 import { fmtDur, fmtT, today } from '../lib/format';
 import { useI18n } from '../lib/i18n';
-import { useApi, usePageState } from '../lib/store';
+import { useApi, useData, usePageState } from '../lib/store';
+import { ExportHtmlButton } from '../components/ExportHtml';
+import { countBreaks, exportBreaks } from '../lib/exports';
 import type { AttRow } from './Attendance';
 
 interface BreakRow { session_id: number; seq: number; start_at: number; end_at: number | null; duration_ms: number | null; status: string; remark: string | null }
 
 export function Breaks() {
-  const { L } = useI18n();
+  const { L, dt } = useI18n();
+  const { meta } = useData();
   const t = today();
   const [f, set] = usePageState('br', () => ({ from: addDays(t, -2), to: t, cur: '', q: '', page: 1, size: 10 }));
   const [open, setOpen] = useState<Record<number, boolean>>({});
@@ -25,6 +28,7 @@ export function Breaks() {
         <Field label={L('结束', 'To')}><input type="date" value={f.to} onChange={(e) => setF({ to: e.target.value || t })} /></Field>
         <Field label={L('货币', 'Currency')}><select value={f.cur} onChange={(e) => setF({ cur: e.target.value })}><CurrencyOptions all={L('全部货币', 'All currencies')} /></select></Field>
         <Field label={L('搜索', 'Search')}><EmpSearch value={f.q} onChange={(q) => setF({ q })} /></Field>
+        <div className="rowact"><ExportHtmlButton title={L('导出休息报表', 'Export breaks report')} init={{ from: f.from, to: f.to, cur: f.cur }} count={countBreaks} run={(q) => exportBreaks({ L, dt, meta }, q)} /></div>
       </div></div>
       <ErrBox error={error} />
       {data && (data.rows.length === 0 ? <Empty>{L('没有休息记录', 'No break records')}</Empty> : (
