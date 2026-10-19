@@ -52,7 +52,11 @@ export function sessionWhere(f: { from: string; to: string; cur?: string; shift?
   if (f.cur) { c.push('e.currency_code = ?'); p.push(f.cur); }
   if (f.shift === 'none') c.push('s.shift_instance_id IS NULL');
   else if (f.shift) { c.push('i.shift_id = ?'); p.push(Number(f.shift)); }
+  // pseudo statuses used by the Overview cards: anyone late / leaving early (whatever the current status), anyone with a shift
   if (f.status === 'MISSING') c.push("s.missing <> 'NONE'");
+  else if (f.status === 'ANY_LATE') c.push('s.late_min > 0');
+  else if (f.status === 'ANY_EARLY') c.push('s.early_min > 0');
+  else if (f.status === 'HAS_SHIFT') c.push('s.shift_instance_id IS NOT NULL');
   else if (f.status) { c.push('s.status = ?'); p.push(f.status); }
   if (f.q) { c.push("(e.employee_code LIKE ? ESCAPE '\\' OR e.name LIKE ? ESCAPE '\\')"); p.push(likeEsc(f.q), likeEsc(f.q)); }
   return { sql: c.join(' AND '), params: p };

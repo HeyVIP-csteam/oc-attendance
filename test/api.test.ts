@@ -1117,3 +1117,20 @@ describe('roster code OT (overtime on a day off)', () => {
     expect(ot).toEqual([e1, e2].sort());
   });
 });
+
+describe('overview card filters', () => {
+  it('ANY_LATE / ANY_EARLY / HAS_SHIFT list the people behind the overview numbers', async () => {
+    const { h, e1, e2 } = await fixture();
+    await h.roster(e1, D, 'A'); // 07:00–15:00
+    await h.send({ text: 'IN', ts: lk(D, '07:20'), thread: 1001 }); // late, still working
+    await h.send({ text: 'IN', ts: lk(D, '09:00'), thread: 1002 }); // no shift
+    h.now(lk(D, '10:00'));
+    const ids = async (st: string) => (await h.req('GET', `/api/attendance?from=${D}&to=${D}&status=${st}`)).json.rows.map((r: any) => r.employee_id);
+    expect((await h.req('GET', `/api/overview?date=${D}`)).json.late).toBe(1);
+    expect(await ids('ANY_LATE')).toEqual([e1]);
+    expect(await ids('LATE')).toEqual([]); // status is WORKING while still on shift
+    expect(await ids('HAS_SHIFT')).toEqual([e1]);
+    expect(await ids('ANY_EARLY')).toEqual([]);
+    expect((await ids('')).sort()).toEqual([e1, e2].sort());
+  });
+});

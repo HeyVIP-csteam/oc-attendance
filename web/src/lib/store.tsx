@@ -21,7 +21,7 @@ export interface Meta {
   dataVersion: number;
 }
 
-interface DataCtxT { meta: Meta; reloadMeta: () => Promise<void>; tick: number; refresh: () => void; readOnly: boolean; owner: boolean }
+interface DataCtxT { meta: Meta; reloadMeta: () => Promise<void>; tick: number; refresh: () => void; readOnly: boolean; owner: boolean; nav: (page: string) => void }
 export const DataCtx = createContext<DataCtxT>(null as unknown as DataCtxT);
 export const useData = () => useContext(DataCtx);
 
@@ -53,6 +53,10 @@ export function usePageState<T extends object>(key: string, init: () => T): [T, 
   return [s, update];
 }
 export const resetPageStore = () => pageStore.clear();
+/** Sets another page's filters before opening it (its defaults first if the page has not been opened yet). */
+export function presetPage<T extends object>(key: string, init: () => T, patch: Partial<T>) {
+  pageStore.set(key, { ...((pageStore.get(key) as T) ?? init()), ...patch });
+}
 
 // ---------------------------------------------------------------- toast
 type ToastL = (t: string) => void;

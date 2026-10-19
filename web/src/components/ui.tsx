@@ -245,7 +245,7 @@ export function ShiftOptions({ withNone }: { withNone?: boolean }) {
 }
 export function StatusOptions({ all }: { all: string }) {
   const { dt, L } = useI18n();
-  return <><option value="">{all}</option>{Object.entries(STATUSES).map(([k, v]) => <option key={k} value={k}>{dt(v.label)}</option>)}<option value="MISSING">{L('任何缺卡', 'Any missing punch')}</option></>;
+  return <><option value="">{all}</option>{Object.entries(STATUSES).map(([k, v]) => <option key={k} value={k}>{dt(v.label)}</option>)}<option value="MISSING">{L('任何缺卡', 'Any missing punch')}</option><option value="ANY_LATE">{L('任何迟到', 'Any late')}</option><option value="ANY_EARLY">{L('任何早退', 'Any early leave')}</option><option value="HAS_SHIFT">{L('有排班', 'With a shift')}</option></>;
 }
 
 export function ShiftChip({ code, inline }: { code: string | null | undefined; inline?: boolean }) {
