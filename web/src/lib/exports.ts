@@ -31,7 +31,7 @@ const foot = (L: L) => L('时间为斯里兰卡时间 (UTC+05:30) · 迟到 / �
 
 interface AttRowX { employee_code: string; name: string; currency_code: string | null; work_date: string; shift_name: string | null; mark_code?: string | null; scheduled_start_at: number | null; actual_in_at: number | null; late_min: number | null;
   scheduled_end_at: number | null; actual_out_at: number | null; early_min: number | null; break_count: number; open_break_count: number; total_break_ms: number; net_worked_ms: number | null; status: string; missing: string; exception_count: number;
-  session_id: number; break_exceeded: number | null }
+  session_id: number; break_exceeded: number | null; ot_ms?: number | null }
 
 function statusOf(x: Ctx, r: Pick<AttRowX, 'status' | 'mark_code'>): [string, string] {
   if (r.status === 'NO_SCHEDULE' && r.mark_code) {
@@ -50,14 +50,14 @@ export async function exportAttendance(x: Ctx, q: ExportRange): Promise<number> 
     const [st, stc] = statusOf(x, a);
     return { code: a.employee_code, name: a.name, cur: a.currency_code, d: a.work_date, shift: shiftOf(x, a), si: a.scheduled_start_at ? fmtT(a.scheduled_start_at) : null, ai: a.actual_in_at ? fmtT(a.actual_in_at) : null,
       late: a.late_min, so: a.scheduled_end_at ? fmtT(a.scheduled_end_at) : null, ao: a.actual_out_at ? fmtT(a.actual_out_at) : null, early: a.early_min,
-      br: a.break_count + a.open_break_count, bt: a.total_break_ms, net: a.net_worked_ms, st, st_c: stc, sk: a.status, miss: a.missing, ex: a.exception_count };
+      br: a.break_count + a.open_break_count, bt: a.total_break_ms, net: a.net_worked_ms, ot: a.ot_ms || null, st, st_c: stc, sk: a.status, miss: a.missing, ex: a.exception_count };
   });
   downloadHtmlReport({
     ...common(x, q, L('考勤报表', 'Attendance report'), 'attendance'),
     cols: [{ k: 'code', label: 'PSD ID', t: 'pid' }, { k: 'name', label: L('员工姓名', 'Employee Name') }, { k: 'cur', label: L('货币', 'Currency'), t: 'cur' }, { k: 'd', label: L('日期', 'Date') },
       { k: 'shift', label: L('班次', 'Shift') }, { k: 'si', label: L('排班上班', 'Sched In') }, { k: 'ai', label: L('实际上班', 'Actual In') }, { k: 'late', label: L('迟到', 'Late'), t: 'min' },
       { k: 'so', label: L('排班下班', 'Sched Out') }, { k: 'ao', label: L('实际下班', 'Actual Out') }, { k: 'early', label: L('早退', 'Early'), t: 'min' }, { k: 'br', label: L('休息', 'Breaks'), t: 'num' },
-      { k: 'bt', label: L('休息总计', 'Break Total'), t: 'dur' }, { k: 'net', label: L('净工时', 'Net Worked'), t: 'dur' }, { k: 'st', label: L('状态', 'Status'), t: 'badge' }, { k: 'ex', label: L('异常', 'Exceptions'), t: 'num' }],
+      { k: 'bt', label: L('休息总计', 'Break Total'), t: 'dur' }, { k: 'net', label: L('净工时', 'Net Worked'), t: 'dur' }, { k: 'ot', label: 'OT', t: 'dur' }, { k: 'st', label: L('状态', 'Status'), t: 'badge' }, { k: 'ex', label: L('异常', 'Exceptions'), t: 'num' }],
     rows, search: ['code', 'name'],
     filters: [{ k: 'd', label: L('日期', 'Date'), all: L('全部日期', 'All dates'), desc: true }, { k: 'cur', label: L('货币', 'Currency'), all: L('全部货币', 'All currencies') },
       { k: 'shift', label: L('班次', 'Shift'), all: L('全部班次', 'All shifts') }, { k: 'st', label: L('状态', 'Status'), all: L('全部状态', 'All statuses') }],
@@ -68,6 +68,7 @@ export async function exportAttendance(x: Ctx, q: ExportRange): Promise<number> 
       { label: L('缺勤', 'Absent'), cls: 'r', value: { op: 'count', where: ['sk', '=', 'ABSENT'] }, sub: { tpl: L('没有上班打卡', 'no clock in') }, click: ['sk', '=', 'ABSENT'] },
       { label: L('缺卡', 'Missing punch'), cls: 'r', value: { op: 'count', where: ['miss', '!=', 'NONE'] }, sub: { tpl: L('数据不完整', 'incomplete') }, click: ['miss', '!=', 'NONE'] },
       { label: L('净工时', 'Net worked'), cls: 'g', value: { op: 'sum', f: 'net', fmt: 'dur' }, sub: { agg: { op: 'avg', f: 'net', fmt: 'dur' }, tpl: L('平均 {} / 天', 'avg {} / day') } },
+      { label: 'OT', cls: 'w', value: { op: 'sum', f: 'ot', fmt: 'dur' }, sub: { agg: { op: 'count', where: ['ot', '>', 0] }, tpl: L('{} 天', '{} days') }, click: ['ot', '>', 0] },
     ],
     sort: { k: 'd', dir: -1 }, foot: foot(L),
   });
@@ -107,20 +108,20 @@ export async function exportBreaks(x: Ctx, q: ExportRange): Promise<number> {
   return rows.length;
 }
 
-interface SumX { employee_code: string; name: string; currency_code: string | null; scheduled: number; present: number; absent: number; late_times: number; late_min: number; early_times: number; early_min: number; breaks: number; break_ms: number; shift_ms: number; exceptions: number }
+interface SumX { employee_code: string; name: string; currency_code: string | null; scheduled: number; present: number; absent: number; late_times: number; late_min: number; early_times: number; early_min: number; breaks: number; break_ms: number; shift_ms: number; ot_ms?: number | null; exceptions: number }
 
 export async function exportReports(x: Ctx, q: ExportRange): Promise<number> {
   const { L } = x;
   const r = await api<{ rows: SumX[] }>(`/reports/export?${qs({ ...q })}`);
   const n = (v: number | null | undefined) => v ?? 0;
   const rows = r.rows.map((a) => ({ code: a.employee_code, name: a.name, cur: a.currency_code, sch: n(a.scheduled), pre: n(a.present), abs: n(a.absent), lt: n(a.late_times), lm: n(a.late_min),
-    et: n(a.early_times), em: n(a.early_min), br: n(a.breaks), bm: n(a.break_ms), sm: n(a.shift_ms), ex: n(a.exceptions) }));
+    et: n(a.early_times), em: n(a.early_min), br: n(a.breaks), bm: n(a.break_ms), sm: n(a.shift_ms), ot: n(a.ot_ms), ex: n(a.exceptions) }));
   downloadHtmlReport({
     ...common(x, q, L('考勤汇总报表', 'Attendance summary'), 'report'),
     cols: [{ k: 'code', label: 'PSD ID', t: 'pid' }, { k: 'name', label: L('员工姓名', 'Employee Name') }, { k: 'cur', label: L('货币', 'Currency'), t: 'cur' }, { k: 'sch', label: L('排班', 'Scheduled'), t: 'num' },
       { k: 'pre', label: L('出勤', 'Present'), t: 'num' }, { k: 'abs', label: L('缺勤', 'Absent'), t: 'red' }, { k: 'lt', label: L('迟到次数', 'Late (times)'), t: 'red' }, { k: 'lm', label: L('迟到时长', 'Late (time)'), t: 'min' },
       { k: 'et', label: L('早退次数', 'Early (times)'), t: 'red' }, { k: 'em', label: L('早退时长', 'Early (time)'), t: 'min' }, { k: 'br', label: L('休息次数', 'Breaks'), t: 'num' },
-      { k: 'bm', label: L('休息总时长', 'Total Break'), t: 'dur' }, { k: 'sm', label: L('总工时', 'Total Shift'), t: 'dur' }, { k: 'ex', label: L('异常数', 'Exceptions'), t: 'num' }],
+      { k: 'bm', label: L('休息总时长', 'Total Break'), t: 'dur' }, { k: 'sm', label: L('总工时', 'Total Shift'), t: 'dur' }, { k: 'ot', label: 'OT', t: 'dur' }, { k: 'ex', label: L('异常数', 'Exceptions'), t: 'num' }],
     rows, search: ['code', 'name'],
     filters: [{ k: 'cur', label: L('货币', 'Currency'), all: L('全部货币', 'All currencies') }],
     kpis: [
@@ -130,6 +131,7 @@ export async function exportReports(x: Ctx, q: ExportRange): Promise<number> {
       { label: L('迟到', 'Late'), cls: 'w', value: { op: 'sum', f: 'lt' }, sub: { agg: { op: 'sum', f: 'lm', fmt: 'min' }, tpl: L('合计 {}', '{} total') }, click: ['lt', '>', 0] },
       { label: L('早退', 'Early leave'), cls: 'w', value: { op: 'sum', f: 'et' }, sub: { agg: { op: 'sum', f: 'em', fmt: 'min' }, tpl: L('合计 {}', '{} total') }, click: ['et', '>', 0] },
       { label: L('总工时', 'Total shift'), value: { op: 'sum', f: 'sm', fmt: 'dur' }, sub: { agg: { op: 'sum', f: 'bm', fmt: 'dur' }, tpl: L('休息 {}', 'breaks {}') } },
+      { label: 'OT', cls: 'w', value: { op: 'sum', f: 'ot', fmt: 'dur' }, sub: { agg: { op: 'count', where: ['ot', '>', 0] }, tpl: L('{} 位员工', '{} employees') }, click: ['ot', '>', 0] },
     ],
     sort: { k: 'code', dir: 1 }, foot: foot(L),
   });

@@ -23,6 +23,7 @@ export class Harness {
   failing = new Set<string>();
   pending: Promise<unknown>[] = [];
   private seq = 1000;
+  private botMsg = 50000;
 
   constructor() {
     this.env = { DB: this.db as unknown as D1Database, ASSETS: undefined as unknown as Fetcher, ENCRYPTION_KEY: KEY, BIZ_TZ: TZ, APP_ENV: 'test' } as Env;
@@ -44,7 +45,8 @@ export class Harness {
       case 'setWebhook': this.webhooks.set(botId, body.url); return ok(true);
       case 'getWebhookInfo': return ok({ url: this.webhooks.get(botId) ?? '', pending_update_count: 0 });
       case 'deleteWebhook': this.webhooks.delete(botId); return ok(true);
-      case 'sendMessage': return ok({ message_id: 1 });
+      case 'sendMessage': return ok({ message_id: ++this.botMsg });
+      case 'answerCallbackQuery': case 'editMessageText': case 'editMessageReplyMarkup': return ok(true);
       default: return new Response(JSON.stringify({ ok: false, description: 'unknown method' }), { status: 404 });
     }
   }
@@ -122,6 +124,14 @@ export class Harness {
     const code = (o.code ?? 'LKR').toLowerCase();
     const r = await this.req('POST', `/api/telegram/webhook/${code}`, update, { 'x-telegram-bot-api-secret-token': o.secret ?? (await this.secretFor(o.code ?? 'LKR')) });
     return { ...r, updateId, messageId, update };
+  }
+
+  /** A press on an inline button (callback_query) under a bot message. */
+  async press(o: { data: string; messageId: number; fromId: number; name?: string; at: number; chat?: number; code?: string }) {
+    const updateId = ++this.seq;
+    const update = { update_id: updateId, callback_query: { id: `cb${updateId}`, from: { id: o.fromId, is_bot: false, first_name: o.name ?? 'Test' }, message: { message_id: o.messageId, chat: { id: o.chat ?? CHAT } }, data: o.data } };
+    this.now(o.at);
+    return this.req('POST', `/api/telegram/webhook/${(o.code ?? 'LKR').toLowerCase()}`, update, { 'x-telegram-bot-api-secret-token': await this.secretFor(o.code ?? 'LKR') });
   }
 
   async session(empId: number, date: string) {

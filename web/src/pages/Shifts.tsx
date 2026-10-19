@@ -8,7 +8,7 @@ import { useI18n } from '../lib/i18n';
 import { type MetaShift, rulesOf, toast, useApi, useData, usePageState } from '../lib/store';
 
 interface Inst { employee_id: number; shift_date: string; shift_id: number; shift_code: string; shift_name: string; scheduled_start_at: number; scheduled_end_at: number; adjustment_status: string; source: string }
-interface RosterData { counts?: Record<string, number>; ot?: { employee_id: number; work_date: string; actual_in_at: number; actual_out_at: number | null; kind: 'OFF' | 'LONG' }[]; from: string; to: string; total: number; employees: { id: number; employee_code: string; name: string; currency_code: string | null; employment_status: string }[]; instances: Inst[]; marks?: { employee_id: number; mark_date: string; code: string }[] }
+interface RosterData { counts?: Record<string, number>; ot?: { employee_id: number; work_date: string; actual_in_at: number; actual_out_at: number | null; ot_ms?: number | null; kind: 'OFF' | 'LONG' }[]; from: string; to: string; total: number; employees: { id: number; employee_code: string; name: string; currency_code: string | null; employment_status: string }[]; instances: Inst[]; marks?: { employee_id: number; mark_date: string; code: string }[] }
 
 export function Shifts() {
   const { L } = useI18n();
@@ -45,10 +45,9 @@ function Roster({ f, set }: { f: { from: string; to: string; cur: string; page: 
     const span = (a: number, b: number | null) => `${fmtMDT(a)} – ${b != null ? fmtMDT(b) : L('未下班', 'not clocked out')}`;
     const mine = fmtMine(ot.actual_in_at);
     const mineSpan = mine ? `\n${mineLabel(ot.actual_in_at)}: ${mine} – ${ot.actual_out_at != null ? fmtMine(ot.actual_out_at) : L('未下班', 'not clocked out')}` : '';
-    const dur = ot.actual_out_at != null ? fmtDur(ot.actual_out_at - ot.actual_in_at) : '';
-    const thr = fmtDur(Math.round((rulesOf(meta, cur).otHours ?? 9) * 60) * 60000);
+    const otd = fmtDur(ot.ot_ms ?? 0);
     return long && ot.kind === 'LONG'
-      ? L(`OT：实际 ${span(ot.actual_in_at, ot.actual_out_at)} (LK)，在班 ${dur}（超过 ${thr}）`, `OT: actual ${span(ot.actual_in_at, ot.actual_out_at)} (LK), on shift ${dur} (over ${thr})`) + mineSpan
+      ? L(`OT ${otd}（员工在 Telegram 确认）：实际 ${span(ot.actual_in_at, ot.actual_out_at)} (LK)`, `OT ${otd} (confirmed in Telegram): actual ${span(ot.actual_in_at, ot.actual_out_at)} (LK)`) + mineSpan
       : L(`休息日上班（OT）：${span(ot.actual_in_at, ot.actual_out_at)} (LK)`, `Worked on a day off (OT): ${span(ot.actual_in_at, ot.actual_out_at)} (LK)`) + mineSpan;
   };
   const doExport = async () => {

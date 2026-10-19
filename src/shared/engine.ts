@@ -11,7 +11,7 @@
 //   Total Shift         = actualOut − actualIn
 //   Net Worked          = Total Shift − Total Break  (only when the session is complete and no break is open)
 
-import { type Bi, bi, type EventType, type ExceptionCode, exceptionSeverity, FIXED, type MissingKind, type SessionState, type SessionStatus } from './codes';
+import { type Bi, bi, type EventType, type ExceptionCode, exceptionSeverity, FIXED, type MissingKind, type OtAnswer, type SessionState, type SessionStatus } from './codes';
 import { fmtDuration, fmtHm, fmtTime, HOUR, MIN } from './time';
 
 export interface EngineEvent {
@@ -33,7 +33,9 @@ export interface EngineInstance {
   breakMinutes: number | null;
 }
 
-export interface EngineRules { windowHours: number; lateAsException: boolean; breakMinutes?: number | null; forgotOutHours?: number }
+export interface EngineRules { windowHours: number; lateAsException: boolean; breakMinutes?: number | null }
+/** A question the bot asked in the topic and its answer (null = not answered yet). */
+export interface EngineQuestion { kind: 'EARLY' | 'LATE'; answer: OtAnswer | null; askedAt: number }
 
 export interface Flag { code: ExceptionCode; ts: number; eventId: number | null; detail: Bi | null }
 
@@ -56,6 +58,7 @@ export interface SessionSummary {
   shiftDurMs: number | null;
   netMs: number | null;
   breakExceeded: boolean | null;
+  otMs: number;             // OT confirmed through the bot's questions
   flags: Flag[];
   eventResults: Map<number, ExceptionCode | null>;
   eventCount: number;
@@ -119,6 +122,7 @@ export interface ComputeInput {
   rules: EngineRules;
   tz: string;                     // display time zone for detail texts
   otDay?: boolean;                // the roster marks this day OT (overtime on a day off): punches without a shift are expected
+  questions?: EngineQuestion[];   // the bot's OT questions for this session
 }
 
 export function computeSession(input: ComputeInput): SessionSummary | null {
@@ -184,8 +188,8 @@ export function computeSession(input: ComputeInput): SessionSummary | null {
       else { status = 'SCHEDULED'; checks.push(inst.startAt - windowMs); }
     } else return null;
   } else if (outT == null) {
-    // Settings → Attendance rules: no clock out this long after clock in (the same moment the bot sends its reminder)
-    const forgotMs = Math.round((rules.forgotOutHours ?? 14) * 60) * MIN;
+    // no clock out this long after clock in (the bot has asked "Are you on OT?" well before that)
+    const forgotMs = FIXED.missingOutHours * HOUR;
     const deadline = inT + forgotMs;
     if (now > deadline) {
       missing = 'MISSING_OUT'; status = 'INCOMPLETE';
@@ -210,9 +214,24 @@ export function computeSession(input: ComputeInput): SessionSummary | null {
     if (earlyMin && earlyMin > 0) flags.push({ code: 'EARLY_LEAVE', ts: outT!, eventId: null, detail: bi(`早退 ${earlyMin} 分钟`, `left ${earlyMin} min early`) });
   }
 
+  // OT is counted only when the employee (or a colleague) answered the bot's question with OT:
+  // early clock in → from the clock in to the shift start; still working after the set hours → from the shift end to the clock out
+  const qs = input.questions ?? [];
+  const ans = (k: 'EARLY' | 'LATE') => qs.find((q) => q.kind === k)?.answer ?? null;
+  let otMs = 0;
+  if (inst && inT != null && ans('EARLY') === 'YES' && inT < inst.startAt) otMs += inst.startAt - inT;
+  if (inst && outT != null && ans('LATE') === 'OT' && outT > inst.endAt) otMs += outT - inst.endAt;
+  const waiting = qs.filter((q) => q.answer == null);
+  const overdue = waiting.filter((q) => now > q.askedAt + FIXED.otAnswerWaitMin * MIN);
+  if (overdue.length) {
+    const what = overdue.map((q) => (q.kind === 'EARLY' ? ['提早上班', 'early clock in'] : ['超时未下班', 'no clock out'])) as [string, string][];
+    flags.push({ code: 'OT_NO_ANSWER', ts: overdue[0].askedAt, eventId: null, detail: bi(`没有人回答 OT 问题（${what.map((w) => w[0]).join('、')}），不计算 OT`, `Nobody answered the OT question (${what.map((w) => w[1]).join(', ')}) — no OT counted`) });
+  }
+  for (const q of waiting) if (!overdue.includes(q)) checks.push(q.askedAt + FIXED.otAnswerWaitMin * MIN + 1);
+
   return {
     state: sm.state, status, missing, inT, outT, schedIn, schedOut, lateMin, earlyMin, breaks,
-    breakCount: closed.length, openBreakCount: open.length, totalBreakMs, shiftDurMs, netMs, breakExceeded,
+    breakCount: closed.length, openBreakCount: open.length, totalBreakMs, shiftDurMs, netMs, breakExceeded, otMs,
     flags, eventResults: sm.results, eventCount: active.length,
     nextCheckAt: checks.length ? Math.min(...checks) : null,
   };

@@ -36,7 +36,7 @@ export interface TgMessage {
   text?: string;
   caption?: string;
 }
-export interface TgUpdate { update_id: number; message?: TgMessage; edited_message?: TgMessage }
+export interface TgUpdate { update_id: number; message?: TgMessage; edited_message?: TgMessage; callback_query?: import('./otQuestions').TgCallback }
 
 export interface IngestResult { http: number; status: string; codes: string[]; event?: EventType; reply?: string | null }
 

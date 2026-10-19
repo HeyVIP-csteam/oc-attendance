@@ -4,6 +4,7 @@ import { log } from '../lib/audit';
 import { ConfigError, redact, safeEqual, webhookSecret } from '../lib/crypto';
 import { ingestUpdate, type TgUpdate } from '../lib/ingest';
 import { type BotRow, botToken, loadBot, sendReply } from '../lib/telegram';
+import { askOtQuestions, handleOtCallback } from '../lib/otQuestions';
 
 export const webhookRoutes = new Hono<AppBindings>();
 
@@ -53,6 +54,15 @@ webhookRoutes.post('/webhook/:code', async (c) => {
   } catch { return c.json({ ok: true, status: 'IGNORED_MALFORMED' }); }
   if (!upd || typeof upd !== 'object' || !Number.isInteger(upd.update_id)) return c.json({ ok: true, status: 'IGNORED_MALFORMED' });
 
+  // a press on the buttons under an OT question (never stored as a punch)
+  if (upd.callback_query) {
+    try {
+      const r = await handleOtCallback(c.env, bot, upd.callback_query);
+      log('info', 'webhook_callback', { bot: code, update_id: upd.update_id, result: r, ms: Date.now() - receivedAt });
+    } catch (e) { log('error', 'webhook_callback_failed', { bot: code, update_id: upd.update_id, error: redact(String((e as Error).message)) }); }
+    return c.json({ ok: true, status: 'CALLBACK' });
+  }
+
   try {
     const r = await ingestUpdate(c.env, bot, upd, receivedAt);
     log('info', 'webhook', { bot: code, update_id: upd.update_id, status: r.status, codes: r.codes, ms: Date.now() - receivedAt });
@@ -65,6 +75,11 @@ webhookRoutes.post('/webhook/:code', async (c) => {
         } catch (e) { log('warn', 'bot_reply_failed', { bot: code, error: redact(String((e as Error).message)) }); }
       })();
       try { c.executionCtx.waitUntil(send); } catch { await send; }
+    }
+    // clocked in early → the bot asks whether it is OT (right away instead of at the next cron run)
+    if (r.event === 'CLOCK_IN' && r.status === 'PROCESSED') {
+      const ask = askOtQuestions(c.env, Date.now(), true).catch((e) => log('warn', 'ot_question_failed', { error: redact(String((e as Error).message)) }));
+      try { c.executionCtx.waitUntil(ask); } catch { await ask; }
     }
     return c.json({ ok: true, status: r.status, codes: r.codes }, r.http as 200);
   } catch (e) {

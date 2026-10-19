@@ -2,7 +2,7 @@
 // Everything derived — attendance_sessions, break_sessions, computed exceptions, events.sm_result — is rebuilt here
 // from the immutable events + admin adjustments + the shift instance in force. Re-running it is always safe.
 
-import { exceptionSeverity, FIXED, type EventType, type Rules } from '../../shared/codes';
+import { exceptionSeverity, FIXED, type EventType, type OtAnswer, type Rules } from '../../shared/codes';
 import { computeSession, type EngineEvent, type EngineInstance, flagKey, hasMajor, runStateMachine, sortEvents, type SessionSummary } from '../../shared/engine';
 import { addDays, fmtDateTime, HOUR, localDate, MIN, zonedToUtc } from '../../shared/time';
 import { all, bumpVersion, chunk, stmt } from './db';
@@ -163,7 +163,7 @@ export async function recomputeMany(db: D1Database, keys: Key[], o: RecomputeOpt
     const wi = pairsWhere(part, 'employee_id', 'shift_date');
     const ws = pairsWhere(part, 's.employee_id', 's.work_date');
     const wm = pairsWhere(part, 'employee_id', 'mark_date');
-    const [instR, evR, brR, exR, adjR, mkR] = await db.batch([
+    const [instR, evR, brR, exR, adjR, mkR, qR] = await db.batch([
       stmt(db, `SELECT * FROM shift_instances WHERE adjustment_status <> 'CANCELLED' AND ${wi.sql}`, ...wi.params),
       // a message imported from a Telegram export was not "delivered late": its arrival time is its Telegram time
       stmt(db, `SELECT id, employee_id, work_date, event_type, event_ts, tg_message_id,
@@ -177,6 +177,7 @@ export async function recomputeMany(db: D1Database, keys: Key[], o: RecomputeOpt
       stmt(db, `SELECT employee_id, work_date, COUNT(*) AS n FROM attendance_adjustments WHERE ${w.sql} GROUP BY employee_id, work_date`, ...w.params),
       // roster code OT = overtime on a day off
       stmt(db, `SELECT employee_id, mark_date FROM roster_marks WHERE code = 'OT' AND ${wm.sql}`, ...wm.params),
+      stmt(db, `SELECT employee_id, work_date, kind, answer, asked_at FROM ot_questions WHERE ${w.sql}`, ...w.params),
     ]);
     const otDays = new Set((mkR.results as { employee_id: number; mark_date: string }[]).map((r) => `${r.employee_id}|${r.mark_date}`));
     const group = <T extends { employee_id: number }>(rows: T[], dateField: keyof T) => {
@@ -185,6 +186,7 @@ export async function recomputeMany(db: D1Database, keys: Key[], o: RecomputeOpt
       return m;
     };
     const insts = group(instR.results as unknown as InstanceRow[], 'shift_date');
+    const qs = group(qR.results as unknown as { employee_id: number; work_date: string; kind: 'EARLY' | 'LATE'; answer: OtAnswer | null; asked_at: number }[], 'work_date');
     const evs = group(evR.results as unknown as EvRow[], 'work_date');
     const brs = group(brR.results as unknown as BrRow[], 'work_date');
     const exs = group(exR.results as unknown as ExRow[], 'work_date');
@@ -197,7 +199,8 @@ export async function recomputeMany(db: D1Database, keys: Key[], o: RecomputeOpt
       const inst = insts.get(ks)?.[0] ?? null;
       const evRows = evs.get(ks) ?? [];
       const engineEvents: EngineEvent[] = evRows.map((e) => ({ id: e.id, type: e.event_type, ts: e.event_ts, tgMessageId: e.tg_message_id, receivedAt: e.received_at, source: e.source, voided: e.is_voided === 1 }));
-      const summary = computeSession({ events: engineEvents, instance: inst ? toEngineInstance(inst) : null, now: o.now, rules: rulesOf(empId), tz: o.tz, otDay: otDays.has(ks) });
+      const summary = computeSession({ events: engineEvents, instance: inst ? toEngineInstance(inst) : null, now: o.now, rules: rulesOf(empId), tz: o.tz, otDay: otDays.has(ks),
+        questions: (qs.get(ks) ?? []).map((q) => ({ kind: q.kind, answer: q.answer, askedAt: q.asked_at })) });
       out.set(ks, { key, summary, instance: inst });
       const existingEx = exs.get(ks) ?? [];
 
@@ -215,18 +218,18 @@ export async function recomputeMany(db: D1Database, keys: Key[], o: RecomputeOpt
       const s = summary;
       writes.push(stmt(db, `INSERT INTO attendance_sessions (employee_id, work_date, shift_instance_id, state, status, missing, scheduled_start_at, scheduled_end_at,
           actual_in_at, actual_out_at, late_min, early_min, break_count, open_break_count, total_break_ms, shift_duration_ms, net_worked_ms, break_exceeded,
-          exception_count, has_major_exception, adjusted, event_count, next_check_at, computed_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+          exception_count, has_major_exception, adjusted, event_count, next_check_at, computed_at, ot_ms)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT (employee_id, work_date) DO UPDATE SET shift_instance_id = excluded.shift_instance_id, state = excluded.state, status = excluded.status,
           missing = excluded.missing, scheduled_start_at = excluded.scheduled_start_at, scheduled_end_at = excluded.scheduled_end_at, actual_in_at = excluded.actual_in_at,
           actual_out_at = excluded.actual_out_at, late_min = excluded.late_min, early_min = excluded.early_min, break_count = excluded.break_count,
           open_break_count = excluded.open_break_count, total_break_ms = excluded.total_break_ms, shift_duration_ms = excluded.shift_duration_ms,
           net_worked_ms = excluded.net_worked_ms, break_exceeded = excluded.break_exceeded, exception_count = excluded.exception_count,
           has_major_exception = excluded.has_major_exception, adjusted = excluded.adjusted, event_count = excluded.event_count,
-          next_check_at = excluded.next_check_at, computed_at = excluded.computed_at`,
+          next_check_at = excluded.next_check_at, computed_at = excluded.computed_at, ot_ms = excluded.ot_ms`,
         empId, date, inst?.id ?? null, s.state, s.status, s.missing, s.schedIn, s.schedOut, s.inT, s.outT, s.lateMin, s.earlyMin, s.breakCount, s.openBreakCount,
         s.totalBreakMs, s.shiftDurMs, s.netMs, s.breakExceeded == null ? null : s.breakExceeded ? 1 : 0, s.flags.length, hasMajor(s.flags) ? 1 : 0,
-        (adjs.get(ks) ?? 0) > 0 ? 1 : 0, s.eventCount, s.nextCheckAt, o.now));
+        (adjs.get(ks) ?? 0) > 0 ? 1 : 0, s.eventCount, s.nextCheckAt, o.now, s.otMs || null));
 
       // breaks: rewrite only when they changed
       const oldB = (brs.get(ks) ?? []).sort((a, b) => a.seq - b.seq);

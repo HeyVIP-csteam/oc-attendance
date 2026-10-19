@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { DEFAULT_PARSER, EVENT_LABEL, EVENT_TYPES, type KeywordConfig, type ParserRules, ROSTER_COLORS } from '../../../src/shared/codes';
+import { type BotTexts, DEFAULT_BOT_TEXTS, DEFAULT_PARSER, EVENT_LABEL, EVENT_TYPES, type KeywordConfig, type ParserRules, ROSTER_COLORS } from '../../../src/shared/codes';
 import { toMin } from '../../../src/shared/time';
 import { CurSeg, Empty, ErrBox, Field, Modal, ModalActions, Mut, Tabs } from '../components/ui';
 import { api, ApiErr } from '../lib/api';
@@ -7,13 +7,13 @@ import { fmtDT } from '../lib/format';
 import { useI18n } from '../lib/i18n';
 import { type MetaRules, rulesOf, toast, useApi, useData, usePageState } from '../lib/store';
 
-type Tab = 'shift3' | 'cur' | 'kw' | 'rules' | 'codes' | 'bot' | 'admins';
+type Tab = 'shift3' | 'cur' | 'kw' | 'rules' | 'msgs' | 'codes' | 'bot' | 'admins';
 
 export function SettingsPage() {
   const { L } = useI18n();
   const { owner } = useData();
   const [s, set] = usePageState('st', () => ({ tab: 'shift3' as Tab }));
-  const all: [Tab, string][] = [['shift3', L('班次设置', 'Shift Setting')], ['cur', L('货币', 'Currency')], ['kw', L('打卡关键词', 'Punch keywords')], ['rules', L('考勤与异常规则', 'Attendance rules')], ['codes', L('排班代号', 'Roster codes')], ['bot', L('Bot 设置', 'Bot Setting')], ['admins', L('管理员账号', 'Admin accounts')]];
+  const all: [Tab, string][] = [['shift3', L('班次设置', 'Shift Setting')], ['cur', L('货币', 'Currency')], ['kw', L('打卡关键词', 'Punch keywords')], ['rules', L('考勤与异常规则', 'Attendance rules')], ['msgs', L('Bot 消息', 'Bot messages')], ['codes', L('排班代号', 'Roster codes')], ['bot', L('Bot 设置', 'Bot Setting')], ['admins', L('管理员账号', 'Admin accounts')]];
   // accounts other than the owner only set their own currencies' attendance rules
   const tabs = owner ? all : all.filter(([k]) => k === 'rules');
   const tab: Tab = tabs.some(([k]) => k === s.tab) ? s.tab : tabs[0][0];
@@ -24,6 +24,7 @@ export function SettingsPage() {
       {tab === 'cur' && <Currencies />}
       {tab === 'kw' && <Keywords />}
       {tab === 'rules' && <Rules />}
+      {tab === 'msgs' && <BotMessages />}
       {tab === 'codes' && <RosterCodes />}
       {tab === 'bot' && <Bots />}
       {tab === 'admins' && <Admins />}
@@ -175,8 +176,9 @@ function Rules() {
     [L('每日休息时间', 'Break time per day'), (r) => fmtMin(r.breakMinutes === undefined ? 90 : r.breakMinutes, r.breakUnit)],
     [L('迟到/早退列为异常', 'Late / early leave as exceptions'), (r) => (r.lateAsException ? L('是', 'Yes') : L('否', 'No'))],
     [L('Bot 回复', 'Bot replies'), (r) => (r.botReply ? L('开启', 'On') : L('关闭', 'Off'))],
-    [L('OT 门槛', 'OT threshold'), (r) => hm(Math.round((r.otHours ?? 9) * 60))],
-    [L('忘记下班卡提醒', 'Forgot clock-out reminder'), (r) => (r.forgotOutUnit === 'm' ? `${Math.round((r.forgotOutHours ?? 14) * 60)} min` : hm(Math.round((r.forgotOutHours ?? 14) * 60)))],
+    [L('提早上班问 OT', 'Ask OT on early clock in'), (r) => ((r.earlyAskMin ?? 30) > 0 ? `${r.earlyAskMin ?? 30} min` : L('关闭', 'Off'))],
+    [L('超时未下班问 OT', 'Ask OT with no clock out'), (r) => (r.forgotOutUnit === 'm' ? `${Math.round((r.forgotOutHours ?? 9.75) * 60)} min` : hm(Math.round((r.forgotOutHours ?? 9.75) * 60)))],
+    [L('谁可以按按钮', 'Who may answer'), (r) => (r.answerBy === 'own' ? L('只有员工本人', 'Only the employee') : L('群里任何人', 'Anyone in the group'))],
   ];
   if (!cur) return <div className="card empty">{L('请先在「货币」新增货币', 'Add a currency first (Currency tab)')}</div>;
   return (
@@ -206,22 +208,22 @@ function RulesForm({ cur }: { cur: string }) {
   const brMin0 = r0.breakMinutes === undefined ? 90 : r0.breakMinutes;
   const brUnit0: 'h' | 'm' = r0.breakUnit ?? 'm';
   const unit0: 'h' | 'm' = r0.windowUnit ?? (Number.isInteger(r0.windowHours) ? 'h' : 'm');
-  const fo0 = r0.forgotOutHours ?? 14;
+  const fo0 = r0.forgotOutHours ?? 9.75;
   const fu0: 'h' | 'm' = r0.forgotOutUnit ?? 'h';
-  const [v, setV] = useState({ unit: unit0, win: String(unit0 === 'm' ? Math.round(r0.windowHours * 60) : r0.windowHours), bunit: brUnit0, br: brMin0 == null ? '' : String(brUnit0 === 'h' ? Math.round((brMin0 / 60) * 100) / 100 : brMin0), lx: r0.lateAsException ? '1' : '0', bot: r0.botReply ? '1' : '0', ot: String(r0.otHours ?? 9), funit: fu0, fo: String(fu0 === 'm' ? Math.round(fo0 * 60) : fo0) });
+  const [v, setV] = useState({ unit: unit0, win: String(unit0 === 'm' ? Math.round(r0.windowHours * 60) : r0.windowHours), bunit: brUnit0, br: brMin0 == null ? '' : String(brUnit0 === 'h' ? Math.round((brMin0 / 60) * 100) / 100 : brMin0), lx: r0.lateAsException ? '1' : '0', bot: r0.botReply ? '1' : '0', ea: String(r0.earlyAskMin ?? 30), ab: r0.answerBy ?? 'any', funit: fu0, fo: String(fu0 === 'm' ? Math.round(fo0 * 60) : fo0) });
   const onErr = useErr();
   const winH = () => {
     const n = Number(v.win) || 0;
     const mins = Math.round(v.unit === 'm' ? n : n * 60);
     return Math.min(480, Math.max(5, mins)) / 60;
   };
-  // forgot clock-out reminder: 1–20 hours after clock in
-  const foH = () => { const n = Number(v.fo) || 14; return Math.min(1200, Math.max(60, Math.round(v.funit === 'm' ? n : n * 60))) / 60; };
+  // OT question when there is no clock out: 1–15 hours after clock in
+  const foH = () => { const n = Number(v.fo) || 9.75; return Math.min(900, Math.max(60, Math.round(v.funit === 'm' ? n : n * 60))) / 60; };
   const brMin = () => (v.br.trim() === '' ? null : Math.min(1440, Math.max(0, Math.round((Number(v.br) || 0) * (v.bunit === 'h' ? 60 : 1)))));
   const conv = (val: string, u: 'h' | 'm') => { if (val.trim() === '') return ''; const n = Number(val) || 0; return String(u === 'm' ? Math.round(n * 60) : Math.round((n / 60) * 100) / 100); };
   const save = async () => {
     try {
-      await api('/settings/rules', { method: 'PUT', body: { currency: cur, windowHours: winH(), windowUnit: v.unit, breakMinutes: brMin(), breakUnit: v.bunit, lateAsException: v.lx === '1', botReply: v.bot === '1', otHours: Math.min(24, Math.max(1, Number(v.ot) || 9)), forgotOutHours: foH(), forgotOutUnit: v.funit } });
+      await api('/settings/rules', { method: 'PUT', body: { currency: cur, windowHours: winH(), windowUnit: v.unit, breakMinutes: brMin(), breakUnit: v.bunit, lateAsException: v.lx === '1', botReply: v.bot === '1', forgotOutHours: foH(), forgotOutUnit: v.funit, earlyAskMin: Math.min(240, Math.max(0, Math.round(Number(v.ea) || 0))), answerBy: v.ab } });
       toast(L(`${cur} 规则已保存，${cur} 员工的考勤会重新计算`, `${cur} rules saved; ${cur} attendance is being recalculated`));
       await reloadMeta();
     } catch (e) { onErr(e); }
@@ -233,11 +235,57 @@ function RulesForm({ cur }: { cur: string }) {
         <div className="setrow"><label htmlFor="stBr">{L('每日休息时间（总计；留空 = 不限）', 'Break time per day (total; empty = no limit)')}</label><div className="setctl unitctl"><input id="stBr" type="number" min={0} step={v.bunit === 'm' ? 5 : 0.25} placeholder={L('不限', 'No limit')} value={v.br} disabled={readOnly} onChange={(e) => setV({ ...v, br: e.target.value })} /><select aria-label={L('单位', 'Unit')} value={v.bunit} disabled={readOnly} onChange={(e) => { const u = e.target.value as 'h' | 'm'; setV({ ...v, bunit: u, br: conv(v.br, u) }); }}><option value="h">{L('小时', 'Hours')}</option><option value="m">{L('分钟', 'Minutes')}</option></select></div></div>
         <div className="setrow"><label htmlFor="stLx">{L('迟到/早退是否也列为异常', 'Also list late / early leave as exceptions')}</label><div className="setctl"><select id="stLx" value={v.lx} disabled={readOnly} onChange={(e) => setV({ ...v, lx: e.target.value })}><option value="0">{L('否，只显示状态', 'No, status only')}</option><option value="1">{L('是', 'Yes')}</option></select></div></div>
         <div className="setrow"><label htmlFor="stBot">{L('Bot 在 Topic 回复确认', 'Bot replies in the topic')}</label><div className="setctl"><select id="stBot" value={v.bot} disabled={readOnly} onChange={(e) => setV({ ...v, bot: e.target.value })}><option value="1">{L('开启', 'On')}</option><option value="0">{L('关闭', 'Off')}</option></select></div></div>
-        <div className="setrow"><label htmlFor="stOt">{L('OT 门槛：上班到下班超过几小时，排班表标示 OT', 'OT threshold: hours from clock in to clock out before the roster shows OT')}</label><div className="setctl"><input id="stOt" type="number" min={1} max={24} step={0.5} value={v.ot} disabled={readOnly} onChange={(e) => setV({ ...v, ot: e.target.value })} /></div></div>
-        <div className="setrow"><label htmlFor="stFo">{L('忘记下班卡提醒：上班后超过多久没打下班卡', 'Forgot clock-out reminder: hours after clock in with no clock out')}</label><div className="setctl unitctl"><input id="stFo" type="number" min={v.funit === 'm' ? 60 : 1} max={v.funit === 'm' ? 1200 : 20} step={v.funit === 'm' ? 15 : 0.5} value={v.fo} disabled={readOnly} onChange={(e) => setV({ ...v, fo: e.target.value })} /><select aria-label={L('单位', 'Unit')} value={v.funit} disabled={readOnly} onChange={(e) => { const u = e.target.value as 'h' | 'm'; setV({ ...v, funit: u, fo: conv(v.fo, u) || v.fo }); }}><option value="h">{L('小时', 'Hours')}</option><option value="m">{L('分钟', 'Minutes')}</option></select></div></div>
+        <div className="setrow"><label htmlFor="stFo">{L('超时未下班问 OT：上班后超过多久还没打下班卡，bot 问是不是 OT', 'Ask OT with no clock out: time after clock in')}</label><div className="setctl unitctl"><input id="stFo" type="number" min={v.funit === 'm' ? 60 : 1} max={v.funit === 'm' ? 900 : 15} step={v.funit === 'm' ? 15 : 0.25} value={v.fo} disabled={readOnly} onChange={(e) => setV({ ...v, fo: e.target.value })} /><select aria-label={L('单位', 'Unit')} value={v.funit} disabled={readOnly} onChange={(e) => { const u = e.target.value as 'h' | 'm'; setV({ ...v, funit: u, fo: conv(v.fo, u) || v.fo }); }}><option value="h">{L('小时', 'Hours')}</option><option value="m">{L('分钟', 'Minutes')}</option></select></div></div>
+        <div className="setrow"><label htmlFor="stEa">{L('提早上班问 OT：比排班早多少分钟以上打卡，bot 问是不是 OT（0 = 不问）', 'Ask OT on early clock in: minutes before the shift (0 = do not ask)')}</label><div className="setctl"><input id="stEa" type="number" min={0} max={240} step={5} value={v.ea} disabled={readOnly} onChange={(e) => setV({ ...v, ea: e.target.value })} /></div></div>
+        <div className="setrow"><label htmlFor="stAb">{L('谁可以按 bot 的按钮', 'Who may answer the bot buttons')}</label><div className="setctl"><select id="stAb" value={v.ab} disabled={readOnly} onChange={(e) => setV({ ...v, ab: e.target.value as 'any' | 'own' })}><option value="any">{L('群里任何人', 'Anyone in the group')}</option><option value="own">{L('只有员工本人', 'Only the employee')}</option></select></div></div>
       </div>
       {!readOnly && <div className="setfoot"><button className="btn p" onClick={save}>{L(`保存 ${cur} 规则`, `Save ${cur} rules`)}</button></div>}
     </>
+  );
+}
+
+// ---------------------------------------------------------------- Bot messages (the OT questions and their buttons)
+function BotMessages() {
+  const { L } = useI18n();
+  const { meta, readOnly, reloadMeta } = useData();
+  const [v, setV] = useState<BotTexts>({ ...DEFAULT_BOT_TEXTS, ...(meta.botTexts ?? {}) });
+  const onErr = useErr();
+  const save = async () => {
+    try { await api('/settings/bot-texts', { method: 'PUT', body: v }); toast(L('Bot 消息已保存', 'Bot messages saved')); await reloadMeta(); } catch (e) { onErr(e); }
+  };
+  const f = (k: keyof BotTexts, label: string, btn = false) => (
+    <div className={`bmrow ${btn ? 'btn' : ''}`}>
+      <label>{label}</label>
+      {btn ? <input type="text" maxLength={40} value={v[k]} disabled={readOnly} onChange={(e) => setV({ ...v, [k]: e.target.value })} />
+        : <textarea rows={2} maxLength={400} value={v[k]} disabled={readOnly} onChange={(e) => setV({ ...v, [k]: e.target.value })} />}
+    </div>
+  );
+  return (
+    <div className="card"><h3>{L('Bot 消息', 'Bot messages')}</h3>
+      <p className="mut" style={{ fontSize: 12.5, margin: '0 0 12px', lineHeight: 1.6 }}>{L('会自动替换：', 'Filled in automatically: ')}<code>{'{name}'}</code> {L('员工姓名', 'employee name')} · <code>{'{shift}'}</code> {L('班次时间', 'shift time')} · <code>{'{in}'}</code> {L('上班打卡时间', 'clock-in time')} · <code>{'{hours}'}</code> {L('上班多久', 'time since clock in')} · <code>{'{out}'}</code> {L('下班时间（忘记打卡）', 'clock-out time (forgot)')}</p>
+      <div className="bmgrid">
+        <div className="bmcol">
+          <div className="bmh">{L('提早上班', 'Early clock in')}</div>
+          {f('earlyQ', L('问题', 'Question'))}
+          <div className="bmbtns">{f('earlyYes', L('按钮 1', 'Button 1'), true)}{f('earlyNo', L('按钮 2', 'Button 2'), true)}</div>
+          {f('earlyRYes', L(`按「${v.earlyYes}」后的回复`, `Reply to "${v.earlyYes}"`))}
+          {f('earlyRNo', L(`按「${v.earlyNo}」后的回复`, `Reply to "${v.earlyNo}"`))}
+        </div>
+        <div className="bmcol">
+          <div className="bmh">{L('超时未下班', 'No clock out')}</div>
+          {f('lateQ', L('问题', 'Question'))}
+          <div className="bmbtns">{f('lateStill', L('按钮 1', 'Button 1'), true)}{f('lateOt', L('按钮 2', 'Button 2'), true)}{f('lateForgot', L('按钮 3', 'Button 3'), true)}</div>
+          {f('lateRStill', L(`按「${v.lateStill}」后的回复（不计算 OT）`, `Reply to "${v.lateStill}" (no OT)`))}
+          {f('lateROt', L(`按「${v.lateOt}」后的回复（计算 OT）`, `Reply to "${v.lateOt}" (OT counted)`))}
+          {f('lateRForgot', L(`按「${v.lateForgot}」后的回复（下班时间 = 排班下班）`, `Reply to "${v.lateForgot}" (clock out = shift end)`))}
+        </div>
+      </div>
+      <div className="bmbtns" style={{ marginTop: 6 }}>{f('change', L('「更改答案」按钮', '"Change answer" button'), true)}{f('notYou', L('别人按时显示（只有员工本人可以回答时）', 'Shown when someone else presses (only the employee may answer)'), true)}</div>
+      {!readOnly && <div className="setfoot" style={{ gap: 8, display: 'flex', justifyContent: 'flex-end' }}>
+        <button className="btn" onClick={() => setV({ ...DEFAULT_BOT_TEXTS })}>{L('恢复预设文字', 'Reset to default')}</button>
+        <button className="btn p" onClick={save}>{L('保存', 'Save')}</button>
+      </div>}
+    </div>
   );
 }
 

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { EVENT_LABEL, EVENT_TYPES, type EventType, STATUSES } from '../../../src/shared/codes';
+import { DEFAULT_BOT_TEXTS, EVENT_LABEL, EVENT_TYPES, type EventType, STATUSES } from '../../../src/shared/codes';
 import { addDays } from '../../../src/shared/time';
 import { Cnt, CurB, CurrencyOptions, Drawer, EmpSearch, Empty, ErrBox, ExB, Field, Modal, Mut, Pager, ShiftName, ShiftOptions, StatusBadge, StatusOptions, TblTop } from '../components/ui';
 import { api, type ApiErr, qs } from '../lib/api';
@@ -13,7 +13,7 @@ export interface AttRow {
   employee_id: number; work_date: string; employee_code: string; name: string; currency_code: string | null; shift_id: number | null; shift_code: string | null; shift_name: string | null; mark_code?: string | null;
   adjustment_status: string | null; scheduled_start_at: number | null; actual_in_at: number | null; late_min: number | null; scheduled_end_at: number | null; actual_out_at: number | null;
   early_min: number | null; break_count: number; open_break_count: number; total_break_ms: number; shift_duration_ms: number | null; net_worked_ms: number | null; status: string; state: string;
-  missing: string; exception_count: number; has_major_exception: number; adjusted: number; break_exceeded: number | null; session_id: number;
+  missing: string; exception_count: number; has_major_exception: number; adjusted: number; break_exceeded: number | null; session_id: number; ot_ms?: number | null;
 }
 
 export function useDetailExport() {
@@ -30,7 +30,7 @@ export function useDetailExport() {
 const COLS: [string, string, string][] = [
   ['emp', 'PSD ID', 'PSD ID'], ['name', '员工姓名', 'Employee Name'], ['cur', '货币', 'Currency'], ['workDate', '日期', 'Date'], ['shiftName', '班次', 'Shift'], ['schedIn', '排班上班', 'Sched In'], ['inT', '实际上班', 'Actual In'],
   ['lateMin', '迟到', 'Late'], ['schedOut', '排班下班', 'Sched Out'], ['outT', '实际下班', 'Actual Out'], ['earlyMin', '早退', 'Early'], ['completedBreaks', '休息', 'Breaks'],
-  ['totalBreak', '休息总计', 'Break Total'], ['net', '净工时', 'Net Worked'], ['status', '状态', 'Status'], ['flags', '异常', 'Exceptions'],
+  ['totalBreak', '休息总计', 'Break Total'], ['net', '净工时', 'Net Worked'], ['ot', 'OT', 'OT'], ['status', '状态', 'Status'], ['flags', '异常', 'Exceptions'],
 ];
 
 export function Attendance() {
@@ -59,7 +59,7 @@ export function Attendance() {
         <>
           <TblTop left={<Cnt n={data.total} />} size={f.size} onSize={(size) => set({ size, page: 1 })} />
           <div className="tw"><table className="attbl"><thead><tr>
-            {COLS.map(([k, zh, en]) => <th key={k} className={`s ${k === 'emp' ? 'pid' : ['lateMin', 'earlyMin', 'completedBreaks', 'totalBreak', 'net'].includes(k) ? 'n' : ''}`} onClick={() => sortBy(k)}>{L(zh, en)}{f.sort === k ? (f.dir > 0 ? ' ▲' : ' ▼') : ''}</th>)}
+            {COLS.map(([k, zh, en]) => <th key={k} className={`s ${k === 'emp' ? 'pid' : ['lateMin', 'earlyMin', 'completedBreaks', 'totalBreak', 'net', 'ot'].includes(k) ? 'n' : ''}`} onClick={() => sortBy(k)}>{L(zh, en)}{f.sort === k ? (f.dir > 0 ? ' ▲' : ' ▼') : ''}</th>)}
           </tr></thead><tbody>
             {data.rows.map((r) => (
               <tr key={`${r.employee_id}|${r.work_date}`} className="cl" onClick={() => setOpen({ emp: r.employee_id, date: r.work_date })}>
@@ -68,7 +68,7 @@ export function Attendance() {
                 <td>{r.scheduled_start_at ? fmtT(r.scheduled_start_at) : <Mut />}</td><td>{r.actual_in_at ? fmtT(r.actual_in_at) : <Mut />}</td><td className="n">{num(r.late_min)}</td>
                 <td>{r.scheduled_end_at ? fmtT(r.scheduled_end_at) : <Mut />}</td><td>{r.actual_out_at ? fmtT(r.actual_out_at) : <Mut />}</td><td className="n">{num(r.early_min)}</td>
                 <td className="n">{r.break_count}{r.open_break_count > 0 && <> <span className="b r">+{r.open_break_count} {L('未结束', 'open')}</span></>}</td>
-                <td className="n">{fmtDur(r.total_break_ms)}</td><td className="n">{r.net_worked_ms == null ? <Mut /> : fmtDur(r.net_worked_ms)}</td>
+                <td className="n">{fmtDur(r.total_break_ms)}</td><td className="n">{r.net_worked_ms == null ? <Mut /> : fmtDur(r.net_worked_ms)}</td><td className="n">{r.ot_ms ? <b style={{ color: LATE_RED }}>{fmtDur(r.ot_ms)}</b> : <Mut />}</td>
                 <td><StatusBadge st={r.status} mark={r.mark_code} />{r.adjusted ? <> <span className="b v">{L('已修正', 'Adjusted')}</span></> : null}</td>
                 <td className="c">{r.exception_count ? <span className={`b ${r.has_major_exception ? 'r' : ''}`}>{r.exception_count}</span> : <span className="mut">0</span>}</td>
               </tr>
@@ -91,6 +91,7 @@ interface Detail {
   events: { id: number; event_type: EventType; event_ts: number; source: string; is_voided: number; sm_result: string | null; adjustment_id: number | null; voided_by_adjustment_id: number | null; raw_text: string | null; tg_message_id: number | null; message_thread_id: number | null; from_user_id: number | null; telegram_message_ts: number | null; raw_received_at: number | null; raw_source?: string | null; processed_at: number | null }[];
   breaks: { seq: number; start_at: number; end_at: number | null; duration_ms: number | null; status: string; remark: string | null }[];
   exceptions: { id: number; code: string; occurred_at: number; detail: string | null; status: string }[];
+  otQuestions?: { kind: 'EARLY' | 'LATE'; asked_at: number; answer: 'YES' | 'NO' | 'STILL' | 'OT' | 'FORGOT' | null; answered_by: string | null; answered_at: number | null }[];
   adjustments: { id: number; action: string; event_type: EventType | null; event_ts: number | null; target_event_id: number | null; reason: string; before_json: string | null; after_json: string | null; created_by: string; created_at: number }[];
 }
 
@@ -213,6 +214,20 @@ export function SessionDrawer({ emp, date, onClose }: { emp: number; date: strin
               )}
             </div>
 
+            {(data.otQuestions ?? []).length > 0 && (
+              <div className="sd-card">
+                <div className="sd-ch"><h3>{L('OT 问题', 'OT questions')}</h3><span className="c">{s?.ot_ms ? L(`OT ${fmtDur(s.ot_ms)}`, `OT ${fmtDur(s.ot_ms)}`) : L('不计算 OT', 'No OT counted')}</span></div>
+                <table className="sd-t"><thead><tr><th>{L('问题', 'Question')}</th><th>{L('发送时间', 'Asked')}</th><th>{L('回答', 'Answer')}</th><th>{L('回答人', 'Answered by')}</th><th>{L('回答时间', 'Answered at')}</th></tr></thead><tbody>
+                  {data.otQuestions!.map((q) => {
+                    const t = { ...DEFAULT_BOT_TEXTS, ...(meta.botTexts ?? {}) };
+                    const lab = q.answer ? { YES: t.earlyYes, NO: t.earlyNo, STILL: t.lateStill, OT: t.lateOt, FORGOT: t.lateForgot }[q.answer] : null;
+                    const cls = q.answer === 'YES' || q.answer === 'OT' ? 'w' : q.answer === 'FORGOT' ? 'r' : 'ok';
+                    return <tr key={q.kind}><td>{q.kind === 'EARLY' ? L('提早上班', 'Early clock in') : L('超时未下班', 'No clock out')}</td><td>{fmtT(q.asked_at)}</td>
+                      <td>{lab ? <span className={`b ${cls}`}>{lab}</span> : <span className="b">{L('未回答', 'No answer')}</span>}</td><td>{q.answered_by ?? <Mut />}</td><td>{q.answered_at ? fmtT(q.answered_at) : <Mut />}</td></tr>;
+                  })}
+                </tbody></table>
+              </div>
+            )}
             <div className="sd-two">
               <div className="sd-card">
                 <div className="sd-ch"><h3>{L('休息明细', 'Breaks')}</h3><span className="c">{L('合计', 'Total')} {fmtDur(s?.total_break_ms ?? 0)}</span></div>

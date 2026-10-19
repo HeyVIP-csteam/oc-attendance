@@ -6,7 +6,8 @@ import { decryptString, redact } from './crypto';
 import { first } from './db';
 
 export const TELEGRAM_API = 'https://api.telegram.org';
-export const ALLOWED_UPDATES = ['message', 'edited_message'] as const;
+// callback_query = a press on the buttons under the bot's OT questions
+export const ALLOWED_UPDATES = ['message', 'edited_message', 'callback_query'] as const;
 
 export class TelegramError extends Error {
   constructor(message: string, public errorCode?: number) { super(redact(message)); }

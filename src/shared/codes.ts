@@ -41,6 +41,8 @@ export const EXCEPTIONS = {
   OUT_OF_ORDER: { label: bi('消息乱序到达', 'Out-of-order message'), sev: 'LOW' },
   INVALID_TIME_ORDER: { label: bi('时间顺序无效', 'Invalid time order'), sev: 'MEDIUM' },
   BREAK_LIMIT_EXCEEDED: { label: bi('超过休息规则', 'Break limit exceeded'), sev: 'LOW' },
+  OT_NO_ANSWER: { label: bi('未回答 OT 问题', 'No answer to the OT question'), sev: 'LOW' },
+  FORGOT_CLOCK_OUT: { label: bi('忘记下班打卡（按钮）', 'Forgot clock out (button)'), sev: 'MEDIUM' },
   LATE: { label: bi('迟到', 'Late'), sev: 'LOW' },
   EARLY_LEAVE: { label: bi('早退', 'Early leave'), sev: 'LOW' },
 } as const satisfies Record<string, { label: Bi; sev: Severity }>;
@@ -76,14 +78,18 @@ export interface Rules {
   breakMinutes: number | null; // total break allowed per day, in minutes (null = no limit); applies to every shift
   breakUnit?: 'h' | 'm';      // how the admin entered it (display only)
   otHours: number;            // on-shift time (clock in → clock out) above this many hours is tagged OT on the roster
-  forgotOutHours: number;     // no clock out this many hours after clock in → MISSING_CLOCK_OUT + a reminder in the topic (if bot replies are on)
+  forgotOutHours: number;     // no clock out this many hours after clock in → the bot asks "Are you on OT?" (if bot replies are on)
   forgotOutUnit?: 'h' | 'm';  // how the admin entered it (display only)
+  earlyAskMin: number;        // clock in at least this many minutes before the shift → the bot asks "Is this OT?" (0 = off)
+  answerBy: 'any' | 'own';    // who may press the bot's buttons: anyone in the group, or only the employee
 }
 
 /** Fixed thresholds (not user-editable; removed from the UI by request). */
 export const FIXED = {
   missingInHours: 2,        // no clock-in this long after scheduled start → ABSENT / NO_SHOW
   breakNotEndedMin: 120,    // an open break older than this → BREAK_NOT_ENDED
+  missingOutHours: 16,      // no clock out this long after clock in → MISSING_CLOCK_OUT
+  otAnswerWaitMin: 120,     // an OT question still unanswered after this → OT_NO_ANSWER
   delayThresholdMin: 5,     // received_at − telegram time above this → DELAYED_DELIVERY
   openSessionMaxHours: 20,  // a BREAK/RESUME/OUT is attached to an open session started within this many hours
 } as const;
@@ -105,7 +111,7 @@ export interface ParserRules {
   typedTimeReview: boolean;
 }
 export const DEFAULT_PARSER: ParserRules = { skipLabels: [], typoTolerance: true, ignoreBrackets: true, typedTimeReview: true };
-export const DEFAULT_RULES: Rules = { windowHours: 4, windowUnit: 'h', lateAsException: false, botReply: true, otHours: 9, breakMinutes: 90, breakUnit: 'm', forgotOutHours: 14, forgotOutUnit: 'h' };
+export const DEFAULT_RULES: Rules = { windowHours: 4, windowUnit: 'h', lateAsException: false, botReply: true, otHours: 9, breakMinutes: 90, breakUnit: 'm', forgotOutHours: 9.75, forgotOutUnit: 'h', earlyAskMin: 30, answerBy: 'any' };
 
 export const BIZ_TZ_DEFAULT = 'Asia/Colombo';
 
@@ -117,3 +123,25 @@ export const ROSTER_COLORS: [string, string][] = [
   ['#0891b2', '#ffffff'], ['#0284c7', '#ffffff'], ['#2563eb', '#ffffff'], ['#4f46e5', '#ffffff'], ['#7c3aed', '#ffffff'], ['#9333ea', '#ffffff'], ['#db2777', '#ffffff'], ['#e11d48', '#ffffff'],
 ];
 export interface RosterCode { code: string; name: string; color: number }
+
+/** Answers to the bot's OT questions. EARLY: clocked in early (YES = OT / NO); LATE: no clock out after the set hours. */
+export type OtAnswer = 'YES' | 'NO' | 'STILL' | 'OT' | 'FORGOT';
+
+/** Texts of the bot's OT questions (Settings → Bot messages). {name} {shift} {in} {hours} {out} are filled in. */
+export interface BotTexts {
+  earlyQ: string; earlyYes: string; earlyNo: string; earlyRYes: string; earlyRNo: string;
+  lateQ: string; lateStill: string; lateOt: string; lateForgot: string; lateRStill: string; lateROt: string; lateRForgot: string;
+  change: string; notYou: string;
+}
+export const DEFAULT_BOT_TEXTS: BotTexts = {
+  earlyQ: '⏰ Your shift is {shift}, but you clocked in early at {in}. Is this OT?',
+  earlyYes: 'Yes', earlyNo: 'No',
+  earlyRYes: '✅ Recorded as OT from {in}. Have a good shift!',
+  earlyRNo: '✅ Recorded. Your clock in is {in}. Have a good shift!',
+  lateQ: '⏰ Your shift is {shift}. You clocked in at {in} and have not clocked out for {hours}. Are you on OT?',
+  lateStill: 'Still on working', lateOt: 'Yes, OT', lateForgot: 'Forgot clock out',
+  lateRStill: 'OK, thank you for your response. Have a nice evening!',
+  lateROt: 'OK, please clock out again when your OT ends. Good luck with your work!',
+  lateRForgot: '✅ Recorded: CS forgot clock out — time {out}.',
+  change: 'Change answer', notYou: 'This button is not for you',
+};

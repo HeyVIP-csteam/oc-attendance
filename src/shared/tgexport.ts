@@ -28,13 +28,43 @@ export function readTelegramExport(json: unknown): ExportInfo {
   return { name: d.name ?? '', chatId, messages, topicsSince };
 }
 
-/** The name after "Agent :" in a punch message ("Start of Shift Agent :Ali Khan date: 17/10/2026" → "Ali Khan"), or null. */
-export function agentName(text: string): string | null {
-  const m = /\bagent(?:\s*name)?\s*[:：\-]\s*([^\n:：|,;/]+?)(?=\s+(?:date|time|shift|id|psd|day)\b|\s*[\n:：|,;/]|\s*$)/i.exec(text);
-  if (!m) return null;
-  const n = m[1].replace(/[^\p{L}\p{N} .'-]/gu, ' ').replace(/\s+/g, ' ').trim();
-  return n && n.length <= 40 && /\p{L}/u.test(n) ? n : null;
+// words that are never a person's name in a punch message (the punch keywords are added by the caller)
+const STOP = new Set(('in out back break breaks short long dinner lunch toilet wc taking take took log login logout logged done for the day eod end start of shift online offline ' +
+  'to work team already clocked clock hour hours hr hrs min mins minute minutes sec eat meal prayer pray tea coffee washroom restroom am pm today now and a an my is i im ' +
+  'agent name date time assigned again resume resuming started starting finish finished over off on with be will').split(' '));
+
+/** A person's name in a free-text word list, or null ("Joan", "Michael Den" — letters only, at most 3 words, no punch words). */
+function cleanName(raw: string, stop: Set<string>): string | null {
+  const n = raw.replace(/[[\](){}【】「」"'*~]/g, ' ').replace(/[.,!?:;]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const w = n.split(' ').filter(Boolean);
+  if (!w.length || w.length > 3 || n.length < 2 || n.length > 40) return null;
+  if (w.some((x) => !/^\p{L}+$/u.test(x) || STOP.has(x.toLowerCase()) || stop.has(x.toLowerCase()))) return null;
+  return w.map((x) => x[0].toUpperCase() + x.slice(1).toLowerCase()).join(' ');
 }
+
+/**
+ * The name of the person a punch message is about, written in the message itself:
+ * "Agent: Joan" · "Break — Darsh" · "Log in for the day _ Michael den." · "Taking Break ( David )" · a last line with only a name.
+ * `stop` = words that are punch keywords (never a name).
+ */
+export function personName(text: string, stop: Set<string> = new Set()): string | null {
+  const t = text.trim();
+  const ag = /\bagent(?:\s*name)?\s*[:：\-]\s*([^\n]+)/i.exec(t);
+  if (ag) return cleanName(ag[1].split(/\s+(?:date|time|shift|id|psd|day|assigned)\b|[:：|,;/]/i)[0], stop);
+  const lines = t.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const last = lines[lines.length - 1] ?? '';
+  const br = /[(（]\s*([^()（）]*?)\s*[)）]\s*[.!]*$/.exec(last);
+  if (br && cleanName(br[1], stop)) return cleanName(br[1], stop);
+  const parts = last.split(/\s*[—–_]+\s*|\s+-+\s*|\s*-+\s+/);
+  if (parts.length > 1) { const n = cleanName(parts[parts.length - 1].replace(/\s*[(（][^)）]*[)）]\s*$/, ''), stop); if (n) return n; }
+  if (lines.length > 1) return cleanName(last, stop);
+  return null;
+}
+/** @deprecated name kept for older callers */
+export const agentName = (text: string): string | null => personName(text);
+
+/** A name as a key for remembering it ("Michael  den." → "michael den"). */
+export const nameKey = (n: string) => n.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 
 const tokens = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim().split(' ').filter(Boolean);
 

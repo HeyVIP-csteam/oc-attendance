@@ -8,7 +8,7 @@ import { ExportHtmlButton } from '../components/ExportHtml';
 import { countReports, exportReports } from '../lib/exports';
 import { type AttRow, useDetailExport } from './Attendance';
 
-interface SummaryRow { employee_id: number; employee_code: string; name: string; scheduled: number; present: number; absent: number; late_times: number; late_min: number; early_times: number; early_min: number; breaks: number; break_ms: number; shift_ms: number; exceptions: number }
+interface SummaryRow { employee_id: number; employee_code: string; name: string; scheduled: number; present: number; absent: number; late_times: number; late_min: number; early_times: number; early_min: number; breaks: number; break_ms: number; shift_ms: number; ot_ms?: number; exceptions: number }
 
 /** Status = All → employee summary; a specific status → the matching attendance rows. */
 export function Reports() {
@@ -25,8 +25,8 @@ export function Reports() {
   let rows: (string | number)[][] = [];
   const left: number[] = [0]; // PSD ID
   if (data?.mode === 'summary') {
-    cols = L('PSD ID|员工姓名|排班|出勤|缺勤|迟到次数|迟到时长|早退次数|早退时长|休息次数|休息总时长|总工时|异常数', 'PSD ID|Employee Name|Scheduled|Present|Absent|Late (times)|Late (time)|Early (times)|Early (time)|Breaks|Total Break|Total Shift|Exceptions').split('|');
-    rows = (data.rows as SummaryRow[]).map((a) => [a.employee_code, a.name, a.scheduled ?? 0, a.present ?? 0, a.absent ?? 0, a.late_times ?? 0, a.late_min ? fmtMin(a.late_min) : 0, a.early_times ?? 0, a.early_min ? fmtMin(a.early_min) : 0, a.breaks ?? 0, fmtDur(a.break_ms), fmtDur(a.shift_ms), a.exceptions]);
+    cols = L('PSD ID|员工姓名|排班|出勤|缺勤|迟到次数|迟到时长|早退次数|早退时长|休息次数|休息总时长|总工时|OT|异常数', 'PSD ID|Employee Name|Scheduled|Present|Absent|Late (times)|Late (time)|Early (times)|Early (time)|Breaks|Total Break|Total Shift|OT|Exceptions').split('|');
+    rows = (data.rows as SummaryRow[]).map((a) => [a.employee_code, a.name, a.scheduled ?? 0, a.present ?? 0, a.absent ?? 0, a.late_times ?? 0, a.late_min ? fmtMin(a.late_min) : 0, a.early_times ?? 0, a.early_min ? fmtMin(a.early_min) : 0, a.breaks ?? 0, fmtDur(a.break_ms), fmtDur(a.shift_ms), a.ot_ms ? fmtDur(a.ot_ms) : '—', a.exceptions]);
   } else if (data?.mode === 'detail') {
     cols = ex.cols();
     rows = (data.rows as AttRow[]).map((r) => { const x = ex.row(r, (s) => dt((STATUSES as any)[s]?.label ?? s)) as (string | number)[]; x[7] = r.late_min ? fmtMin(r.late_min) : x[7]; x[10] = r.early_min ? fmtMin(r.early_min) : x[10]; return x; });

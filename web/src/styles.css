@@ -415,3 +415,11 @@ select.need{border-color:#f59e0b;background:#fffbeb}
 .xfg{grid-template-columns:1fr 1fr}.xfg .full{grid-column:1 / -1}
 .xquick{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap}
 .xhint{color:var(--mut);font-size:12.5px;margin-top:10px}
+/* Settings → Bot messages */
+.bmgrid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.bmcol{border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.bmh{font-weight:700;margin-bottom:8px}
+.bmrow{margin-bottom:10px}.bmrow label{display:block;font-size:12px;color:var(--mut);margin-bottom:3px}
+.bmrow textarea,.bmrow input{width:100%;font:inherit;resize:vertical}
+.bmbtns{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}
+@media (max-width:900px){.bmgrid{grid-template-columns:1fr}}

@@ -253,9 +253,9 @@ describe('missing punches and the cron job', () => {
     await h.cron(lk(D, '09:15'));
     expect((await h.session(e2, D))!.status).toBe('ABSENT');
     expect((await h.session(e1, D))!.status).toBe('WORKING');
-    await h.cron(lk(D, '20:45'));
-    expect((await h.session(e1, D))!.status).toBe('WORKING'); // 14 h after clock in (default) is 21:00
-    await h.cron(lk(D, '21:15'));
+    await h.cron(lk(D, '22:45'));
+    expect((await h.session(e1, D))!.status).toBe('WORKING'); // missing clock out: 16 h after clock in = 23:00
+    await h.cron(lk(D, '23:15'));
     expect((await h.session(e1, D))).toMatchObject({ status: 'INCOMPLETE', missing: 'MISSING_OUT' });
     const ex = await h.req('GET', '/api/exceptions?status=OPEN');
     expect(ex.json.rows.map((x: any) => x.code).sort()).toEqual(['MISSING_CLOCK_OUT', 'NO_SHOW']);
@@ -330,7 +330,7 @@ describe('admin corrections and audit (test 16)', () => {
     const { h, e1 } = await fixture();
     await h.roster(e1, D, 'A');
     await h.send({ text: 'IN', ts: lk(D, '07:00'), thread: 1001 });
-    await h.cron(lk(D, '21:30'));
+    await h.cron(lk(D, '23:30'));
     const ex = (await h.req('GET', '/api/exceptions?code=MISSING_CLOCK_OUT')).json.rows[0];
     const fix = (await h.req('GET', `/api/exceptions/${ex.id}/fix`)).json.fix;
     expect(fix).toMatchObject({ employeeId: e1, workDate: D, type: 'CLOCK_OUT', ts: lk(D, '15:00'), on: true });
@@ -437,7 +437,7 @@ describe('security (test 17)', () => {
     expect(audit[0].after_json).toContain('••••');
     expect(audit[0].after_json).not.toContain('AAH');
     const setWebhook = h.tg.find((c) => c.method === 'setWebhook')!;
-    expect(setWebhook.body.allowed_updates).toEqual(['message', 'edited_message']);
+    expect(setWebhook.body.allowed_updates).toEqual(['message', 'edited_message', 'callback_query']);
     expect(String(setWebhook.body.secret_token)).toMatch(/^[A-Za-z0-9_-]{40,}$/);
   });
 
@@ -707,22 +707,20 @@ describe('roster hides deactivated employees', () => {
 });
 
 describe('roster OT tag', () => {
-  it('worked on a day off, or on shift longer than the OT threshold → listed as OT', async () => {
+  it('worked on a day off → OT; a long day is OT only when confirmed through the bot; no clock out → never OT', async () => {
     const { h, e1, e2 } = await fixture();
     await h.roster(e1, D, 'A'); // A = 07:00–15:00
     await h.send({ text: 'IN', ts: lk(D, '05:00'), thread: 1001 });
-    await h.send({ text: 'OUT', ts: lk(D, '15:30'), thread: 1001 }); // 10h30m on shift
+    await h.send({ text: 'OUT', ts: lk(D, '15:30'), thread: 1001 }); // 10h30m on shift, nobody confirmed OT
     await h.send({ text: 'IN', ts: lk(D, '09:00'), thread: 1002 }); // E002 has no shift: day off
-    // no clock out yet (or forgot to clock out) → not OT
-    expect((await h.req('GET', `/api/roster?from=${D}&to=${D}`)).json.ot.map((o: any) => [o.employee_id, o.kind])).toEqual([[e1, 'LONG']]);
+    const ot = async () => (await h.req('GET', `/api/roster?from=${D}&to=${D}`)).json.ot.map((o: any) => [o.employee_id, o.kind]).sort();
+    expect(await ot()).toEqual([]); // E002 has not clocked out yet
     await h.send({ text: 'OUT', ts: lk(D, '13:00'), thread: 1002 });
-    const r = await h.req('GET', `/api/roster?from=${D}&to=${D}`);
-    const ot = r.json.ot.map((o: any) => [o.employee_id, o.kind]).sort();
-    expect(ot).toEqual([[e1, 'LONG'], [e2, 'OFF']].sort());
-    await h.req('PUT', '/api/settings/rules', { windowHours: 4, lateAsException: false, botReply: true, otHours: 11 });
-    expect((await h.req('GET', `/api/roster?from=${D}&to=${D}`)).json.ot.map((o: any) => o.employee_id)).toEqual([e2]);
+    expect(await ot()).toEqual([[e2, 'OFF']]);
+    expect((await h.session(e1, D))!.ot_ms).toBeNull();
   });
 });
+
 
 describe('shift matching window in minutes', () => {
   it('accepts a 30-minute window and keeps the chosen unit', async () => {
@@ -1053,54 +1051,6 @@ describe('currency access (owner / limited admin)', () => {
   });
 });
 
-describe('forgot clock-out reminder', () => {
-  const reminders = (h: Harness) => h.tg.filter((x) => x.method === 'sendMessage' && String(x.body.text).startsWith('⏰'));
-
-  it('reminds once in the topic after the set hours; the exception appears at the same time', async () => {
-    const { h, e1 } = await fixture();
-    await h.roster(e1, D, 'A');
-    await h.send({ text: 'IN', ts: lk(D, '07:00'), thread: 1001 });
-    await h.req('PUT', '/api/settings/rules', { currency: 'LKR', windowHours: 4, lateAsException: false, botReply: true, forgotOutHours: 12 });
-    await h.cron(lk(D, '18:50'));
-    expect(reminders(h)).toHaveLength(0);
-    await h.cron(lk(D, '19:05'));
-    const r = reminders(h);
-    expect(r).toHaveLength(1);
-    expect(r[0].body).toMatchObject({ chat_id: CHAT, message_thread_id: 1001 });
-    expect(r[0].body.text).toBe('⏰ Reminder: you clocked in at 07:00 and have not clocked out for over 12 hours. Did you forget to clock out? Please tell your team leader your actual clock-out time.');
-    expect((await h.session(e1, D))).toMatchObject({ missing: 'MISSING_OUT' });
-    await h.cron(lk(D, '19:20'));
-    await h.cron(lk(D, '19:35'));
-    expect(reminders(h)).toHaveLength(1); // only once
-  });
-
-  it('no reminder when bot replies are off, or when the employee clocked out', async () => {
-    const { h, e1, e2 } = await fixture();
-    await h.send({ text: 'IN', ts: lk(D, '07:00'), thread: 1001 });
-    await h.send({ text: 'IN', ts: lk(D, '07:00'), thread: 1002 });
-    await h.send({ text: 'OUT', ts: lk(D, '15:00'), thread: 1002 });
-    await h.req('PUT', '/api/settings/rules', { currency: 'LKR', windowHours: 4, lateAsException: false, botReply: false, forgotOutHours: 14 });
-    await h.cron(lk(D, '21:05'));
-    expect(reminders(h)).toHaveLength(0);
-    expect((await h.session(e1, D))!.missing).toBe('MISSING_OUT'); // the exception still appears
-    expect((await h.session(e2, D))!.missing).toBe('NONE');
-  });
-
-  it('old open sessions are never reminded (e.g. right after a deploy)', async () => {
-    const { h } = await fixture();
-    await h.send({ text: 'IN', ts: lk(D, '07:00'), thread: 1001 });
-    await h.cron(lk(D, '23:30')); // due 21:00, more than 2 h ago
-    expect(reminders(h)).toHaveLength(0);
-  });
-
-  it('the setting is limited to 1–20 hours', async () => {
-    const { h } = await fixture();
-    expect((await h.req('PUT', '/api/settings/rules', { currency: 'LKR', windowHours: 4, lateAsException: false, botReply: true, forgotOutHours: 21 })).status).toBe(400);
-    expect((await h.req('PUT', '/api/settings/rules', { currency: 'LKR', windowHours: 4, lateAsException: false, botReply: true, forgotOutHours: 13.5, forgotOutUnit: 'm' })).status).toBe(200);
-    expect((await h.req('GET', '/api/meta')).json.rulesCur.LKR).toMatchObject({ forgotOutHours: 13.5, forgotOutUnit: 'm' });
-  });
-});
-
 describe('roster code OT (overtime on a day off)', () => {
   it('punches on an OT day are not an unscheduled punch, and the roster shows OT once clocked out', async () => {
     const { h, e1, e2 } = await fixture();
@@ -1164,20 +1114,20 @@ describe('telegram history import — group without topics', () => {
     const body = { chatId: x.chatId, fileName: 'result.json', messages: x.messages, topicsSince: x.topicsSince };
     let plan = (await h.req('POST', '/api/telegram-import', body)).json.plan;
     const by = (p: any) => Object.fromEntries(p.senders.map((s: any) => [s.key, [s.by, s.employeeId]]));
-    expect(by(plan)).toEqual({ 111: ['NAME', ak], 222: ['TWO', null], 333: ['KNOWN', e2], 444: ['NONE', null] });
-    expect(plan.senders.find((s: any) => s.key === '222').cands.map((c: any) => c.id).sort()).toEqual([ak, ar].sort());
+    expect(by(plan)).toEqual({ 'u:111': ['NAME', ak], 'u:222': ['TWO', null], 'u:333': ['KNOWN', e2], 'u:444': ['NONE', null] });
+    expect(plan.senders.find((s: any) => s.key === 'u:222').cands.map((c: any) => c.id).sort()).toEqual([ak, ar].sort());
     expect(plan).toMatchObject({ toAdd: 5, need: 2 });
     // the admin chooses Ali Raza for account 222; account 444 is left out
-    plan = (await h.req('POST', '/api/telegram-import', { ...body, senders: { 222: ar } })).json.plan;
+    plan = (await h.req('POST', '/api/telegram-import', { ...body, senders: { 'u:222': ar } })).json.plan;
     expect(plan).toMatchObject({ toAdd: 6, need: 1 });
-    const r = await h.req('POST', '/api/telegram-import', { ...body, senders: { 222: ar }, apply: true, reason: 'Old group without topics' });
+    const r = await h.req('POST', '/api/telegram-import', { ...body, senders: { 'u:222': ar }, apply: true, reason: 'Old group without topics' });
     expect(r.json.applied.added).toBe(6);
     expect((await h.session(ak, D))).toMatchObject({ actual_in_at: lk(D, '07:00'), actual_out_at: lk(D, '15:01'), break_count: 1 });
     expect((await h.session(ar, D))!.actual_in_at).toBe(lk(D, '07:02'));
     expect(h.db.get('SELECT employee_id FROM tg_sender_employees WHERE from_user_id = 222')).toEqual({ employee_id: ar });
     // next time the choice is remembered
     const again = (await h.req('POST', '/api/telegram-import', body)).json.plan;
-    expect(by(again)['222']).toEqual(['SAVED', ar]);
+    expect(by(again)['u:222']).toEqual(['SAVED', ar]);
     expect(again.toAdd).toBe(0);
   });
 
@@ -1196,5 +1146,131 @@ describe('telegram history import — group without topics', () => {
     const plan = (await h.req('POST', '/api/telegram-import', { chatId: x.chatId, fileName: 'r.json', messages: x.messages, topicsSince: x.topicsSince })).json.plan;
     expect(plan).toMatchObject({ toAdd: 1, noTopic: 1 });
     expect(plan.rows.find((r: any) => r.id === 7001)).toMatchObject({ result: 'NEW', employeeId: e2 });
+  });
+});
+
+describe('OT questions with buttons', () => {
+  const qOf = (h: Harness, kind: string) => h.db.get<any>('SELECT * FROM ot_questions WHERE kind = ?', kind);
+  const sent = (h: Harness, starts: string) => h.tg.filter((x) => x.method === 'sendMessage' && String(x.body.text).startsWith(starts));
+
+  it('early clock in: the bot asks right away; Yes counts OT from the clock in, the answer can be changed, anyone may answer', async () => {
+    const { h, e1 } = await fixture();
+    await h.roster(e1, D, 'A'); // 07:00–15:00
+    await h.send({ text: 'IN', ts: lk(D, '06:20'), thread: 1001, fromId: 111 });
+    const q = qOf(h, 'EARLY');
+    expect(q).toMatchObject({ employee_id: e1, work_date: D, owner_tg_id: 111, answer: null });
+    const ask = sent(h, '⏰ Your shift is 07:00–15:00, but you clocked in early at 06:20. Is this OT?');
+    expect(ask).toHaveLength(1);
+    expect(ask[0].body).toMatchObject({ chat_id: CHAT, message_thread_id: 1001 });
+    expect((ask[0].body.reply_markup as any).inline_keyboard[0].map((b: any) => b.text)).toEqual(['Yes', 'No']);
+    // a colleague answers (default: anyone in the group may answer)
+    await h.press({ data: `ot:${q.id}:y`, messageId: q.tg_message_id, fromId: 222, name: 'Nisha', at: lk(D, '06:25') });
+    expect(qOf(h, 'EARLY')).toMatchObject({ answer: 'YES', answered_by: 'Nisha', answered_by_tg: 222 });
+    expect(sent(h, '✅ Recorded as OT from 06:20')).toHaveLength(1);
+    expect(h.tg.some((x) => x.method === 'editMessageText' && String(x.body.text).includes('✓ Yes · Nisha'))).toBe(true);
+    await h.send({ text: 'OUT', ts: lk(D, '15:00'), thread: 1001, fromId: 111 });
+    expect((await h.session(e1, D))!.ot_ms).toBe(40 * 60000);
+    // changed to No → no OT; both answers are in the audit log
+    await h.press({ data: `ot:${q.id}:n`, messageId: q.tg_message_id, fromId: 111, name: 'Ali', at: lk(D, '15:05') });
+    expect((await h.session(e1, D))!.ot_ms).toBeNull();
+    expect(h.db.rows("SELECT actor FROM audit_logs WHERE action = 'OT_QUESTION_ANSWERED' ORDER BY id").map((r: any) => r.actor)).toEqual(['Telegram · Nisha', 'Telegram · Ali']);
+  });
+
+  it('only the employee may answer when set so', async () => {
+    const { h, e1 } = await fixture();
+    await h.req('PUT', '/api/settings/rules', { currency: 'LKR', windowHours: 4, lateAsException: false, botReply: true, answerBy: 'own' });
+    await h.roster(e1, D, 'A');
+    await h.send({ text: 'IN', ts: lk(D, '06:20'), thread: 1001, fromId: 111 });
+    const q = qOf(h, 'EARLY');
+    await h.press({ data: `ot:${q.id}:y`, messageId: q.tg_message_id, fromId: 222, name: 'Nisha', at: lk(D, '06:25') });
+    expect(qOf(h, 'EARLY').answer).toBeNull();
+    expect(h.tg.find((x) => x.method === 'answerCallbackQuery' && x.body.show_alert)?.body.text).toBe('This button is not for you');
+    await h.press({ data: `ot:${q.id}:y`, messageId: q.tg_message_id, fromId: 111, name: 'Ali', at: lk(D, '06:26') });
+    expect(qOf(h, 'EARLY').answer).toBe('YES');
+  });
+
+  it('no clock out after 9h 45m: Forgot clock out sets the shift end; changing to OT takes it back and counts OT after the shift', async () => {
+    const { h, e1 } = await fixture();
+    await h.roster(e1, D, 'A'); // 07:00–15:00
+    await h.send({ text: 'IN', ts: lk(D, '07:00'), thread: 1001, fromId: 111 });
+    expect(qOf(h, 'EARLY')).toBeUndefined(); // on time → no early question
+    await h.cron(lk(D, '16:40'));
+    expect(qOf(h, 'LATE')).toBeUndefined();
+    await h.cron(lk(D, '16:50')); // 07:00 + 9h 45m = 16:45
+    const q = qOf(h, 'LATE');
+    expect(sent(h, '⏰ Your shift is 07:00–15:00. You clocked in at 07:00 and have not clocked out for 9h 45m. Are you on OT?')).toHaveLength(1);
+    await h.press({ data: `ot:${q.id}:f`, messageId: q.tg_message_id, fromId: 111, name: 'Ali', at: lk(D, '16:52') });
+    expect(await h.session(e1, D)).toMatchObject({ actual_out_at: lk(D, '15:00'), ot_ms: null });
+    expect(h.db.get<any>("SELECT status FROM attendance_exceptions WHERE code = 'FORGOT_CLOCK_OUT'")).toEqual({ status: 'OPEN' });
+    expect(sent(h, '✅ Recorded: CS forgot clock out — time 15:00.')).toHaveLength(1);
+    // he was in fact on OT
+    await h.press({ data: `ot:${q.id}:o`, messageId: q.tg_message_id, fromId: 111, name: 'Ali', at: lk(D, '16:55') });
+    expect((await h.session(e1, D))!.actual_out_at).toBeNull();
+    expect(h.db.get<any>("SELECT COUNT(*) AS n FROM attendance_exceptions WHERE code = 'FORGOT_CLOCK_OUT'").n).toBe(0);
+    await h.send({ text: 'OUT', ts: lk(D, '18:00'), thread: 1001, fromId: 111 });
+    expect((await h.session(e1, D))!.ot_ms).toBe(3 * 3600000);
+    // Still on working → no OT
+    await h.press({ data: `ot:${q.id}:s`, messageId: q.tg_message_id, fromId: 111, name: 'Ali', at: lk(D, '18:05') });
+    expect((await h.session(e1, D))!.ot_ms).toBeNull();
+  });
+
+  it('nobody answers → no OT and an exception; no questions while bot replies are off', async () => {
+    const { h, e1, e2 } = await fixture();
+    await h.roster(e1, D, 'A');
+    await h.send({ text: 'IN', ts: lk(D, '06:20'), thread: 1001, fromId: 111 });
+    await h.cron(lk(D, '08:30'));
+    expect(h.db.get<any>("SELECT COUNT(*) AS n FROM attendance_exceptions WHERE code = 'OT_NO_ANSWER' AND employee_id = ?", e1).n).toBe(1);
+    await h.req('PUT', '/api/settings/rules', { currency: 'LKR', windowHours: 4, lateAsException: false, botReply: false });
+    await h.roster(e2, D, 'A');
+    await h.send({ text: 'IN', ts: lk(D, '06:10'), thread: 1002, fromId: 222 });
+    await h.cron(lk(D, '16:50'));
+    expect(h.db.get<any>('SELECT COUNT(*) AS n FROM ot_questions WHERE employee_id = ?', e2).n).toBe(0);
+  });
+
+  it('bot messages can be changed in Settings (owner only)', async () => {
+    const { h, e1 } = await fixture();
+    const { DEFAULT_BOT_TEXTS } = await import('../src/shared/codes');
+    expect((await h.req('PUT', '/api/settings/bot-texts', { ...DEFAULT_BOT_TEXTS, earlyQ: 'Hi {name}, shift {shift}, in {in}. OT?' })).status).toBe(200);
+    expect((await h.req('GET', '/api/meta')).json.botTexts.earlyQ).toBe('Hi {name}, shift {shift}, in {in}. OT?');
+    await h.roster(e1, D, 'A');
+    await h.send({ text: 'IN', ts: lk(D, '06:20'), thread: 1001, fromId: 111 });
+    expect(sent(h, 'Hi Nimal Perera, shift 07:00–15:00, in 06:20. OT?')).toHaveLength(1);
+  });
+});
+
+describe('telegram history import — one Telegram account shared by the team', () => {
+  it('reads the name in each message (or the message it replies to); names are matched once and remembered', async () => {
+    const { h } = await fixture();
+    const joan = await h.employee('E005', 'Joan Perera', null);
+    const darsh = await h.employee('E006', 'Darsh Kumar', null);
+    const daemon = await h.employee('E007', 'Daemon Silva', null);
+    const OTHER = -1009998887775;
+    const t = (hhmm: string) => String(lk(D, hhmm) / 1000);
+    const msg = (id: number, hhmm: string, text: string, reply?: number) => ({ id, type: 'message', date_unixtime: t(hhmm), from: 'ice_csinr1', from_id: 'user8457947482', text, ...(reply ? { reply_to_message_id: reply } : {}) });
+    const exp = { name: 'Break Time Records', type: 'public_supergroup', id: Number(String(OTHER).replace('-100', '')), messages: [
+      msg(1, '07:00', '🟢 Start of Shift\nClocked in! ⏰\nAgent: Joan\nAssigned: BJ | MP'),
+      msg(2, '10:00', 'Taking Break ( joan )', 1),
+      msg(3, '10:20', 'RESUME', 2),                  // no name → the message it replies to (Joan)
+      msg(4, '07:05', 'IN — Darsh'),
+      msg(5, '11:00', 'BREAK — Darsh'),
+      msg(6, '07:10', 'IN\nDemon.'),                // a typo: chosen once by the admin
+      msg(7, '12:00', 'RESUME'),                     // no name, no reply → chosen one by one
+    ] };
+    const { readTelegramExport } = await import('../src/shared/tgexport');
+    const x = readTelegramExport(exp);
+    const body = { chatId: x.chatId, fileName: 'result.json', messages: x.messages, topicsSince: x.topicsSince };
+    let plan = (await h.req('POST', '/api/telegram-import', body)).json.plan;
+    const by = (p: any) => Object.fromEntries(p.senders.map((s: any) => [s.key, [s.by, s.employeeId]]));
+    expect(by(plan)).toEqual({ 'n:joan': ['NAME', joan], 'n:darsh': ['NAME', darsh], 'n:demon': ['NONE', null] });
+    expect(plan.rows.find((r: any) => r.id === 3)).toMatchObject({ employeeId: joan, who: 'Joan', result: 'NEW' });
+    expect(plan.rows.find((r: any) => r.id === 7)).toMatchObject({ key: 'm:7', result: 'NEED' });
+    expect(plan).toMatchObject({ toAdd: 5, need: 2 });
+    plan = (await h.req('POST', '/api/telegram-import', { ...body, senders: { 'n:demon': daemon, 'm:7': darsh } })).json.plan;
+    expect(plan).toMatchObject({ toAdd: 7, need: 0 });
+    await h.req('POST', '/api/telegram-import', { ...body, senders: { 'n:demon': daemon, 'm:7': darsh }, apply: true, reason: 'Shared account history' });
+    expect((await h.session(joan, D))).toMatchObject({ actual_in_at: lk(D, '07:00'), break_count: 1 });
+    expect((await h.session(daemon, D))!.actual_in_at).toBe(lk(D, '07:10'));
+    expect(h.db.get('SELECT employee_id FROM tg_agent_names WHERE name_key = ?', 'demon')).toEqual({ employee_id: daemon });
+    expect(h.db.get('SELECT COUNT(*) AS n FROM tg_sender_employees')).toEqual({ n: 0 }); // the shared account itself is never tied to one person
   });
 });

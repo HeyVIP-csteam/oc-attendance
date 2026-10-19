@@ -253,6 +253,8 @@ employeeRoutes.post('/employees/:id/delete', async (c) => {
     stmt(db, 'DELETE FROM employee_shift_assignments WHERE employee_id = ?', id),
     stmt(db, 'DELETE FROM telegram_topic_mappings WHERE employee_id = ?', id),
     stmt(db, 'DELETE FROM tg_sender_employees WHERE employee_id = ?', id),
+    stmt(db, 'DELETE FROM ot_questions WHERE employee_id = ?', id),
+    stmt(db, 'DELETE FROM tg_agent_names WHERE employee_id = ?', id),
     stmt(db, 'DELETE FROM employees WHERE id = ?', id),
     stmt(db, "DELETE FROM system_settings WHERE key = 'purge_employee'"),
     auditStmt(db, { actor, action: 'EMPLOYEE_DELETED', entityType: 'employee', entityId: e.employee_code,

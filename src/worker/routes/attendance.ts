@@ -32,12 +32,12 @@ type Filters = z.infer<typeof Filters>;
 const SORT: Record<string, string> = {
   emp: 'e.employee_code', name: 'e.name', cur: 'e.currency_code', workDate: 's.work_date', shiftName: 'i.shift_name', schedIn: 's.scheduled_start_at', inT: 's.actual_in_at',
   lateMin: 's.late_min', schedOut: 's.scheduled_end_at', outT: 's.actual_out_at', earlyMin: 's.early_min', completedBreaks: 's.break_count',
-  totalBreak: 's.total_break_ms', net: 's.net_worked_ms', status: 's.status', flags: 's.exception_count',
+  totalBreak: 's.total_break_ms', net: 's.net_worked_ms', ot: 's.ot_ms', status: 's.status', flags: 's.exception_count',
 };
 
 export const ROW_SELECT = `SELECT s.employee_id, s.work_date, e.employee_code, e.name, e.currency_code, i.shift_id, i.shift_code, i.shift_name, i.adjustment_status,
   s.scheduled_start_at, s.actual_in_at, s.late_min, s.scheduled_end_at, s.actual_out_at, s.early_min, s.break_count, s.open_break_count, s.total_break_ms,
-  s.shift_duration_ms, s.net_worked_ms, s.status, s.state, s.missing, s.exception_count, s.has_major_exception, s.adjusted, s.break_exceeded, s.id AS session_id,
+  s.shift_duration_ms, s.net_worked_ms, s.status, s.state, s.missing, s.exception_count, s.has_major_exception, s.adjusted, s.break_exceeded, s.id AS session_id, s.ot_ms,
   rm.code AS mark_code
   FROM attendance_sessions s JOIN employees e ON e.id = s.employee_id LEFT JOIN shift_instances i ON i.id = s.shift_instance_id
   LEFT JOIN roster_marks rm ON rm.employee_id = s.employee_id AND rm.mark_date = s.work_date`;
@@ -149,6 +149,8 @@ attendanceRoutes.get('/sessions/:emp/:date', async (c) => {
   return c.json({
     employee, workDate: date, instance: instR.results[0] ?? null, session: sessR.results[0] ?? null,
     markCode: (await first<{ code: string }>(db, 'SELECT code FROM roster_marks WHERE employee_id = ? AND mark_date = ?', emp, date))?.code ?? null,
+    // the bot's OT questions for this day and their answers
+    otQuestions: await all(db, 'SELECT kind, asked_at, answer, answered_by, answered_at FROM ot_questions WHERE employee_id = ? AND work_date = ? ORDER BY asked_at', emp, date),
     events: evR.results, breaks: await withRemarks(db, brR.results as { start_text: string | null }[]), exceptions: exR.results, adjustments: adjR.results,
   });
 });
@@ -290,7 +292,7 @@ attendanceRoutes.get('/reports', async (c) => {
                   COUNT(s.shift_instance_id) AS scheduled, SUM(s.actual_in_at IS NOT NULL) AS present, SUM(s.status = 'ABSENT') AS absent,
                   SUM(s.late_min > 0) AS late_times, SUM(COALESCE(s.late_min, 0)) AS late_min, SUM(s.early_min > 0) AS early_times, SUM(COALESCE(s.early_min, 0)) AS early_min,
                   SUM(s.break_count) AS breaks, SUM(s.total_break_ms) AS break_ms,
-                  SUM(CASE WHEN s.net_worked_ms IS NOT NULL THEN s.shift_duration_ms ELSE 0 END) AS shift_ms, SUM(s.exception_count) AS exceptions
+                  SUM(CASE WHEN s.net_worked_ms IS NOT NULL THEN s.shift_duration_ms ELSE 0 END) AS shift_ms, SUM(COALESCE(s.ot_ms, 0)) AS ot_ms, SUM(s.exception_count) AS exceptions
                 ${FROM} WHERE ${w.sql} GROUP BY e.id ORDER BY COALESCE(e.sort_order, 1000000000), e.employee_code LIMIT ? OFFSET ?`, ...w.params, f.size, (f.page - 1) * f.size),
     ]);
     return c.json({ mode: 'summary', total: (cnt.results[0] as { n: number }).n, rows: rows.results });
@@ -309,7 +311,7 @@ attendanceRoutes.get('/reports/export', async (c) => {
   const rows = await all(c.env.DB, `SELECT e.id AS employee_id, e.employee_code, e.name, e.currency_code,
       COUNT(s.shift_instance_id) AS scheduled, SUM(s.actual_in_at IS NOT NULL) AS present, SUM(s.status = 'ABSENT') AS absent,
       SUM(s.late_min > 0) AS late_times, SUM(COALESCE(s.late_min, 0)) AS late_min, SUM(s.early_min > 0) AS early_times, SUM(COALESCE(s.early_min, 0)) AS early_min,
-      SUM(s.break_count) AS breaks, SUM(s.total_break_ms) AS break_ms, SUM(COALESCE(s.net_worked_ms, 0)) AS net_ms,
+      SUM(s.break_count) AS breaks, SUM(s.total_break_ms) AS break_ms, SUM(COALESCE(s.net_worked_ms, 0)) AS net_ms, SUM(COALESCE(s.ot_ms, 0)) AS ot_ms,
       SUM(CASE WHEN s.net_worked_ms IS NOT NULL THEN s.shift_duration_ms ELSE 0 END) AS shift_ms, SUM(s.missing <> 'NONE') AS missing, SUM(s.exception_count) AS exceptions
     FROM attendance_sessions s JOIN employees e ON e.id = s.employee_id LEFT JOIN shift_instances i ON i.id = s.shift_instance_id
     WHERE ${w.sql} GROUP BY e.id ORDER BY COALESCE(e.sort_order, 1000000000), e.employee_code`, ...w.params);

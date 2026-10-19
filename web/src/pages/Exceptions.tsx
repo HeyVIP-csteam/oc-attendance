@@ -177,9 +177,9 @@ function RawList({ page, size, onPage, onSize }: { page: number; size: number; o
 }
 
 // ---------------------------------------------------------------- import a Telegram Desktop chat export (punches sent before the bot joined)
-interface ImpRow { id: number; time: string; workDate: string; text: string; code: string | null; name: string | null; type: EventType | null; thread: number | null; from: string; fromId: number | null; result: 'NEW' | 'DUP' | 'UNREC' | 'NOTOPIC' | 'NEED' | 'INACTIVE' | 'UNTRUSTED' }
+interface ImpRow { id: number; time: string; workDate: string; text: string; code: string | null; name: string | null; type: EventType | null; thread: number | null; from: string; fromId: number | null; key: string | null; who: string | null; result: 'NEW' | 'DUP' | 'UNREC' | 'NOTOPIC' | 'NEED' | 'INACTIVE' | 'UNTRUSTED' }
 /** A Telegram account in a group without topics and the employee it belongs to. */
-interface ImpSender { key: string; name: string; agent: string | null; n: number; by: 'MAN' | 'SAVED' | 'KNOWN' | 'NAME' | 'TWO' | 'NONE'; employeeId: number | null; code: string | null; empName: string | null; cands: { id: number; code: string; name: string }[] }
+interface ImpSender { key: string; kind: 'ACCOUNT' | 'NAME'; name: string; account: string; spellings: string[]; agent: string | null; n: number; by: 'MAN' | 'SAVED' | 'KNOWN' | 'NAME' | 'TWO' | 'NONE'; employeeId: number | null; code: string | null; empName: string | null; cands: { id: number; code: string; name: string }[] }
 interface ImpPlan { messages: number; toAdd: number; already: number; unclear: number; noTopic: number; need: number; inactive: number; notPunch: number; from: string | null; to: string | null; rows: ImpRow[]; senders: ImpSender[] }
 
 function TgImport() {
@@ -232,7 +232,7 @@ function TgImport() {
   };
   const BY: Record<ImpSender['by'], [string, string]> = {
     MAN: ['ok', L('你选的', 'Chosen by you')], SAVED: ['ok', L('之前选过', 'Chosen before')], KNOWN: ['i', L('已认识', 'Already known')],
-    NAME: ['v', 'Agent name'], TWO: ['w', L('多位员工符合', 'Several employees match')], NONE: ['r', L('没有 Agent name', 'No agent name')],
+    NAME: ['v', L('按名字', 'By name')], TWO: ['w', L('多位员工符合', 'Several employees match')], NONE: ['r', L('没有 Agent name', 'No agent name')],
   };
   const unmatched = (plan?.senders ?? []).filter((x) => !x.employeeId);
   const rows = (plan?.rows ?? []).filter((r) => !show || r.result === show || (show === 'UNREC' && r.result === 'UNTRUSTED'));
@@ -262,22 +262,25 @@ function TgImport() {
             <div><span>{L('已有记录', 'Already recorded')}</span><b>{plan.already}</b></div>
             <div><span>{L('看不懂', 'Unclear')}</span><b style={{ color: plan.unclear ? 'var(--warn)' : undefined }}>{plan.unclear}</b></div>
             {plan.senders.length
-              ? <div><span>{L('需要选择员工', 'Choose employee')}</span><b style={{ color: unmatched.length ? 'var(--bad)' : undefined }}>{unmatched.length}</b></div>
+              ? <div><span>{L('需要选择员工', 'Choose employee')}</span><b style={{ color: plan.need ? 'var(--bad)' : undefined }}>{plan.need}</b></div>
               : <div><span>{L('Topic 未绑定', 'Topic not bound')}</span><b style={{ color: plan.noTopic ? 'var(--bad)' : undefined }}>{plan.noTopic}</b></div>}
           </div>
           {plan.senders.length > 0 && (
             <>
-              <div className="impsec">1 · {L('谁发的消息', 'Who sent the messages')} <span>{L('每个 Telegram 账号选一次，它的所有消息都会跟着算给这位员工。', 'Each Telegram account is matched once; all its messages follow.')}</span></div>
+              <div className="impsec">1 · {L('消息是谁的', 'Who the messages are about')} <span>{L('个人账号按账号对应；多人共用的账号按消息里写的名字对应（或它回复的那条消息）。每个选一次，系统会记住。', 'A personal account is matched by the account; a shared account by the name written in each message (or the message it replies to). Each is chosen once and remembered.')}</span></div>
               <div className="tw impsnd" style={{ marginBottom: 6 }}><table><thead><tr>
-                <th>{L('Telegram 账号', 'Telegram account')}</th><th>{L('消息里的 Agent name', 'Agent name in messages')}</th><th>{L('打卡消息', 'Messages')}</th><th>{L('员工', 'Employee')}</th><th>{L('对应方式', 'Matched by')}</th>
+                <th>{L('名字 / Telegram 账号', 'Name / Telegram account')}</th><th>{L('消息里的名字', 'Name in messages')}</th><th>{L('打卡消息', 'Messages')}</th><th>{L('员工', 'Employee')}</th><th>{L('对应方式', 'Matched by')}</th>
               </tr></thead><tbody>
                 {plan.senders.map((x) => {
                   const pref = new Set(x.cands.map((c) => c.id));
                   const opts = (list: typeof meta.employees) => list.map((e) => <option key={e.id} value={e.id}>{e.code} · {e.name}</option>);
                   return (
                     <tr key={x.key}>
-                      <td><b>{x.name || '—'}</b> <span className="mut" style={{ fontSize: 12 }}>#{x.key}</span></td>
-                      <td>{x.agent ? <span className="impagent">Agent :{x.agent}</span> : <span className="mut">—</span>}</td>
+                      <td>{x.kind === 'NAME'
+                        ? <><b className="impagent">{x.name}</b> <span className="mut" style={{ fontSize: 12 }}>{L('共用账号', 'shared account')} {x.account}</span></>
+                        : <><b>{x.name || '—'}</b> <span className="mut" style={{ fontSize: 12 }}>#{x.key.slice(2)}</span></>}</td>
+                      <td>{x.kind === 'NAME' ? (x.spellings.length ? <span className="mut" style={{ fontSize: 12 }}>{L('也写成', 'also')} {x.spellings.join(', ')}</span> : <span className="mut">—</span>)
+                        : x.agent ? <span className="impagent">{x.agent}</span> : <span className="mut">—</span>}</td>
                       <td>{x.n}</td>
                       <td><select className={x.employeeId ? '' : 'need'} value={x.employeeId ?? ''} disabled={busy} onChange={(e) => void choose(x.key, e.target.value ? Number(e.target.value) : null)} style={{ minWidth: 220, width: 'auto' }}>
                         <option value="">{L('— 选择员工 —', '— Choose employee —')}</option>
@@ -285,12 +288,12 @@ function TgImport() {
                         {pref.size > 0 && <option disabled>──────────</option>}
                         {opts(meta.employees.filter((e) => !pref.has(e.id)))}
                       </select></td>
-                      <td><span className={`b ${BY[x.by][0]}`}>{BY[x.by][1]}</span></td>
+                      <td><span className={`b ${BY[x.by][0]}`}>{x.kind === 'NAME' && x.by === 'NONE' ? L('对不上员工', 'No matching employee') : BY[x.by][1]}</span></td>
                     </tr>
                   );
                 })}
               </tbody></table></div>
-              {unmatched.length > 0 && <div className="impwarn">{L(`还有 ${unmatched.length} 个账号没有对应员工，它们的 ${plan.need} 笔打卡会先跳过（可以选好再补入，或不选直接补入其他打卡）。`, `${unmatched.length} account(s) still need an employee — their ${plan.need} punches are skipped until you choose (or you can import without them).`)}</div>}
+              {plan.need > 0 && <div className="impwarn">{L(`还有 ${plan.need} 笔打卡没有对应员工${unmatched.length ? `（${unmatched.length} 个名字 / 账号未选）` : ''}，会先跳过；没有名字的消息可以在下面明细逐笔选择。`, `${plan.need} punches have no employee yet${unmatched.length ? ` (${unmatched.length} names / accounts not chosen)` : ''} — they are skipped; messages without a name can be chosen one by one below.`)}</div>}
               <div className="impsec">2 · {L('打卡明细', 'Punches')} <span>{L('时间采用 Telegram 消息时间（消息里写的日期不会使用）。', 'Time = Telegram message time (the date typed in the message is not used).')}</span></div>
             </>
           )}
@@ -307,8 +310,13 @@ function TgImport() {
             </tr></thead><tbody>
               {rows.map((r) => <tr key={r.id}>
                 <td className="pid">{r.code ? <b>{r.code}</b> : <span className="mut">—</span>}</td>
-                <td>{r.name ?? <span className="mut">{r.thread ? `Topic #${r.thread}` : '—'}</span>}</td>
-                <td className="nw">{r.time}</td>{plan.senders.length > 0 && <td>{r.from || <span className="mut">—</span>}</td>}
+                <td>{r.result === 'NEED' && r.key?.startsWith('m:')
+                  ? <select className="need" value={choice[r.key] ?? ''} disabled={busy} onChange={(e) => void choose(r.key!, e.target.value ? Number(e.target.value) : null)} style={{ minWidth: 200, width: 'auto' }}>
+                      <option value="">{L('— 选择员工 —', '— Choose employee —')}</option>
+                      {meta.employees.map((e) => <option key={e.id} value={e.id}>{e.code} · {e.name}</option>)}
+                    </select>
+                  : r.name ?? <span className="mut">{r.thread ? `Topic #${r.thread}` : '—'}</span>}</td>
+                <td className="nw">{r.time}</td>{plan.senders.length > 0 && <td>{r.from || <span className="mut">—</span>}{r.who && <> · <span className="impagent">{r.who}</span></>}</td>}
                 <td>{r.type ? dt(EVENT_LABEL[r.type]) : <span className="mut">—</span>}</td>
                 <td className="impmsg" title={r.text}>{r.text.replace(/\s*\n\s*/g, ' · ')}</td>
                 <td><span className={`b ${RES[r.result][0]}`}>{RES[r.result][1]}</span></td>

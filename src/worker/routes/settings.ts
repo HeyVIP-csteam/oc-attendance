@@ -1,6 +1,6 @@
 import { type Context, Hono } from 'hono';
 import { z } from 'zod';
-import { EVENT_TYPES, FIXED, type KeywordConfig, ROSTER_COLORS, type RosterCode, type Rules } from '../../shared/codes';
+import { type BotTexts, DEFAULT_BOT_TEXTS, EVENT_TYPES, FIXED, type KeywordConfig, ROSTER_COLORS, type RosterCode, type Rules } from '../../shared/codes';
 import { validateKeywords } from '../../shared/parser';
 import { addDays, localDate } from '../../shared/time';
 import type { AppBindings, Env } from '../env';
@@ -37,7 +37,7 @@ settingsRoutes.get('/meta', async (c) => {
     user: c.get('admin'), tz, today: localDate(Date.now(), tz), now: Date.now(),
     currencies: cur.results, shifts: sh.results, employees: emps.results,
     keywords: settings.keywords, rules: settings.rules, parser: settings.parser,
-    rosterCodes: settings.rosterCodes,
+    rosterCodes: settings.rosterCodes, botTexts: settings.botTexts,
     rulesCur: Object.fromEntries((cur.results as { code: string }[]).map((x) => [x.code, rulesFor(settings, x.code)])), fixed: FIXED, dataVersion: settings.dataVersion,
   });
 });
@@ -45,6 +45,29 @@ settingsRoutes.get('/meta', async (c) => {
 settingsRoutes.get('/version', async (c) => {
   const r = await first<{ value: string }>(c.env.DB, "SELECT value FROM system_settings WHERE key = 'data_version'");
   return c.json({ v: Number(r?.value ?? 0) });
+});
+
+// ---------------------------------------------------------------- bot messages (OT questions)
+const BotTextsSchema = z.object(Object.fromEntries((Object.keys(DEFAULT_BOT_TEXTS) as (keyof BotTexts)[]).map((k) =>
+  [k, z.string().trim().max(['earlyYes', 'earlyNo', 'lateStill', 'lateOt', 'lateForgot', 'change'].includes(k) ? 40 : 400)])) as Record<keyof BotTexts, z.ZodString>);
+
+settingsRoutes.put('/settings/bot-texts', async (c) => {
+  requireAdminRole(c);
+  requireOwner(c);
+  const v = await body(c, BotTextsSchema);
+  const db = c.env.DB;
+  const now = Date.now();
+  const actor = c.get('admin').username;
+  const before = (await loadSettings(db)).botTexts;
+  // a text equal to the default (or left empty) is not stored, so a later change of the default wording still applies
+  const save = Object.fromEntries(Object.entries(v).filter(([k, t]) => t && t !== DEFAULT_BOT_TEXTS[k as keyof BotTexts]));
+  await db.batch([
+    stmt(db, `INSERT INTO system_settings (key, value, updated_at, updated_by) VALUES ('bot_texts', ?, ?, ?)
+              ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, updated_by = excluded.updated_by`, JSON.stringify(save), now, actor),
+    auditStmt(db, { actor, action: 'SETTINGS_UPDATED', entityType: 'system_settings', entityId: 'bot_texts', before, after: { ...DEFAULT_BOT_TEXTS, ...save }, ip: clientIp(c), at: now }),
+    bump(db, now),
+  ]);
+  return c.json({ ok: true });
 });
 
 // ---------------------------------------------------------------- keywords & rules
@@ -102,8 +125,10 @@ const RulesSchema = z.object({
   breakMinutes: z.number().int().min(0).max(1440).nullable().optional().default(90),
   breakUnit: z.enum(['h', 'm']).optional().default('m'),
   // a clock out attaches to an open session up to 20 h after clock in, so the reminder must come before that
-  forgotOutHours: z.number().min(1).max(20).refine((h) => Math.abs(h * 60 - Math.round(h * 60)) < 1e-6, 'whole minutes only').optional().default(14),
+  forgotOutHours: z.number().min(1).max(15).refine((h) => Math.abs(h * 60 - Math.round(h * 60)) < 1e-6, 'whole minutes only').optional().default(9.75),
   forgotOutUnit: z.enum(['h', 'm']).optional().default('h'),
+  earlyAskMin: z.number().int().min(0).max(240).optional().default(30),
+  answerBy: z.enum(['any', 'own']).optional().default('any'),
   currency: z.string().trim().toUpperCase().max(10).optional(), // set → these are that currency's own rules
 });
 
