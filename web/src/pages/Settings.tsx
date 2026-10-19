@@ -169,13 +169,14 @@ function Rules() {
   const { meta } = useData();
   const [st, setSt] = usePageState('st-rules', () => ({ cur: meta.currencies[0]?.code ?? '' }));
   const cur = meta.currencies.some((c) => c.code === st.cur) ? st.cur : meta.currencies[0]?.code ?? '';
-  const fmtMin = (m: number | null | undefined, u?: 'h' | 'm') => (m == null ? L('不限', 'No limit') : u === 'h' ? `${Math.round((m / 60) * 100) / 100} h` : `${m} min`);
+  const hm = (m: number) => (m % 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m / 60}h`);
+  const fmtMin = (m: number | null | undefined, u?: 'h' | 'm') => (m == null ? L('不限', 'No limit') : u === 'h' ? hm(m) : `${m} min`);
   const rows: [string, (r: MetaRules) => string][] = [
-    [L('班次匹配窗口', 'Shift matching window'), (r) => (r.windowUnit === 'm' || !Number.isInteger(r.windowHours) ? `${Math.round(r.windowHours * 60)} min` : `${r.windowHours} h`)],
+    [L('班次匹配窗口', 'Shift matching window'), (r) => (r.windowUnit === 'm' ? `${Math.round(r.windowHours * 60)} min` : hm(Math.round(r.windowHours * 60)))],
     [L('每日休息时间', 'Break time per day'), (r) => fmtMin(r.breakMinutes === undefined ? 90 : r.breakMinutes, r.breakUnit)],
     [L('迟到/早退列为异常', 'Late / early leave as exceptions'), (r) => (r.lateAsException ? L('是', 'Yes') : L('否', 'No'))],
     [L('Bot 回复', 'Bot replies'), (r) => (r.botReply ? L('开启', 'On') : L('关闭', 'Off'))],
-    [L('OT 门槛', 'OT threshold'), (r) => `${r.otHours ?? 9} h`],
+    [L('OT 门槛', 'OT threshold'), (r) => hm(Math.round((r.otHours ?? 9) * 60))],
   ];
   if (!cur) return <div className="card empty">{L('请先在「货币」新增货币', 'Add a currency first (Currency tab)')}</div>;
   return (

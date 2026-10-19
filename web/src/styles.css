@@ -387,3 +387,5 @@ table.grid td{white-space:normal}
 .impkv b{font-size:20px}
 .impmsg{max-width:320px;overflow:hidden;text-overflow:ellipsis;color:var(--grey)}
 @media (max-width:780px){.impsteps{grid-template-columns:1fr}.impkv{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+.b.mk{font-weight:700}

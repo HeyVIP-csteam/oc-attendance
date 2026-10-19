@@ -46,9 +46,9 @@ function Roster({ f, set }: { f: { from: string; to: string; cur: string; page: 
     const mine = fmtMine(ot.actual_in_at);
     const mineSpan = mine ? `\n${mineLabel(ot.actual_in_at)}: ${mine} – ${ot.actual_out_at != null ? fmtMine(ot.actual_out_at) : L('未下班', 'not clocked out')}` : '';
     const dur = ot.actual_out_at != null ? fmtDur(ot.actual_out_at - ot.actual_in_at) : '';
-    const thr = rulesOf(meta, cur).otHours ?? 9;
+    const thr = fmtDur(Math.round((rulesOf(meta, cur).otHours ?? 9) * 60) * 60000);
     return long && ot.kind === 'LONG'
-      ? L(`OT：实际 ${span(ot.actual_in_at, ot.actual_out_at)} (LK)，在班 ${dur}（超过 ${thr} 小时）`, `OT: actual ${span(ot.actual_in_at, ot.actual_out_at)} (LK), on shift ${dur} (over ${thr} h)`) + mineSpan
+      ? L(`OT：实际 ${span(ot.actual_in_at, ot.actual_out_at)} (LK)，在班 ${dur}（超过 ${thr}）`, `OT: actual ${span(ot.actual_in_at, ot.actual_out_at)} (LK), on shift ${dur} (over ${thr})`) + mineSpan
       : L(`休息日上班（OT）：${span(ot.actual_in_at, ot.actual_out_at)} (LK)`, `Worked on a day off (OT): ${span(ot.actual_in_at, ot.actual_out_at)} (LK)`) + mineSpan;
   };
   const doExport = async () => {

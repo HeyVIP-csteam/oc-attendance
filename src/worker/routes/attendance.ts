@@ -36,8 +36,10 @@ const SORT: Record<string, string> = {
 
 export const ROW_SELECT = `SELECT s.employee_id, s.work_date, e.employee_code, e.name, e.currency_code, i.shift_id, i.shift_code, i.shift_name, i.adjustment_status,
   s.scheduled_start_at, s.actual_in_at, s.late_min, s.scheduled_end_at, s.actual_out_at, s.early_min, s.break_count, s.open_break_count, s.total_break_ms,
-  s.shift_duration_ms, s.net_worked_ms, s.status, s.state, s.missing, s.exception_count, s.has_major_exception, s.adjusted, s.break_exceeded, s.id AS session_id
-  FROM attendance_sessions s JOIN employees e ON e.id = s.employee_id LEFT JOIN shift_instances i ON i.id = s.shift_instance_id`;
+  s.shift_duration_ms, s.net_worked_ms, s.status, s.state, s.missing, s.exception_count, s.has_major_exception, s.adjusted, s.break_exceeded, s.id AS session_id,
+  rm.code AS mark_code
+  FROM attendance_sessions s JOIN employees e ON e.id = s.employee_id LEFT JOIN shift_instances i ON i.id = s.shift_instance_id
+  LEFT JOIN roster_marks rm ON rm.employee_id = s.employee_id AND rm.mark_date = s.work_date`;
 
 const likeEsc = (q: string) => `%${q.replace(/[\\%_]/g, (m) => '\\' + m)}%`;
 
@@ -131,6 +133,7 @@ attendanceRoutes.get('/sessions/:emp/:date', async (c) => {
   if (!employee) throw notFound('Employee not found');
   return c.json({
     employee, workDate: date, instance: instR.results[0] ?? null, session: sessR.results[0] ?? null,
+    markCode: (await first<{ code: string }>(db, 'SELECT code FROM roster_marks WHERE employee_id = ? AND mark_date = ?', emp, date))?.code ?? null,
     events: evR.results, breaks: await withRemarks(db, brR.results as { start_text: string | null }[]), exceptions: exR.results, adjustments: adjR.results,
   });
 });

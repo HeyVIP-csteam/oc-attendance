@@ -1,6 +1,6 @@
 import { Fragment, useState } from 'react';
 import { addDays } from '../../../src/shared/time';
-import { Cnt, CurrencyOptions, EmpSearch, Empty, ErrBox, Field, Mut, Pager, TblTop } from '../components/ui';
+import { Cnt, CurrencyOptions, EmpSearch, Empty, ErrBox, Field, Mut, Pager, ShiftName, TblTop } from '../components/ui';
 import { qs } from '../lib/api';
 import { fmtDur, fmtT, today } from '../lib/format';
 import { useI18n } from '../lib/i18n';
@@ -39,7 +39,7 @@ export function Breaks() {
               return (
                 <Fragment key={r.session_id}>
                   <tr className={`cl brm ${o ? 'open' : ''}`} onClick={() => setOpen({ ...open, [r.session_id]: !o })}>
-                    <td className="nw pid"><span className="arw">▶</span><b>{r.employee_code}</b></td><td>{r.name}</td><td>{r.work_date}</td><td>{r.shift_name ?? L('未排班', 'No schedule')}</td>
+                    <td className="nw pid"><span className="arw">▶</span><b>{r.employee_code}</b></td><td>{r.name}</td><td>{r.work_date}</td><td><ShiftName name={r.shift_name} mark={r.mark_code} /></td>
                     <td className="n">{r.break_count}{r.open_break_count > 0 && <> <span className="b r">+{r.open_break_count}</span></>}</td><td className="n">{fmtDur(r.total_break_ms)}</td>
                     <td>{r.open_break_count ? <span className="b w">{L('休息中', 'On break')}</span> : <span className="b ok">{L('全部结束', 'All closed')}</span>}</td>
                     <td className="c">{r.break_exceeded == null ? <Mut /> : r.break_exceeded ? <span className="b w">{L('是', 'Yes')}</span> : <span className="b ok">{L('否', 'No')}</span>}</td>

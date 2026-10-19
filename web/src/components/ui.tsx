@@ -10,8 +10,22 @@ export function Field({ label, children }: { label: ReactNode; children: ReactNo
   return <div className="fl"><label>{label}</label>{children}</div>;
 }
 
-export function StatusBadge({ st }: { st: string }) {
+/** The shift of a day: the shift name, else the roster code of that day (OFF, VL …), else "No schedule". */
+export function ShiftName({ name, mark }: { name: string | null | undefined; mark?: string | null }) {
+  const { L } = useI18n();
+  const rc = useRosterCode();
+  if (name) return <>{name}</>;
+  const m = rc(mark);
+  if (mark && m) return <span className="b mk" style={m.style} title={m.name}>{mark} · {m.name}</span>;
+  return <>{L('未排班', 'No schedule')}</>;
+}
+
+export function StatusBadge({ st, mark }: { st: string; mark?: string | null }) {
   const { dt } = useI18n();
+  const rc = useRosterCode();
+  // a day marked OFF / VL … on the roster is that day off, not "no schedule"
+  const m = st === 'NO_SCHEDULE' ? rc(mark) : null;
+  if (m) return <span className="b mk" style={m.style}>{m.name}</span>;
   const s = (STATUSES as Record<string, { label: { zh: string; en: string }; cls: string }>)[st];
   return <span className={`b ${s?.cls ?? ''}`}>{s ? dt(s.label) : st}</span>;
 }

@@ -1,7 +1,7 @@
 import { STATUSES } from '../../../src/shared/codes';
 import { CurrencyOptions, EmpSearch, ErrBox, Field, Pager, ShiftOptions, StatusOptions, TblTop } from '../components/ui';
 import { qs } from '../lib/api';
-import { fmtMin, hrs, today } from '../lib/format';
+import { fmtDur, fmtMin, today } from '../lib/format';
 import { useI18n } from '../lib/i18n';
 import { useApi, usePageState } from '../lib/store';
 import { type AttRow, useDetailExport } from './Attendance';
@@ -22,8 +22,8 @@ export function Reports() {
   let rows: (string | number)[][] = [];
   const left: number[] = [0]; // PSD ID
   if (data?.mode === 'summary') {
-    cols = L('PSD ID|员工姓名|排班|出勤|缺勤|迟到次数|迟到时长|早退次数|早退时长|休息次数|休息总时长(h)|总工时(h)|异常数', 'PSD ID|Employee Name|Scheduled|Present|Absent|Late (times)|Late (time)|Early (times)|Early (time)|Breaks|Total Break (h)|Total Shift (h)|Exceptions').split('|');
-    rows = (data.rows as SummaryRow[]).map((a) => [a.employee_code, a.name, a.scheduled, a.present, a.absent, a.late_times, a.late_min ? fmtMin(a.late_min) : 0, a.early_times, a.early_min ? fmtMin(a.early_min) : 0, a.breaks, hrs(a.break_ms), hrs(a.shift_ms), a.exceptions]);
+    cols = L('PSD ID|员工姓名|排班|出勤|缺勤|迟到次数|迟到时长|早退次数|早退时长|休息次数|休息总时长|总工时|异常数', 'PSD ID|Employee Name|Scheduled|Present|Absent|Late (times)|Late (time)|Early (times)|Early (time)|Breaks|Total Break|Total Shift|Exceptions').split('|');
+    rows = (data.rows as SummaryRow[]).map((a) => [a.employee_code, a.name, a.scheduled ?? 0, a.present ?? 0, a.absent ?? 0, a.late_times ?? 0, a.late_min ? fmtMin(a.late_min) : 0, a.early_times ?? 0, a.early_min ? fmtMin(a.early_min) : 0, a.breaks ?? 0, fmtDur(a.break_ms), fmtDur(a.shift_ms), a.exceptions]);
   } else if (data?.mode === 'detail') {
     cols = ex.cols();
     rows = (data.rows as AttRow[]).map((r) => { const x = ex.row(r, (s) => dt((STATUSES as any)[s]?.label ?? s)) as (string | number)[]; x[7] = r.late_min ? fmtMin(r.late_min) : x[7]; x[10] = r.early_min ? fmtMin(r.early_min) : x[10]; return x; });

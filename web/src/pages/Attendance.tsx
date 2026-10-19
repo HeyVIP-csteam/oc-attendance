@@ -1,15 +1,15 @@
 import { useState } from 'react';
 import { EVENT_LABEL, EVENT_TYPES, type EventType, STATUSES } from '../../../src/shared/codes';
 import { addDays } from '../../../src/shared/time';
-import { Cnt, CurB, CurrencyOptions, Drawer, EmpSearch, Empty, ErrBox, ExB, Field, Modal, Mut, Pager, ShiftOptions, StatusBadge, StatusOptions, TblTop } from '../components/ui';
+import { Cnt, CurB, CurrencyOptions, Drawer, EmpSearch, Empty, ErrBox, ExB, Field, Modal, Mut, Pager, ShiftName, ShiftOptions, StatusBadge, StatusOptions, TblTop } from '../components/ui';
 import { api, type ApiErr, qs } from '../lib/api';
 import { exportCSV, exportXLSX } from '../lib/files';
-import { fmtDT, fmtDur, fmtMin, fmtT, fromLocalInput, hrs, LATE_RED, toLocalInput, today, TZ } from '../lib/format';
+import { fmtDT, fmtDur, fmtMin, fmtT, fromLocalInput, LATE_RED, toLocalInput, today, TZ } from '../lib/format';
 import { parseBi, useI18n } from '../lib/i18n';
 import { rulesOf, toast, useApi, useData, usePageState } from '../lib/store';
 
 export interface AttRow {
-  employee_id: number; work_date: string; employee_code: string; name: string; currency_code: string | null; shift_id: number | null; shift_code: string | null; shift_name: string | null;
+  employee_id: number; work_date: string; employee_code: string; name: string; currency_code: string | null; shift_id: number | null; shift_code: string | null; shift_name: string | null; mark_code?: string | null;
   adjustment_status: string | null; scheduled_start_at: number | null; actual_in_at: number | null; late_min: number | null; scheduled_end_at: number | null; actual_out_at: number | null;
   early_min: number | null; break_count: number; open_break_count: number; total_break_ms: number; shift_duration_ms: number | null; net_worked_ms: number | null; status: string; state: string;
   missing: string; exception_count: number; has_major_exception: number; adjusted: number; break_exceeded: number | null; session_id: number;
@@ -17,17 +17,19 @@ export interface AttRow {
 
 export function useDetailExport() {
   const { L, dt } = useI18n();
-  const cols = () => L('PSD ID|员工姓名|货币|考勤日期|班次|排班上班 (LK)|实际上班 (LK)|迟到(分)|排班下班 (LK)|实际下班 (LK)|早退(分)|休息次数|休息总时长|净工时(h)|状态|缺卡',
-    'PSD ID|Employee Name|Currency|Date|Shift|Scheduled In (LK)|Actual In (LK)|Late Min|Scheduled Out (LK)|Actual Out (LK)|Early Min|Breaks|Total Break|Net Hours|Status|Missing Punch').split('|');
-  const row = (r: AttRow, statusLabel: (s: string) => string) => [r.employee_code, r.name, r.currency_code ?? '', r.work_date, r.shift_name ?? L('未排班', 'No schedule'), fmtDT(r.scheduled_start_at), fmtDT(r.actual_in_at), r.late_min ?? '',
-    fmtDT(r.scheduled_end_at), fmtDT(r.actual_out_at), r.early_min ?? '', `${r.break_count}${r.open_break_count ? ` (+${r.open_break_count} open)` : ''}`, Math.round(r.total_break_ms / 60000) + 'm', r.net_worked_ms == null ? '' : hrs(r.net_worked_ms), statusLabel(r.status), r.missing];
+  const cols = () => L('PSD ID|员工姓名|货币|考勤日期|班次|排班上班 (LK)|实际上班 (LK)|迟到(分)|排班下班 (LK)|实际下班 (LK)|早退(分)|休息次数|休息总时长|净工时|状态|缺卡',
+    'PSD ID|Employee Name|Currency|Date|Shift|Scheduled In (LK)|Actual In (LK)|Late Min|Scheduled Out (LK)|Actual Out (LK)|Early Min|Breaks|Total Break|Net Worked|Status|Missing Punch').split('|');
+  const { meta } = useData();
+  const markName = (code: string | null | undefined) => (code ? (meta.rosterCodes ?? []).find((x) => x.code === code)?.name ?? code : null);
+  const row = (r: AttRow, statusLabel: (s: string) => string) => [r.employee_code, r.name, r.currency_code ?? '', r.work_date, r.shift_name ?? (r.mark_code ? `${r.mark_code} · ${markName(r.mark_code)}` : L('未排班', 'No schedule')), fmtDT(r.scheduled_start_at), fmtDT(r.actual_in_at), r.late_min ?? '',
+    fmtDT(r.scheduled_end_at), fmtDT(r.actual_out_at), r.early_min ?? '', `${r.break_count}${r.open_break_count ? ` (+${r.open_break_count} open)` : ''}`, fmtDur(r.total_break_ms), r.net_worked_ms == null ? '' : fmtDur(r.net_worked_ms), (r.status === 'NO_SCHEDULE' && markName(r.mark_code)) || statusLabel(r.status), r.missing];
   return { cols, row, dt };
 }
 
 const COLS: [string, string, string][] = [
   ['emp', 'PSD ID', 'PSD ID'], ['name', '员工姓名', 'Employee Name'], ['cur', '货币', 'Currency'], ['workDate', '日期', 'Date'], ['shiftName', '班次', 'Shift'], ['schedIn', '排班上班', 'Sched In'], ['inT', '实际上班', 'Actual In'],
   ['lateMin', '迟到', 'Late'], ['schedOut', '排班下班', 'Sched Out'], ['outT', '实际下班', 'Actual Out'], ['earlyMin', '早退', 'Early'], ['completedBreaks', '休息', 'Breaks'],
-  ['totalBreak', '休息总计', 'Break Total'], ['net', '净工时', 'Net Hrs'], ['status', '状态', 'Status'], ['flags', '异常', 'Exceptions'],
+  ['totalBreak', '休息总计', 'Break Total'], ['net', '净工时', 'Net Worked'], ['status', '状态', 'Status'], ['flags', '异常', 'Exceptions'],
 ];
 
 export function Attendance() {
@@ -73,12 +75,12 @@ export function Attendance() {
             {data.rows.map((r) => (
               <tr key={`${r.employee_id}|${r.work_date}`} className="cl" onClick={() => setOpen({ emp: r.employee_id, date: r.work_date })}>
                 <td className="pid"><b>{r.employee_code}</b></td><td>{r.name}</td><td className="c"><CurB c={r.currency_code} /></td><td>{r.work_date}</td>
-                <td>{r.shift_name ?? L('未排班', 'No schedule')}</td>
+                <td><ShiftName name={r.shift_name} mark={r.mark_code} /></td>
                 <td>{r.scheduled_start_at ? fmtT(r.scheduled_start_at) : <Mut />}</td><td>{r.actual_in_at ? fmtT(r.actual_in_at) : <Mut />}</td><td className="n">{num(r.late_min)}</td>
                 <td>{r.scheduled_end_at ? fmtT(r.scheduled_end_at) : <Mut />}</td><td>{r.actual_out_at ? fmtT(r.actual_out_at) : <Mut />}</td><td className="n">{num(r.early_min)}</td>
                 <td className="n">{r.break_count}{r.open_break_count > 0 && <> <span className="b r">+{r.open_break_count} {L('未结束', 'open')}</span></>}</td>
-                <td className="n">{fmtDur(r.total_break_ms)}</td><td className="n">{r.net_worked_ms == null ? <Mut /> : hrs(r.net_worked_ms)}</td>
-                <td><StatusBadge st={r.status} />{r.adjusted ? <> <span className="b v">{L('已修正', 'Adjusted')}</span></> : null}</td>
+                <td className="n">{fmtDur(r.total_break_ms)}</td><td className="n">{r.net_worked_ms == null ? <Mut /> : fmtDur(r.net_worked_ms)}</td>
+                <td><StatusBadge st={r.status} mark={r.mark_code} />{r.adjusted ? <> <span className="b v">{L('已修正', 'Adjusted')}</span></> : null}</td>
                 <td className="c">{r.exception_count ? <span className={`b ${r.has_major_exception ? 'r' : ''}`}>{r.exception_count}</span> : <span className="mut">0</span>}</td>
               </tr>
             ))}
@@ -94,6 +96,7 @@ export function Attendance() {
 interface Detail {
   employee: { id: number; employee_code: string; name: string; currency_code: string | null };
   workDate: string;
+  markCode?: string | null;
   instance: { id: number; shift_name: string; adjustment_status: string; source: string; late_grace_min: number; early_grace_min: number; break_minutes: number | null; scheduled_start_at: number; scheduled_end_at: number } | null;
   session: AttRow & { scheduled_start_at: number | null; shift_duration_ms: number | null } | null;
   events: { id: number; event_type: EventType; event_ts: number; source: string; is_voided: number; sm_result: string | null; adjustment_id: number | null; voided_by_adjustment_id: number | null; raw_text: string | null; tg_message_id: number | null; message_thread_id: number | null; from_user_id: number | null; telegram_message_ts: number | null; raw_received_at: number | null; raw_source?: string | null; processed_at: number | null }[];
@@ -171,11 +174,11 @@ export function SessionDrawer({ emp, date, onClose }: { emp: number; date: strin
               <div className="sd-meta">
                 <span>{L('考勤日', 'Work date')} <b>{date}{wd}</b></span>
                 {data.employee.currency_code && <span>{L('货币', 'Currency')} <b>{data.employee.currency_code}</b></span>}
-                <span>{L('班次', 'Shift')} <b>{inst ? `${inst.shift_name} · ${hm(inst.scheduled_start_at)} – ${hm(inst.scheduled_end_at)}` : L('未排班', 'No schedule')}</b></span>
+                <span>{L('班次', 'Shift')} <b>{inst ? `${inst.shift_name} · ${hm(inst.scheduled_start_at)} – ${hm(inst.scheduled_end_at)}` : data.markCode ? <ShiftName name={null} mark={data.markCode} /> : L('未排班', 'No schedule')}</b></span>
                 <span>{L('斯里兰卡时间', 'Sri Lanka time')}</span>
               </div>
             </div>
-            <div className="sd-r">{s && <StatusBadge st={s.status} />}<button className="btn" onClick={onClose}>{L('关闭', 'Close')}</button></div>
+            <div className="sd-r">{s && <StatusBadge st={s.status} mark={data.markCode} />}<button className="btn" onClick={onClose}>{L('关闭', 'Close')}</button></div>
           </div>
 
           <div className="sd-body">
@@ -190,7 +193,7 @@ export function SessionDrawer({ emp, date, onClose }: { emp: number; date: strin
                 <div className="v">{fmtDur(s?.total_break_ms ?? 0)}</div>
                 <div className="s">{L('共', '')} <b>{s?.break_count ?? 0}</b> {L('次', 'breaks')}{s?.open_break_count ? <> · <b className="red">{L(`${s.open_break_count} 次未结束`, `${s.open_break_count} open`)}</b></> : null} · {L('额度', 'Limit')} <b>{breakQuota != null ? `${breakQuota}m` : L('不限', 'none')}</b></div></div>
               <div className="sd-sc"><div className="l">{L('净工时', 'Net worked')}</div>
-                <div className="v">{s?.net_worked_ms == null ? <span className="mis">—</span> : `${hrs(s.net_worked_ms)} h`}</div>
+                <div className="v">{s?.net_worked_ms == null ? <span className="mis">—</span> : fmtDur(s.net_worked_ms)}</div>
                 <div className="s">{s?.net_worked_ms == null ? L('缺少上班或下班卡', 'Clock in or out missing') : <>{L('在班', 'On shift')} <b>{fmtDur(s.shift_duration_ms)}</b> − {L('休息', 'breaks')} <b>{fmtDur(s.total_break_ms)}</b></>}</div></div>
             </div>
 
