@@ -1134,3 +1134,67 @@ describe('overview card filters', () => {
     expect((await ids('')).sort()).toEqual([e1, e2].sort());
   });
 });
+
+describe('telegram history import — group without topics', () => {
+  it('matches each Telegram account by the Agent name, an account already known, or the admin choice (remembered)', async () => {
+    const { h, e2 } = await fixture();
+    const ak = await h.employee('E003', 'Ali Khan', null);
+    const ar = await h.employee('E004', 'Ali Raza', null);
+    await h.send({ text: 'IN', ts: lk(D, '05:30'), thread: 1002, fromId: 333 }); // Kasun's account, seen by the bot in his topic
+    await h.req('PUT', '/api/settings/keywords', { keywords: { ...TEST_KEYWORDS, CLOCK_OUT: [...TEST_KEYWORDS.CLOCK_OUT, 'END OF SHIFT'] } });
+    const OTHER = -1009998887776;
+    const t = (hhmm: string) => String(lk(D, hhmm) / 1000);
+    const msg = (id: number, hhmm: string, uid: number, from: string, text: string) => ({ id, type: 'message', date_unixtime: t(hhmm), from, from_id: `user${uid}`, text });
+    const exp = { name: 'Old PKR group', type: 'private_supergroup', id: Number(String(OTHER).replace('-100', '')), messages: [
+      msg(1, '07:00', 111, 'Ali K.', 'Start of Shift Agent :Ali Khan date: 15/10/2026'),
+      msg(2, '10:00', 111, 'Ali K.', 'short break'),
+      msg(3, '10:20', 111, 'Ali K.', 'back'),
+      msg(4, '15:01', 111, 'Ali K.', 'End of Shift Agent :Ali Khan date: 15/10/2026'),
+      msg(5, '07:02', 222, 'Ali', 'Start of Shift Agent :Ali date: 15/10/2026'),
+      msg(6, '07:03', 333, 'Kasun', 'IN'),
+      msg(7, '07:04', 444, 'YR', 'IN'),
+      msg(8, '08:00', 444, 'YR', 'good morning'),
+    ] };
+    const { readTelegramExport, agentName } = await import('../src/shared/tgexport');
+    expect(agentName('Start of Shift Agent :Ali Khan date: 15/10/2026')).toBe('Ali Khan');
+    expect(agentName('Agent Name: Hasnain')).toBe('Hasnain');
+    expect(agentName('back')).toBeNull();
+    const x = readTelegramExport(exp);
+    expect(x.messages[0]).toMatchObject({ from: 'Ali K.', fromId: 111 });
+    const body = { chatId: x.chatId, fileName: 'result.json', messages: x.messages, topicsSince: x.topicsSince };
+    let plan = (await h.req('POST', '/api/telegram-import', body)).json.plan;
+    const by = (p: any) => Object.fromEntries(p.senders.map((s: any) => [s.key, [s.by, s.employeeId]]));
+    expect(by(plan)).toEqual({ 111: ['NAME', ak], 222: ['TWO', null], 333: ['KNOWN', e2], 444: ['NONE', null] });
+    expect(plan.senders.find((s: any) => s.key === '222').cands.map((c: any) => c.id).sort()).toEqual([ak, ar].sort());
+    expect(plan).toMatchObject({ toAdd: 5, need: 2 });
+    // the admin chooses Ali Raza for account 222; account 444 is left out
+    plan = (await h.req('POST', '/api/telegram-import', { ...body, senders: { 222: ar } })).json.plan;
+    expect(plan).toMatchObject({ toAdd: 6, need: 1 });
+    const r = await h.req('POST', '/api/telegram-import', { ...body, senders: { 222: ar }, apply: true, reason: 'Old group without topics' });
+    expect(r.json.applied.added).toBe(6);
+    expect((await h.session(ak, D))).toMatchObject({ actual_in_at: lk(D, '07:00'), actual_out_at: lk(D, '15:01'), break_count: 1 });
+    expect((await h.session(ar, D))!.actual_in_at).toBe(lk(D, '07:02'));
+    expect(h.db.get('SELECT employee_id FROM tg_sender_employees WHERE from_user_id = 222')).toEqual({ employee_id: ar });
+    // next time the choice is remembered
+    const again = (await h.req('POST', '/api/telegram-import', body)).json.plan;
+    expect(by(again)['222']).toEqual(['SAVED', ar]);
+    expect(again.toAdd).toBe(0);
+  });
+
+  it('in a group with topics, only messages from before the first topic are matched by sender', async () => {
+    const { h, e2 } = await fixture();
+    await h.send({ text: 'IN', ts: lk(D, '05:30'), thread: 1002, fromId: 333 });
+    const t = (hhmm: string) => String(lk(D, hhmm) / 1000);
+    const exp = { name: 'Team', type: 'private_supergroup', id: Number(String(CHAT).replace('-100', '')), messages: [
+      { id: 7001, type: 'message', date_unixtime: t('07:00'), from: 'Kasun', from_id: 'user333', text: 'IN' },
+      { id: 7002, type: 'service', date_unixtime: t('09:00'), action: 'topic_created', title: 'Kasun' },
+      { id: 7003, type: 'message', date_unixtime: t('15:00'), from: 'Kasun', from_id: 'user333', text: 'OUT' }, // General chat after topics exist
+    ] };
+    const { readTelegramExport } = await import('../src/shared/tgexport');
+    const x = readTelegramExport(exp);
+    expect(x.topicsSince).toBe(lk(D, '09:00'));
+    const plan = (await h.req('POST', '/api/telegram-import', { chatId: x.chatId, fileName: 'r.json', messages: x.messages, topicsSince: x.topicsSince })).json.plan;
+    expect(plan).toMatchObject({ toAdd: 1, noTopic: 1 });
+    expect(plan.rows.find((r: any) => r.id === 7001)).toMatchObject({ result: 'NEW', employeeId: e2 });
+  });
+});

@@ -404,3 +404,10 @@ table.grid td{white-space:normal}
 .accsep{width:1px;height:18px;background:var(--line)}
 .b.own{background:#0f172a;color:#fff}
 .b.cur{background:var(--pri2);color:var(--pri)}
+/* Telegram import: group without topics */
+.impsec{font-weight:700;margin:16px 0 8px;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.impsec span{color:var(--mut);font-weight:400;font-size:12.5px}
+.impagent{font-weight:600;color:#6d28d9}
+.impwarn{color:var(--warn);font-size:12.5px;margin:4px 0 6px}
+select.need{border-color:#f59e0b;background:#fffbeb}
+.impsnd td:first-child,.impsnd th:first-child{text-align:left}

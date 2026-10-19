@@ -177,13 +177,16 @@ function RawList({ page, size, onPage, onSize }: { page: number; size: number; o
 }
 
 // ---------------------------------------------------------------- import a Telegram Desktop chat export (punches sent before the bot joined)
-interface ImpRow { id: number; time: string; workDate: string; text: string; code: string | null; name: string | null; type: EventType | null; thread: number | null; result: 'NEW' | 'DUP' | 'UNREC' | 'NOTOPIC' | 'INACTIVE' | 'UNTRUSTED' }
-interface ImpPlan { messages: number; toAdd: number; already: number; unclear: number; noTopic: number; inactive: number; notPunch: number; from: string | null; to: string | null; rows: ImpRow[] }
+interface ImpRow { id: number; time: string; workDate: string; text: string; code: string | null; name: string | null; type: EventType | null; thread: number | null; from: string; fromId: number | null; result: 'NEW' | 'DUP' | 'UNREC' | 'NOTOPIC' | 'NEED' | 'INACTIVE' | 'UNTRUSTED' }
+/** A Telegram account in a group without topics and the employee it belongs to. */
+interface ImpSender { key: string; name: string; agent: string | null; n: number; by: 'MAN' | 'SAVED' | 'KNOWN' | 'NAME' | 'TWO' | 'NONE'; employeeId: number | null; code: string | null; empName: string | null; cands: { id: number; code: string; name: string }[] }
+interface ImpPlan { messages: number; toAdd: number; already: number; unclear: number; noTopic: number; need: number; inactive: number; notPunch: number; from: string | null; to: string | null; rows: ImpRow[]; senders: ImpSender[] }
 
 function TgImport() {
   const { L, dt } = useI18n();
-  const { refresh } = useData();
-  const [src, setSrc] = useState<{ file: string; name: string; chatId: number; messages: ExportMsg[] } | null>(null);
+  const { refresh, meta } = useData();
+  const [src, setSrc] = useState<{ file: string; name: string; chatId: number; messages: ExportMsg[]; topicsSince: number | null } | null>(null);
+  const [choice, setChoice] = useState<Record<string, number | null>>({});
   const [plan, setPlan] = useState<ImpPlan | null>(null);
   const [show, setShow] = useState('');
   const [reason, setReason] = useState('');
@@ -196,26 +199,42 @@ function TgImport() {
       const x = readTelegramExport(JSON.parse(await file.text()));
       if (x.chatId == null) throw new Error(L('导出档里没有群组 ID', 'The export has no group id'));
       setBusy(true);
-      const r = await api<{ plan: ImpPlan }>('/telegram-import', { method: 'POST', body: { chatId: x.chatId, fileName: file.name, messages: x.messages } });
-      setSrc({ file: file.name, name: x.name, chatId: x.chatId, messages: x.messages });
+      const r = await api<{ plan: ImpPlan }>('/telegram-import', { method: 'POST', body: { chatId: x.chatId, fileName: file.name, messages: x.messages, topicsSince: x.topicsSince } });
+      setSrc({ file: file.name, name: x.name, chatId: x.chatId, messages: x.messages, topicsSince: x.topicsSince });
+      setChoice({});
       setPlan(r.plan);
     } catch (e) { setErr(e instanceof SyntaxError ? new Error(L('不是 JSON 档案，请在导出时选择 Machine-readable JSON', 'Not a JSON file — choose "Machine-readable JSON" when exporting')) : (e as Error)); }
     finally { setBusy(false); }
+  };
+  // choosing the employee of a Telegram account re-reads the file with that choice
+  const choose = async (key: string, id: number | null) => {
+    if (!src) return;
+    const next = { ...choice, [key]: id };
+    setChoice(next); setBusy(true); setErr(null);
+    try {
+      const r = await api<{ plan: ImpPlan }>('/telegram-import', { method: 'POST', body: { chatId: src.chatId, fileName: src.file, messages: src.messages, topicsSince: src.topicsSince, senders: next } });
+      setPlan(r.plan);
+    } catch (e) { setErr(e as ApiErr); } finally { setBusy(false); }
   };
   const apply = async () => {
     if (!src || !plan) return;
     if (reason.trim().length < 4) return setErr(new Error(L('请填写原因（至少 4 个字）', 'Please give a reason (at least 4 characters)')));
     setBusy(true);
     try {
-      const r = await api<{ applied: { added: number } }>('/telegram-import', { method: 'POST', body: { chatId: src.chatId, fileName: src.file, messages: src.messages, apply: true, reason } });
+      const r = await api<{ applied: { added: number } }>('/telegram-import', { method: 'POST', body: { chatId: src.chatId, fileName: src.file, messages: src.messages, topicsSince: src.topicsSince, senders: choice, apply: true, reason } });
       toast(L(`已补入 ${r.applied.added} 笔打卡，考勤已重算`, `${r.applied.added} punches added; attendance recalculated`));
       refresh(); setSrc(null); setPlan(null); setReason('');
     } catch (e) { setErr(e as ApiErr); } finally { setBusy(false); }
   };
   const RES: Record<ImpRow['result'], [string, string]> = {
     NEW: ['ok', L('会补入', 'Will be added')], DUP: ['', L('已有记录', 'Already recorded')], UNREC: ['w', L('看不懂，跳过', 'Unclear — skipped')],
-    NOTOPIC: ['r', L('Topic 未绑定，跳过', 'Topic not bound — skipped')], INACTIVE: ['', L('员工已停用，跳过', 'Employee inactive — skipped')], UNTRUSTED: ['w', L('转发的消息，跳过', 'Forwarded — skipped')],
+    NOTOPIC: ['r', L('Topic 未绑定，跳过', 'Topic not bound — skipped')], NEED: ['w', L('选择员工后才会补入', 'Skipped until chosen')], INACTIVE: ['', L('员工已停用，跳过', 'Employee inactive — skipped')], UNTRUSTED: ['w', L('转发的消息，跳过', 'Forwarded — skipped')],
   };
+  const BY: Record<ImpSender['by'], [string, string]> = {
+    MAN: ['ok', L('你选的', 'Chosen by you')], SAVED: ['ok', L('之前选过', 'Chosen before')], KNOWN: ['i', L('已认识', 'Already known')],
+    NAME: ['v', 'Agent name'], TWO: ['w', L('多位员工符合', 'Several employees match')], NONE: ['r', L('没有 Agent name', 'No agent name')],
+  };
+  const unmatched = (plan?.senders ?? []).filter((x) => !x.employeeId);
   const rows = (plan?.rows ?? []).filter((r) => !show || r.result === show || (show === 'UNREC' && r.result === 'UNTRUSTED'));
   return (
     <div className="card">
@@ -225,7 +244,7 @@ function TgImport() {
         <>
           <div className="impsteps">
             <div><b>1 · {L('导出', 'Export')}</b><span>{L('Telegram 电脑版 → 打开群组 → ⋮ → Export chat history → 取消 Photos → Format 选 Machine-readable JSON → 选日期', 'Telegram Desktop → open the group → ⋮ → Export chat history → untick Photos → Format: Machine-readable JSON → choose the dates')}</span></div>
-            <div><b>2 · {L('上传', 'Upload')}</b><span>{L('上传 result.json。每个 Topic 对应已绑定的员工，用打卡关键词判断动作。', 'Upload result.json. Each topic is matched to the employee bound to it and read with your punch keywords.')}</span></div>
+            <div><b>2 · {L('上传', 'Upload')}</b><span>{L('上传 result.json。每个 Topic 对应已绑定的员工；没有 Topic 的群组按发送者和消息里的 Agent name 对应员工。', 'Upload result.json. Each topic is matched to the employee bound to it; in a group without topics, by the sender and the Agent name in the message.')}</span></div>
             <div><b>3 · {L('检查后确认', 'Check & confirm')}</b><span>{L('确认要补的打卡，填写原因后写入。bot 已收到的消息会自动跳过。', 'Review the punches, give a reason and confirm. Messages the bot already received are skipped.')}</span></div>
           </div>
           <label className={`impdrop ${drag ? 'on' : ''}`} onDragOver={(e) => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)}
@@ -242,23 +261,54 @@ function TgImport() {
             <div><span>{L('会补入', 'Punches to add')}</span><b style={{ color: 'var(--ok)' }}>{plan.toAdd}</b></div>
             <div><span>{L('已有记录', 'Already recorded')}</span><b>{plan.already}</b></div>
             <div><span>{L('看不懂', 'Unclear')}</span><b style={{ color: plan.unclear ? 'var(--warn)' : undefined }}>{plan.unclear}</b></div>
-            <div><span>{L('Topic 未绑定', 'Topic not bound')}</span><b style={{ color: plan.noTopic ? 'var(--bad)' : undefined }}>{plan.noTopic}</b></div>
+            {plan.senders.length
+              ? <div><span>{L('需要选择员工', 'Choose employee')}</span><b style={{ color: unmatched.length ? 'var(--bad)' : undefined }}>{unmatched.length}</b></div>
+              : <div><span>{L('Topic 未绑定', 'Topic not bound')}</span><b style={{ color: plan.noTopic ? 'var(--bad)' : undefined }}>{plan.noTopic}</b></div>}
           </div>
+          {plan.senders.length > 0 && (
+            <>
+              <div className="impsec">1 · {L('谁发的消息', 'Who sent the messages')} <span>{L('每个 Telegram 账号选一次，它的所有消息都会跟着算给这位员工。', 'Each Telegram account is matched once; all its messages follow.')}</span></div>
+              <div className="tw impsnd" style={{ marginBottom: 6 }}><table><thead><tr>
+                <th>{L('Telegram 账号', 'Telegram account')}</th><th>{L('消息里的 Agent name', 'Agent name in messages')}</th><th>{L('打卡消息', 'Messages')}</th><th>{L('员工', 'Employee')}</th><th>{L('对应方式', 'Matched by')}</th>
+              </tr></thead><tbody>
+                {plan.senders.map((x) => {
+                  const pref = new Set(x.cands.map((c) => c.id));
+                  const opts = (list: typeof meta.employees) => list.map((e) => <option key={e.id} value={e.id}>{e.code} · {e.name}</option>);
+                  return (
+                    <tr key={x.key}>
+                      <td><b>{x.name || '—'}</b> <span className="mut" style={{ fontSize: 12 }}>#{x.key}</span></td>
+                      <td>{x.agent ? <span className="impagent">Agent :{x.agent}</span> : <span className="mut">—</span>}</td>
+                      <td>{x.n}</td>
+                      <td><select className={x.employeeId ? '' : 'need'} value={x.employeeId ?? ''} disabled={busy} onChange={(e) => void choose(x.key, e.target.value ? Number(e.target.value) : null)} style={{ minWidth: 220, width: 'auto' }}>
+                        <option value="">{L('— 选择员工 —', '— Choose employee —')}</option>
+                        {pref.size > 0 && opts(meta.employees.filter((e) => pref.has(e.id)))}
+                        {pref.size > 0 && <option disabled>──────────</option>}
+                        {opts(meta.employees.filter((e) => !pref.has(e.id)))}
+                      </select></td>
+                      <td><span className={`b ${BY[x.by][0]}`}>{BY[x.by][1]}</span></td>
+                    </tr>
+                  );
+                })}
+              </tbody></table></div>
+              {unmatched.length > 0 && <div className="impwarn">{L(`还有 ${unmatched.length} 个账号没有对应员工，它们的 ${plan.need} 笔打卡会先跳过（可以选好再补入，或不选直接补入其他打卡）。`, `${unmatched.length} account(s) still need an employee — their ${plan.need} punches are skipped until you choose (or you can import without them).`)}</div>}
+              <div className="impsec">2 · {L('打卡明细', 'Punches')} <span>{L('时间采用 Telegram 消息时间（消息里写的日期不会使用）。', 'Time = Telegram message time (the date typed in the message is not used).')}</span></div>
+            </>
+          )}
           <div className="row" style={{ marginBottom: 10, alignItems: 'center' }}>
             <select value={show} onChange={(e) => setShow(e.target.value)} style={{ width: 'auto' }}>
               <option value="">{L('全部结果', 'All results')}</option><option value="NEW">{RES.NEW[1]}</option><option value="DUP">{RES.DUP[1]}</option>
-              <option value="UNREC">{L('看不懂', 'Unclear')}</option><option value="NOTOPIC">{RES.NOTOPIC[1]}</option>
+              <option value="UNREC">{L('看不懂', 'Unclear')}</option>{plan.need > 0 && <option value="NEED">{RES.NEED[1]}</option>}{plan.noTopic > 0 && <option value="NOTOPIC">{RES.NOTOPIC[1]}</option>}
             </select>
             <span className="mut" style={{ fontSize: 12.5 }}>{src.name} · {src.chatId} · {plan.from} → {plan.to} · {L(`另有 ${plan.notPunch} 则一般聊天未列出`, `${plan.notPunch} ordinary chat messages not listed`)}</span>
           </div>
           {rows.length === 0 ? <div className="empty">{L('没有符合的消息', 'Nothing here')}</div> : (
             <div className="tw" style={{ maxHeight: 460 }}><table><thead><tr>
-              <th className="pid">PSD ID</th><th>{L('员工姓名', 'Employee Name')}</th><th>{L('Telegram 时间', 'Telegram time')}</th><th>{L('动作', 'Action')}</th><th>{L('消息', 'Message')}</th><th>{L('结果', 'Result')}</th>
+              <th className="pid">PSD ID</th><th>{L('员工姓名', 'Employee Name')}</th><th>{L('Telegram 时间', 'Telegram time')}</th>{plan.senders.length > 0 && <th>{L('Telegram 账号', 'Telegram account')}</th>}<th>{L('动作', 'Action')}</th><th>{L('消息', 'Message')}</th><th>{L('结果', 'Result')}</th>
             </tr></thead><tbody>
               {rows.map((r) => <tr key={r.id}>
                 <td className="pid">{r.code ? <b>{r.code}</b> : <span className="mut">—</span>}</td>
                 <td>{r.name ?? <span className="mut">{r.thread ? `Topic #${r.thread}` : '—'}</span>}</td>
-                <td className="nw">{r.time}</td>
+                <td className="nw">{r.time}</td>{plan.senders.length > 0 && <td>{r.from || <span className="mut">—</span>}</td>}
                 <td>{r.type ? dt(EVENT_LABEL[r.type]) : <span className="mut">—</span>}</td>
                 <td className="impmsg" title={r.text}>{r.text.replace(/\s*\n\s*/g, ' · ')}</td>
                 <td><span className={`b ${RES[r.result][0]}`}>{RES[r.result][1]}</span></td>
@@ -268,7 +318,7 @@ function TgImport() {
           {plan.toAdd > 0 && <div style={{ marginTop: 12 }}><label className="mut" style={{ fontSize: 12 }}>{L('原因（必填）', 'Reason (required)')}</label><textarea rows={2} value={reason} placeholder={L('例如：bot 加入群组前的打卡', 'e.g. Punches sent before the bot joined the group')} onChange={(e) => setReason(e.target.value)} /></div>}
           <div style={{ marginTop: 8 }}><ErrBox error={err} /></div>
           <div className="setfoot" style={{ gap: 8, display: 'flex', justifyContent: 'flex-end' }}>
-            <button className="btn" onClick={() => { setPlan(null); setSrc(null); setErr(null); }}>{L('取消', 'Cancel')}</button>
+            <button className="btn" onClick={() => { setPlan(null); setSrc(null); setErr(null); setChoice({}); }}>{L('取消', 'Cancel')}</button>
             {plan.toAdd > 0 && <button className="btn p" disabled={busy} onClick={apply}>{L(`补入 ${plan.toAdd} 笔打卡`, `Add ${plan.toAdd} punches`)}</button>}
           </div>
         </>
