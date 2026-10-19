@@ -78,8 +78,13 @@ export interface Rules {
   breakMinutes: number | null; // total break allowed per day, in minutes (null = no limit); applies to every shift
   breakUnit?: 'h' | 'm';      // how the admin entered it (display only)
   otHours: number;            // on-shift time (clock in → clock out) above this many hours is tagged OT on the roster
-  forgotOutHours: number;     // no clock out this many hours after clock in → the bot asks "Are you on OT?" (if bot replies are on)
-  forgotOutUnit?: 'h' | 'm';  // how the admin entered it (display only)
+  /** no clock out this many minutes after the SCHEDULED shift end → the bot asks "Are you on OT?" (if bot replies are on).
+   *  Shift 07:30–16:30 + 45 → asked at 17:15, however early or late the employee clocked in. */
+  outAskMin: number;
+  outAskUnit?: 'h' | 'm';     // how the admin entered it (display only; the value is always minutes)
+  /** @deprecated replaced by outAskMin (was: hours after the clock in); kept only so old saved settings still parse */
+  forgotOutHours?: number;
+  forgotOutUnit?: 'h' | 'm';
   earlyAskMin: number;        // clock in at least this many minutes before the shift → the bot asks "Is this OT?" (0 = off)
   answerBy: 'any' | 'own';    // who may press the bot's buttons: anyone in the group, or only the employee
 }
@@ -111,7 +116,7 @@ export interface ParserRules {
   typedTimeReview: boolean;
 }
 export const DEFAULT_PARSER: ParserRules = { skipLabels: [], typoTolerance: true, ignoreBrackets: true, typedTimeReview: true };
-export const DEFAULT_RULES: Rules = { windowHours: 4, windowUnit: 'h', lateAsException: false, botReply: true, otHours: 9, breakMinutes: 90, breakUnit: 'm', forgotOutHours: 9.75, forgotOutUnit: 'h', earlyAskMin: 30, answerBy: 'any' };
+export const DEFAULT_RULES: Rules = { windowHours: 4, windowUnit: 'h', lateAsException: false, botReply: true, otHours: 9, breakMinutes: 90, breakUnit: 'm', outAskMin: 45, earlyAskMin: 30, answerBy: 'any' };
 
 export const BIZ_TZ_DEFAULT = 'Asia/Colombo';
 

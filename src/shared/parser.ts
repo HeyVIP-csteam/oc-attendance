@@ -157,6 +157,9 @@ export function parseText(text: string | null | undefined, idx: KeywordIndex): P
     return { kind: 'NONE', norm: n };
   }
   const types = [...new Set(hits.map((h) => h.type))];
+  // three or more different actions in one message is not a punch but an announcement / instruction listing the keywords
+  // ("Check-In: CLOCK IN / … Break Start: BREAK / … Check-Out: …"): ordinary chat — no reply, no exception
+  if (types.length >= 3) return { kind: 'NONE', norm: n };
   if (types.length > 1) return { kind: 'UNRECOGNIZED', norm: n, reason: 'CONFLICT', types };
   const actionText = lines.map((l) => l.raw).join(' ');
   const tm = actionText.match(TIME_RE);

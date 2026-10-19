@@ -1,6 +1,7 @@
 // The bot's OT questions in the employee's topic (Settings → Attendance rules / Bot messages):
 //  • EARLY — the employee clocked in at least N minutes before the shift: "Is this OT?"  [Yes] [No]
-//  • LATE  — no clock out the set hours after the clock in: "Are you on OT?"  [Still on working] [Yes, OT] [Forgot clock out]
+//  • LATE  — no clock out N minutes after the SCHEDULED shift end (07:30–16:30 + 45 → 17:15):
+//            "Are you on OT?"  [Still on working] [Yes, OT] [Forgot clock out]
 // The answer (inline button) decides whether OT is counted; "Forgot clock out" sets the clock out to the shift end and
 // lists an exception. Answers can be changed ("Change answer"); every answer is in the audit log. Questions are only
 // sent while bot replies are on for the employee's currency, and only close to the moment (never for old history).
@@ -24,10 +25,16 @@ const KIND_OF: Record<OtAnswer, Kind> = { YES: 'EARLY', NO: 'EARLY', STILL: 'LAT
 
 export interface TgCallback { id: string; from: { id: number; is_bot?: boolean; first_name?: string; last_name?: string; username?: string }; message?: { message_id: number; chat: { id: number } }; data?: string }
 
-interface Ctx { inAt: number; start: number; end: number; tz: string; name: string; hours: number }
+/** askedAt: when the question was (or is being) sent — {hours} is the time from the clock in to that moment. */
+interface Ctx { inAt: number; start: number; end: number; tz: string; name: string; askedAt: number }
 const fill = (t: string, c: Ctx) => t
   .replace(/\{name\}/g, c.name).replace(/\{in\}/g, fmtTime(c.inAt, c.tz)).replace(/\{out\}/g, fmtTime(Math.min(c.end, Date.now()), c.tz))
-  .replace(/\{shift\}/g, `${fmtTime(c.start, c.tz)}–${fmtTime(c.end, c.tz)}`).replace(/\{hours\}/g, fmtHm(Math.round(c.hours * 60) * MIN));
+  .replace(/\{shift\}/g, `${fmtTime(c.start, c.tz)}–${fmtTime(c.end, c.tz)}`).replace(/\{hours\}/g, fmtHm(Math.max(0, c.askedAt - c.inAt)));
+
+/** When the "no clock out" question is due: the set minutes after the scheduled end, and never sooner than 1 hour
+ *  after the clock in (someone who clocked in after the shift ended is not asked straight away). */
+export const lateAskAt = (c: { actual_in_at: number; scheduled_end_at: number }, outAskMin: number) =>
+  Math.max(c.scheduled_end_at + Math.round(outAskMin) * MIN, c.actual_in_at + HOUR);
 
 const keyboard = (t: BotTexts, kind: Kind, id: number) => ({
   inline_keyboard: kind === 'EARLY'
@@ -63,10 +70,12 @@ export async function askOtQuestions(env: Env, now: number, earlyOnly = false, s
     if (rules.botReply && rules.earlyAskMin > 0 && c.actual_in_at <= c.scheduled_start_at - rules.earlyAskMin * MIN) due.push({ c, kind: 'EARLY', rules });
   }
   if (!earlyOnly) {
-    for (const c of await all<Cand>(db, `${CAND} AND s.actual_out_at IS NULL AND s.actual_in_at BETWEEN ? AND ?
-        AND NOT EXISTS (SELECT 1 FROM ot_questions q WHERE q.employee_id = s.employee_id AND q.work_date = s.work_date AND q.kind = 'LATE') LIMIT 200`, now - 17 * HOUR, now - 59 * MIN)) {
+    // shifts that ended in the last 8 h (max setting) + 2 h (LATE_LIMIT), clocked in and still not clocked out
+    for (const c of await all<Cand>(db, `${CAND} AND s.actual_out_at IS NULL AND s.scheduled_end_at BETWEEN ? AND ? AND s.actual_in_at >= ?
+        AND NOT EXISTS (SELECT 1 FROM ot_questions q WHERE q.employee_id = s.employee_id AND q.work_date = s.work_date AND q.kind = 'LATE') LIMIT 200`,
+      now - 10 * HOUR - LATE_LIMIT, now, now - 30 * HOUR)) {
       const rules = rulesFor(st, c.currency_code);
-      const at = c.actual_in_at + Math.round(rules.forgotOutHours * 60) * MIN;
+      const at = lateAskAt(c, rules.outAskMin);
       if (rules.botReply && now >= at && now - at <= LATE_LIMIT) due.push({ c, kind: 'LATE', rules });
     }
   }
@@ -82,7 +91,7 @@ export async function askOtQuestions(env: Env, now: number, earlyOnly = false, s
     try {
       const bot = await botOfChat(env, c.chat_id, c.currency_code);
       if (!bot) throw new Error('no bot for this group');
-      const ctx: Ctx = { inAt: c.actual_in_at, start: c.scheduled_start_at, end: c.scheduled_end_at, tz: c.timezone || bizTz(env), name: c.name, hours: rules.forgotOutHours };
+      const ctx: Ctx = { inAt: c.actual_in_at, start: c.scheduled_start_at, end: c.scheduled_end_at, tz: c.timezone || bizTz(env), name: c.name, askedAt: now };
       const m = await tgCall<{ message_id: number }>(bot.token, 'sendMessage', {
         chat_id: c.chat_id, ...(c.thread != null ? { message_thread_id: c.thread } : {}),
         text: fill(kind === 'EARLY' ? st.botTexts.earlyQ : st.botTexts.lateQ, ctx), reply_markup: keyboard(st.botTexts, kind, id),
@@ -101,7 +110,7 @@ export async function askOtQuestions(env: Env, now: number, earlyOnly = false, s
   return sent;
 }
 
-interface QRow { id: number; employee_id: number; work_date: string; kind: Kind; chat_id: number; tg_message_id: number | null; owner_tg_id: number | null; in_at: number; answer: OtAnswer | null; forgot_event_id: number | null;
+interface QRow { id: number; employee_id: number; work_date: string; kind: Kind; chat_id: number; tg_message_id: number | null; owner_tg_id: number | null; in_at: number; asked_at: number; answer: OtAnswer | null; forgot_event_id: number | null;
   employee_code: string; name: string; currency_code: string | null; timezone: string; scheduled_start_at: number | null; scheduled_end_at: number | null; actual_out_at: number | null }
 
 /** A button press under a question. Always answers the callback so the button stops spinning. */
@@ -120,7 +129,7 @@ export async function handleOtCallback(env: Env, bot: BotRow, cq: TgCallback): P
   const rules = rulesFor(settings, q.currency_code);
   if (rules.answerBy === 'own' && q.owner_tg_id != null && cq.from.id !== q.owner_tg_id) { await answerCb(t.notYou, true); return 'NOT_YOU'; }
   const tz = q.timezone || bizTz(env);
-  const ctx: Ctx = { inAt: q.in_at, start: q.scheduled_start_at ?? q.in_at, end: q.scheduled_end_at ?? q.in_at, tz, name: q.name, hours: rules.forgotOutHours };
+  const ctx: Ctx = { inAt: q.in_at, start: q.scheduled_start_at ?? q.in_at, end: q.scheduled_end_at ?? q.in_at, tz, name: q.name, askedAt: q.asked_at };
   const question = fill(q.kind === 'EARLY' ? t.earlyQ : t.lateQ, ctx);
   if (m[2] === 'c') {
     // show the buttons again; the current answer stays until a new one is pressed

@@ -177,7 +177,7 @@ function Rules() {
     [L('迟到/早退列为异常', 'Late / early leave as exceptions'), (r) => (r.lateAsException ? L('是', 'Yes') : L('否', 'No'))],
     [L('Bot 回复', 'Bot replies'), (r) => (r.botReply ? L('开启', 'On') : L('关闭', 'Off'))],
     [L('提早上班问 OT', 'Ask OT on early clock in'), (r) => ((r.earlyAskMin ?? 30) > 0 ? `${r.earlyAskMin ?? 30} min` : L('关闭', 'Off'))],
-    [L('超时未下班问 OT', 'Ask OT with no clock out'), (r) => (r.forgotOutUnit === 'm' ? `${Math.round((r.forgotOutHours ?? 9.75) * 60)} min` : hm(Math.round((r.forgotOutHours ?? 9.75) * 60)))],
+    [L('超时未下班问 OT', 'Ask OT with no clock out'), (r) => { const m = r.outAskMin ?? 45; const t = r.outAskUnit === 'h' ? hm(m) : `${m} min`; return L(`下班后 ${t}`, `${t} after shift end`); }],
     [L('谁可以按按钮', 'Who may answer'), (r) => (r.answerBy === 'own' ? L('只有员工本人', 'Only the employee') : L('群里任何人', 'Anyone in the group'))],
   ];
   if (!cur) return <div className="card empty">{L('请先在「货币」新增货币', 'Add a currency first (Currency tab)')}</div>;
@@ -208,22 +208,30 @@ function RulesForm({ cur }: { cur: string }) {
   const brMin0 = r0.breakMinutes === undefined ? 90 : r0.breakMinutes;
   const brUnit0: 'h' | 'm' = r0.breakUnit ?? 'm';
   const unit0: 'h' | 'm' = r0.windowUnit ?? (Number.isInteger(r0.windowHours) ? 'h' : 'm');
-  const fo0 = r0.forgotOutHours ?? 9.75;
-  const fu0: 'h' | 'm' = r0.forgotOutUnit ?? 'h';
-  const [v, setV] = useState({ unit: unit0, win: String(unit0 === 'm' ? Math.round(r0.windowHours * 60) : r0.windowHours), bunit: brUnit0, br: brMin0 == null ? '' : String(brUnit0 === 'h' ? Math.round((brMin0 / 60) * 100) / 100 : brMin0), lx: r0.lateAsException ? '1' : '0', bot: r0.botReply ? '1' : '0', ea: String(r0.earlyAskMin ?? 30), ab: r0.answerBy ?? 'any', funit: fu0, fo: String(fu0 === 'm' ? Math.round(fo0 * 60) : fo0) });
+  const oaUnit0: 'h' | 'm' = r0.outAskUnit ?? 'm';
+  const [v, setV] = useState({ unit: unit0, win: String(unit0 === 'm' ? Math.round(r0.windowHours * 60) : r0.windowHours), bunit: brUnit0, br: brMin0 == null ? '' : String(brUnit0 === 'h' ? Math.round((brMin0 / 60) * 100) / 100 : brMin0), lx: r0.lateAsException ? '1' : '0', bot: r0.botReply ? '1' : '0', ea: String(r0.earlyAskMin ?? 30), ab: r0.answerBy ?? 'any', ounit: oaUnit0, oa: String(oaUnit0 === 'h' ? Math.round(((r0.outAskMin ?? 45) / 60) * 100) / 100 : r0.outAskMin ?? 45) });
+  const [err, setErr] = useState('');
   const onErr = useErr();
   const winH = () => {
     const n = Number(v.win) || 0;
     const mins = Math.round(v.unit === 'm' ? n : n * 60);
     return Math.min(480, Math.max(5, mins)) / 60;
   };
-  // OT question when there is no clock out: 1–15 hours after clock in
-  const foH = () => { const n = Number(v.fo) || 9.75; return Math.min(900, Math.max(60, Math.round(v.funit === 'm' ? n : n * 60))) / 60; };
   const brMin = () => (v.br.trim() === '' ? null : Math.min(1440, Math.max(0, Math.round((Number(v.br) || 0) * (v.bunit === 'h' ? 60 : 1)))));
   const conv = (val: string, u: 'h' | 'm') => { if (val.trim() === '') return ''; const n = Number(val) || 0; return String(u === 'm' ? Math.round(n * 60) : Math.round((n / 60) * 100) / 100); };
   const save = async () => {
+    // OT question with no clock out: minutes after the scheduled shift end (0–480); never changed silently
+    // hours or minutes; stored as whole minutes 0–480 (8 h). Never changed silently: a bad value is refused.
+    const n = Number(v.oa);
+    const oaRaw = v.ounit === 'h' ? n * 60 : n;
+    const oa = Math.round(oaRaw);
+    if (v.oa.trim() === '' || !Number.isFinite(n) || Math.abs(oaRaw - oa) > 1e-6 || oa < 0 || oa > 480)
+      return setErr(v.ounit === 'h'
+        ? L('「超时未下班问 OT」请填 0–8 小时（可用小数，例如 0.75 = 45 分钟）', '"Ask OT with no clock out": 0–8 hours (decimals allowed, e.g. 0.75 = 45 min)')
+        : L('「超时未下班问 OT」请填 0–480 的整数分钟', '"Ask OT with no clock out": a whole number of minutes from 0 to 480'));
+    setErr('');
     try {
-      await api('/settings/rules', { method: 'PUT', body: { currency: cur, windowHours: winH(), windowUnit: v.unit, breakMinutes: brMin(), breakUnit: v.bunit, lateAsException: v.lx === '1', botReply: v.bot === '1', forgotOutHours: foH(), forgotOutUnit: v.funit, earlyAskMin: Math.min(240, Math.max(0, Math.round(Number(v.ea) || 0))), answerBy: v.ab } });
+      await api('/settings/rules', { method: 'PUT', body: { currency: cur, windowHours: winH(), windowUnit: v.unit, breakMinutes: brMin(), breakUnit: v.bunit, lateAsException: v.lx === '1', botReply: v.bot === '1', outAskMin: oa, outAskUnit: v.ounit, earlyAskMin: Math.min(240, Math.max(0, Math.round(Number(v.ea) || 0))), answerBy: v.ab } });
       toast(L(`${cur} 规则已保存，${cur} 员工的考勤会重新计算`, `${cur} rules saved; ${cur} attendance is being recalculated`));
       await reloadMeta();
     } catch (e) { onErr(e); }
@@ -235,10 +243,11 @@ function RulesForm({ cur }: { cur: string }) {
         <div className="setrow"><label htmlFor="stBr">{L('每日休息时间（总计；留空 = 不限）', 'Break time per day (total; empty = no limit)')}</label><div className="setctl unitctl"><input id="stBr" type="number" min={0} step={v.bunit === 'm' ? 5 : 0.25} placeholder={L('不限', 'No limit')} value={v.br} disabled={readOnly} onChange={(e) => setV({ ...v, br: e.target.value })} /><select aria-label={L('单位', 'Unit')} value={v.bunit} disabled={readOnly} onChange={(e) => { const u = e.target.value as 'h' | 'm'; setV({ ...v, bunit: u, br: conv(v.br, u) }); }}><option value="h">{L('小时', 'Hours')}</option><option value="m">{L('分钟', 'Minutes')}</option></select></div></div>
         <div className="setrow"><label htmlFor="stLx">{L('迟到/早退是否也列为异常', 'Also list late / early leave as exceptions')}</label><div className="setctl"><select id="stLx" value={v.lx} disabled={readOnly} onChange={(e) => setV({ ...v, lx: e.target.value })}><option value="0">{L('否，只显示状态', 'No, status only')}</option><option value="1">{L('是', 'Yes')}</option></select></div></div>
         <div className="setrow"><label htmlFor="stBot">{L('Bot 在 Topic 回复确认', 'Bot replies in the topic')}</label><div className="setctl"><select id="stBot" value={v.bot} disabled={readOnly} onChange={(e) => setV({ ...v, bot: e.target.value })}><option value="1">{L('开启', 'On')}</option><option value="0">{L('关闭', 'Off')}</option></select></div></div>
-        <div className="setrow"><label htmlFor="stFo">{L('超时未下班问 OT：上班后超过多久还没打下班卡，bot 问是不是 OT', 'Ask OT with no clock out: time after clock in')}</label><div className="setctl unitctl"><input id="stFo" type="number" min={v.funit === 'm' ? 60 : 1} max={v.funit === 'm' ? 900 : 15} step={v.funit === 'm' ? 15 : 0.25} value={v.fo} disabled={readOnly} onChange={(e) => setV({ ...v, fo: e.target.value })} /><select aria-label={L('单位', 'Unit')} value={v.funit} disabled={readOnly} onChange={(e) => { const u = e.target.value as 'h' | 'm'; setV({ ...v, funit: u, fo: conv(v.fo, u) || v.fo }); }}><option value="h">{L('小时', 'Hours')}</option><option value="m">{L('分钟', 'Minutes')}</option></select></div></div>
+        <div className="setrow"><label htmlFor="stOa">{L('超时未下班问 OT：排班下班后超过多久还没打下班卡，bot 问是不是 OT（例：16:30 下班 + 45 分钟 → 17:15 问）', 'Ask OT with no clock out: time after the scheduled shift end (e.g. ends 16:30 + 45 min → asked at 17:15)')}</label><div className="setctl unitctl"><input id="stOa" type="number" min={0} max={v.ounit === 'm' ? 480 : 8} step={v.ounit === 'm' ? 5 : 0.25} value={v.oa} disabled={readOnly} onChange={(e) => setV({ ...v, oa: e.target.value })} /><select aria-label={L('单位', 'Unit')} value={v.ounit} disabled={readOnly} onChange={(e) => { const u = e.target.value as 'h' | 'm'; setV({ ...v, ounit: u, oa: conv(v.oa, u) || v.oa }); }}><option value="h">{L('小时', 'Hours')}</option><option value="m">{L('分钟', 'Minutes')}</option></select></div></div>
         <div className="setrow"><label htmlFor="stEa">{L('提早上班问 OT：比排班早多少分钟以上打卡，bot 问是不是 OT（0 = 不问）', 'Ask OT on early clock in: minutes before the shift (0 = do not ask)')}</label><div className="setctl"><input id="stEa" type="number" min={0} max={240} step={5} value={v.ea} disabled={readOnly} onChange={(e) => setV({ ...v, ea: e.target.value })} /></div></div>
         <div className="setrow"><label htmlFor="stAb">{L('谁可以按 bot 的按钮', 'Who may answer the bot buttons')}</label><div className="setctl"><select id="stAb" value={v.ab} disabled={readOnly} onChange={(e) => setV({ ...v, ab: e.target.value as 'any' | 'own' })}><option value="any">{L('群里任何人', 'Anyone in the group')}</option><option value="own">{L('只有员工本人', 'Only the employee')}</option></select></div></div>
       </div>
+      {err && <div className="err">{err}</div>}
       {!readOnly && <div className="setfoot"><button className="btn p" onClick={save}>{L(`保存 ${cur} 规则`, `Save ${cur} rules`)}</button></div>}
     </>
   );

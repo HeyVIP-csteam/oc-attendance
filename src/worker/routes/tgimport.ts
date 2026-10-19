@@ -11,7 +11,7 @@ import type { AppBindings } from '../env';
 import { auditStmt } from '../lib/audit';
 import { all, chunk, stmt } from '../lib/db';
 import { bad, body, clientIp, requireAdminRole } from '../lib/http';
-import { type Key, reassignEvents, recomputeOrDefer } from '../lib/sessions';
+import { type Key, reassignEvents, recomputeMany, recomputeOrDefer } from '../lib/sessions';
 import { bizTz, loadSettings } from '../lib/settings';
 import { inScope, scopeOf } from '../lib/scope';
 import { agentCandidates, nameKey, personName } from '../../shared/tgexport';
@@ -45,6 +45,28 @@ interface Row { id: number; ts: number; text: string; thread: number | null; emp
 interface Emp { id: number; employee_code: string; name: string; currency_code: string | null; employment_status: string; deactivated_at: number | null }
 /** How the employee of a Telegram account was found: chosen now, chosen before, seen in the employee's topic, by the Agent name; or not (yet). */
 type By = 'MAN' | 'SAVED' | 'KNOWN' | 'NAME' | 'TWO' | 'NONE';
+
+/**
+ * Recalculates sessions waiting for the cron (an import of many days leaves most of them marked "dirty"), a slice per
+ * call so each request stays inside the per-request query limits. The import page calls it until nothing is left.
+ */
+tgImportRoutes.get('/recompute-pending', async (c) => {
+  const left = await all<{ n: number }>(c.env.DB, 'SELECT COUNT(*) AS n FROM attendance_sessions WHERE next_check_at = 0');
+  return c.json({ remaining: left[0]?.n ?? 0 });
+});
+
+tgImportRoutes.post('/recompute-pending', async (c) => {
+  requireAdminRole(c);
+  const db = c.env.DB;
+  const keys = (await all<{ employee_id: number; work_date: string }>(db, 'SELECT employee_id, work_date FROM attendance_sessions WHERE next_check_at = 0 ORDER BY work_date DESC LIMIT 80'))
+    .map((r) => [r.employee_id, r.work_date] as Key);
+  if (keys.length) {
+    const settings = await loadSettings(db);
+    await recomputeMany(db, keys, { now: Date.now(), tz: bizTz(c.env), rules: settings.rules, byCur: settings.rulesCur });
+  }
+  const left = await all<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM attendance_sessions WHERE next_check_at = 0');
+  return c.json({ done: keys.length, remaining: left[0]?.n ?? 0 });
+});
 
 tgImportRoutes.post('/telegram-import', async (c) => {
   requireAdminRole(c);

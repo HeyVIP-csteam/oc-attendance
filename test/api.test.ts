@@ -1189,16 +1189,16 @@ describe('OT questions with buttons', () => {
     expect(qOf(h, 'EARLY').answer).toBe('YES');
   });
 
-  it('no clock out after 9h 45m: Forgot clock out sets the shift end; changing to OT takes it back and counts OT after the shift', async () => {
+  it('no clock out 45 min after the shift end: Forgot clock out sets the shift end; changing to OT takes it back and counts OT after the shift', async () => {
     const { h, e1 } = await fixture();
     await h.roster(e1, D, 'A'); // 07:00–15:00
-    await h.send({ text: 'IN', ts: lk(D, '07:00'), thread: 1001, fromId: 111 });
-    expect(qOf(h, 'EARLY')).toBeUndefined(); // on time → no early question
-    await h.cron(lk(D, '16:40'));
+    await h.send({ text: 'IN', ts: lk(D, '06:55'), thread: 1001, fromId: 111 }); // a few minutes early is normal
+    expect(qOf(h, 'EARLY')).toBeUndefined(); // < 30 min early → no early question
+    await h.cron(lk(D, '15:40'));
     expect(qOf(h, 'LATE')).toBeUndefined();
-    await h.cron(lk(D, '16:50')); // 07:00 + 9h 45m = 16:45
+    await h.cron(lk(D, '15:45')); // 15:00 + 45 min (default), counted from the shift end, not from the clock in
     const q = qOf(h, 'LATE');
-    expect(sent(h, '⏰ Your shift is 07:00–15:00. You clocked in at 07:00 and have not clocked out for 9h 45m. Are you on OT?')).toHaveLength(1);
+    expect(sent(h, '⏰ Your shift is 07:00–15:00. You clocked in at 06:55 and have not clocked out for 8h 50m. Are you on OT?')).toHaveLength(1);
     await h.press({ data: `ot:${q.id}:f`, messageId: q.tg_message_id, fromId: 111, name: 'Ali', at: lk(D, '16:52') });
     expect(await h.session(e1, D)).toMatchObject({ actual_out_at: lk(D, '15:00'), ot_ms: null });
     expect(h.db.get<any>("SELECT status FROM attendance_exceptions WHERE code = 'FORGOT_CLOCK_OUT'")).toEqual({ status: 'OPEN' });
@@ -1212,6 +1212,47 @@ describe('OT questions with buttons', () => {
     // Still on working → no OT
     await h.press({ data: `ot:${q.id}:s`, messageId: q.tg_message_id, fromId: 111, name: 'Ali', at: lk(D, '18:05') });
     expect((await h.session(e1, D))!.ot_ms).toBeNull();
+  });
+
+  it('the "no clock out" time follows the shift end, whatever the clock in; it is set per currency in minutes', async () => {
+    const { h, e1, e2 } = await fixture();
+    const base = { currency: 'LKR', windowHours: 4, lateAsException: false, botReply: true };
+    // 0–480 whole minutes; anything else is refused (never changed silently)
+    expect((await h.req('PUT', '/api/settings/rules', { ...base, outAskMin: 481 })).status).toBe(400);
+    expect((await h.req('PUT', '/api/settings/rules', { ...base, outAskMin: 12.5 })).status).toBe(400);
+    // the unit the admin chose (hours / minutes) is remembered for display; the value is always minutes
+    expect((await h.req('PUT', '/api/settings/rules', { ...base, outAskMin: 90, outAskUnit: 'h' })).status).toBe(200);
+    expect((await h.req('GET', '/api/meta')).json.rulesCur.LKR).toMatchObject({ outAskMin: 90, outAskUnit: 'h' });
+    expect((await h.req('PUT', '/api/settings/rules', { ...base, outAskMin: 30 })).status).toBe(200);
+    expect((await h.req('GET', '/api/meta')).json.rulesCur.LKR).toMatchObject({ outAskMin: 30, outAskUnit: 'm' });
+    await h.roster(e1, D, 'A'); // 07:00–15:00
+    await h.roster(e2, D, 'A');
+    await h.send({ text: 'IN', ts: lk(D, '06:58'), thread: 1001, fromId: 111 });
+    await h.send({ text: 'IN', ts: lk(D, '08:10'), thread: 1002, fromId: 222 }); // late
+    await h.cron(lk(D, '15:25'));
+    expect(h.db.get<any>("SELECT COUNT(*) AS n FROM ot_questions WHERE kind = 'LATE'").n).toBe(0);
+    await h.cron(lk(D, '15:30')); // 15:00 + 30 → both asked, the late one too (not 08:10 + 9h 45m)
+    expect(h.db.rows("SELECT employee_id FROM ot_questions WHERE kind = 'LATE' ORDER BY employee_id").map((r: any) => r.employee_id)).toEqual([e1, e2].sort((a, b) => a - b));
+  });
+
+  it('clocked in after the shift ended: asked no sooner than 1 hour after the clock in', async () => {
+    const { h, e1 } = await fixture();
+    await h.roster(e1, D, 'A'); // 07:00–15:00, window 4 h → a 16:00 clock in still belongs to this shift
+    await h.send({ text: 'IN', ts: lk(D, '16:00'), thread: 1001, fromId: 111 });
+    await h.cron(lk(D, '16:30'));
+    expect(qOf(h, 'LATE')).toBeUndefined();
+    await h.cron(lk(D, '17:00'));
+    expect(qOf(h, 'LATE')).toBeDefined();
+  });
+
+  it('old saved settings without outAskMin fall back to 45 minutes', async () => {
+    const { parseSettings } = await import('../src/worker/lib/settings');
+    const s = parseSettings([
+      { key: 'rules', value: JSON.stringify({ windowHours: 4, lateAsException: false, botReply: true, forgotOutHours: 9.75 }) },
+      { key: 'rules_cur', value: JSON.stringify({ PKR: { windowHours: 3, forgotOutHours: 1, forgotOutUnit: 'm' } }) },
+    ]);
+    expect(s.rules.outAskMin).toBe(45);
+    expect(s.rulesCur.PKR.outAskMin).toBe(45);
   });
 
   it('nobody answers → no OT and an exception; no questions while bot replies are off', async () => {
@@ -1291,5 +1332,33 @@ describe('telegram history import — group that has bound topics now', () => {
     const plan = (await h.req('POST', '/api/telegram-import', { chatId: x.chatId, fileName: 'r.json', messages: x.messages, topicsSince: x.topicsSince })).json.plan;
     expect(plan.rows.find((r: any) => r.id === 1)).toMatchObject({ employeeId: joan, result: 'NEW' });
     expect(plan.rows.find((r: any) => r.id === 3).result).toBe('NOTOPIC');
+  });
+});
+
+describe('recalculating after a big import', () => {
+  it('sessions waiting for the cron can be recalculated right away, a slice per request', async () => {
+    const { h, e1 } = await fixture();
+    await h.roster(e1, D, 'A');
+    await h.send({ text: 'IN', ts: lk(D, '07:00'), thread: 1001 });
+    // imported events whose day is still marked dirty (as an import of many days leaves them)
+    h.db.x("UPDATE attendance_sessions SET status = 'ABSENT', next_check_at = 0 WHERE employee_id = ?", e1);
+    expect((await h.req('GET', '/api/recompute-pending')).json.remaining).toBe(1);
+    const r = (await h.req('POST', '/api/recompute-pending', {})).json;
+    expect(r).toEqual({ done: 1, remaining: 0 });
+    expect((await h.session(e1, D))!.status).not.toBe('ABSENT');
+  });
+});
+
+describe('bot replies only in bound employee topics', () => {
+  it('no reply in General or in a topic that is not bound in the web app (still listed as an exception)', async () => {
+    const { h } = await fixture();
+    const replies = () => h.tg.filter((x) => x.method === 'sendMessage').length;
+    await h.send({ text: 'IN', ts: lk(D, '07:00'), thread: null });       // General
+    await h.send({ text: 'IN', ts: lk(D, '07:01'), thread: 5555 });       // topic nobody is bound to
+    await h.send({ text: 'brek bak', ts: lk(D, '07:02'), thread: 5555 }); // unclear, unbound topic
+    expect(replies()).toBe(0);
+    expect(h.db.rows("SELECT code FROM attendance_exceptions ORDER BY id").map((r: any) => r.code)).toEqual(expect.arrayContaining(['NO_TOPIC', 'WRONG_TOPIC_UNMAPPED']));
+    await h.send({ text: 'IN', ts: lk(D, '07:03'), thread: 1001 });       // the employee's own topic
+    expect(replies()).toBe(1);
   });
 });

@@ -423,3 +423,4 @@ select.need{border-color:#f59e0b;background:#fffbeb}
 .bmrow textarea,.bmrow input{width:100%;font:inherit;resize:vertical}
 .bmbtns{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}
 @media (max-width:900px){.bmgrid{grid-template-columns:1fr}}
+.imppend{display:flex;gap:10px;align-items:center;justify-content:space-between;background:var(--warnb);color:var(--warn);border-radius:8px;padding:8px 12px;margin-bottom:12px;font-size:12.5px}

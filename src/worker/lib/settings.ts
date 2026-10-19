@@ -16,7 +16,7 @@ export function parseSettings(rows: { key: string; value: string }[]): Settings 
   const safe = <T>(s: string | undefined, d: T): T => { try { return s ? { ...d, ...JSON.parse(s) } : d; } catch { return d; } };
   const rules = safe<Rules>(m.get('rules'), DEFAULT_RULES);
   if (!(Number(rules.otHours) > 0)) rules.otHours = DEFAULT_RULES.otHours;
-  if (!(Number(rules.forgotOutHours) > 0)) rules.forgotOutHours = DEFAULT_RULES.forgotOutHours;
+  if (!(Number(rules.outAskMin) >= 0)) rules.outAskMin = DEFAULT_RULES.outAskMin;
   if (!(Number(rules.earlyAskMin) >= 0)) rules.earlyAskMin = DEFAULT_RULES.earlyAskMin;
   if (rules.answerBy !== 'own') rules.answerBy = 'any';
   delete (rules as { allowedChats?: unknown }).allowedChats; // retired setting: a group is accepted once an employee topic is bound in it
@@ -25,7 +25,7 @@ export function parseSettings(rows: { key: string; value: string }[]): Settings 
     if (!r || typeof r !== 'object') continue;
     const x = { ...rules, ...r } as Rules;
     if (!(Number(x.otHours) > 0)) x.otHours = rules.otHours;
-    if (!(Number(x.forgotOutHours) > 0)) x.forgotOutHours = rules.forgotOutHours;
+    if (!(Number(x.outAskMin) >= 0)) x.outAskMin = rules.outAskMin;
     if (!(Number(x.earlyAskMin) >= 0)) x.earlyAskMin = rules.earlyAskMin;
     if (x.answerBy !== 'own') x.answerBy = 'any';
     rulesCur[cur] = x;

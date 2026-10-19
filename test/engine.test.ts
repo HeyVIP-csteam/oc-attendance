@@ -264,3 +264,15 @@ describe('calculations', () => {
     expect({ ...a, eventResults: null }).toEqual({ ...b, eventResults: null });
   });
 });
+
+describe('announcements are not punches', () => {
+  it('a message listing three or more different actions is ordinary chat; two actions is still unclear', async () => {
+    const { buildKeywordIndex, parseText } = await import('../src/shared/parser');
+    const idx = buildKeywordIndex({ CLOCK_IN: ['CLOCK IN', 'CLOCKED IN', 'START OF SHIFT', 'CHECKED IN'], BREAK_START: ['BREAK', 'BREAK START', 'SHORT BREAK', 'LUNCH BREAK', 'WC', 'TOILET BREAK'], BREAK_END: ['BACK', 'BREAK END'], CLOCK_OUT: ['CLOCK OUT', 'CLOCKED OUT', 'CHECKED OUT', 'END OF SHIFT'] },
+      { skipLabels: [], typoTolerance: true, ignoreBrackets: true, typedTimeReview: true });
+    const notice = 'Check-In: CLOCK IN / CLOCKED IN / START OF SHIFT / CHECKED IN\n\nBreak Start: BREAK / BREAK START / SHORT BREAK / LUNCH BREAK / WC / TOILET BREAK\n\nBreak End: BACK / BREAK END\n\nCheck-Out: CLOCK OUT / CLOCKED OUT / CHECKED OUT / END OF SHIFT';
+    expect(parseText(notice, idx).kind).toBe('NONE');
+    expect(parseText('break back', idx)).toMatchObject({ kind: 'UNRECOGNIZED', reason: 'CONFLICT' });
+    expect(parseText('SHORT BREAK', idx)).toMatchObject({ kind: 'PUNCH', type: 'BREAK_START' });
+  });
+});

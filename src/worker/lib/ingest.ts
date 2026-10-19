@@ -174,7 +174,8 @@ export async function ingestUpdate(env: Env, bot: BotRow, upd: TgUpdate, receive
           : bi(`「${text}」接近打卡关键词但不完全匹配`, `"${text}" looks like a punch but does not match a keyword`)),
     ]);
     if (r === 'dup') return { http: 200, status: 'DUPLICATE', codes: [] };
-    return { http: 200, status: 'PENDING_REVIEW', codes: ['UNRECOGNIZED'], reply: rules.botReply ? replyText('unrec', { tz, keywords: primaryKeywords(settings.keywords), reason: parsed.reason }) : null };
+    // the bot only ever replies inside an employee's own (bound) topic
+    return { http: 200, status: 'PENDING_REVIEW', codes: ['UNRECOGNIZED'], reply: rules.botReply && mapping ? replyText('unrec', { tz, keywords: primaryKeywords(settings.keywords), reason: parsed.reason }) : null };
   }
 
   // ---------------------------------------------------------------- punch: identity
@@ -183,7 +184,8 @@ export async function ingestUpdate(env: Env, bot: BotRow, upd: TgUpdate, receive
     const detail = threadId != null ? bi(`Topic #${threadId}`, `Topic #${threadId}`) : bi('General（无 Topic）', 'General (no topic)');
     const r = await write([rawInsert('REJECTED_IDENTITY', id.code, id.employeeId, parsed.type), exInsert(id.code, id.employeeId, detail)]);
     if (r === 'dup') return { http: 200, status: 'DUPLICATE', codes: [] };
-    return { http: 200, status: 'REJECTED_IDENTITY', codes: [id.code], reply: rules.botReply ? replyText('id', { code: id.code, tz }) : null };
+    // General or a topic not bound in the web app: recorded as an exception, but the bot stays silent there
+    return { http: 200, status: 'REJECTED_IDENTITY', codes: [id.code], reply: rules.botReply && mapping ? replyText('id', { code: id.code, tz }) : null };
   }
 
   // ---------------------------------------------------------------- punch: event

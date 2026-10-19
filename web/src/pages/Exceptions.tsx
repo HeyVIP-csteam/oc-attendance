@@ -187,6 +187,7 @@ function TgImport() {
   const { refresh, meta } = useData();
   const [src, setSrc] = useState<{ file: string; name: string; chatId: number; messages: ExportMsg[]; topicsSince: number | null } | null>(null);
   const [choice, setChoice] = useState<Record<string, number | null>>({});
+  const [prog, setProg] = useState('');
   const [plan, setPlan] = useState<ImpPlan | null>(null);
   const [show, setShow] = useState('');
   const [reason, setReason] = useState('');
@@ -206,6 +207,20 @@ function TgImport() {
     } catch (e) { setErr(e instanceof SyntaxError ? new Error(L('不是 JSON 档案，请在导出时选择 Machine-readable JSON', 'Not a JSON file — choose "Machine-readable JSON" when exporting')) : (e as Error)); }
     finally { setBusy(false); }
   };
+  // attendance days still waiting to be recalculated (after a big import) — can be done right away
+  const pend = useApi<{ remaining: number }>('/recompute-pending');
+  const recalc = async () => {
+    setBusy(true);
+    try {
+      for (let i = 0; i < 200; i++) {
+        const x = await api<{ done: number; remaining: number }>('/recompute-pending', { method: 'POST', body: {} });
+        setProg(L(`正在重新计算考勤… 还剩 ${x.remaining} 天`, `Recalculating attendance… ${x.remaining} days left`));
+        if (!x.remaining || !x.done) break;
+      }
+      toast(L('考勤已重新计算', 'Attendance recalculated'));
+      refresh(); void pend.reload();
+    } catch (e) { setErr(e as ApiErr); } finally { setBusy(false); setProg(''); }
+  };
   // choosing the employee of a Telegram account re-reads the file with that choice
   const choose = async (key: string, id: number | null) => {
     if (!src) return;
@@ -221,7 +236,16 @@ function TgImport() {
     if (reason.trim().length < 4) return setErr(new Error(L('请填写原因（至少 4 个字）', 'Please give a reason (at least 4 characters)')));
     setBusy(true);
     try {
-      const r = await api<{ applied: { added: number } }>('/telegram-import', { method: 'POST', body: { chatId: src.chatId, fileName: src.file, messages: src.messages, topicsSince: src.topicsSince, senders: choice, apply: true, reason } });
+      const r = await api<{ applied: { added: number; deferred?: number } }>('/telegram-import', { method: 'POST', body: { chatId: src.chatId, fileName: src.file, messages: src.messages, topicsSince: src.topicsSince, senders: choice, apply: true, reason } });
+      // many days imported: recalculate the rest right away (a slice per request) instead of waiting for the cron
+      if (r.applied.deferred) {
+        for (let i = 0; i < 100; i++) {
+          const x = await api<{ done: number; remaining: number }>('/recompute-pending', { method: 'POST', body: {} });
+          setProg(L(`正在重新计算考勤… 还剩 ${x.remaining} 天`, `Recalculating attendance… ${x.remaining} days left`));
+          if (!x.remaining || !x.done) break;
+        }
+        setProg('');
+      }
       toast(L(`已补入 ${r.applied.added} 笔打卡，考勤已重算`, `${r.applied.added} punches added; attendance recalculated`));
       refresh(); setSrc(null); setPlan(null); setReason('');
     } catch (e) { setErr(e as ApiErr); } finally { setBusy(false); }
@@ -240,6 +264,10 @@ function TgImport() {
     <div className="card">
       <h3>{L('导入 Telegram 记录', 'Import Telegram history')}</h3>
       <p className="mut" style={{ fontSize: 12.5, margin: '0 0 12px', lineHeight: 1.6 }}>{L('用来补 bot 加入群组之前的打卡。时间采用导出档里 Telegram 记录的发送时间，不使用员工自己写的时间。', 'For punches sent before the bot joined the group. The time used is the Telegram message time stored in the export — never a time typed in the message.')}</p>
+      {!plan && (pend.data?.remaining ?? 0) > 0 && (
+        <div className="imppend"><span>{prog || L(`有 ${pend.data!.remaining} 天的考勤还在等待重新计算（系统每 15 分钟处理一批）。`, `${pend.data!.remaining} attendance days are waiting to be recalculated (the system does a batch every 15 minutes).`)}</span>
+          <button className="btn sm" disabled={busy} onClick={recalc}>{L('立即重新计算', 'Recalculate now')}</button></div>
+      )}
       {!plan && (
         <>
           <div className="impsteps">
@@ -327,6 +355,7 @@ function TgImport() {
           <div style={{ marginTop: 8 }}><ErrBox error={err} /></div>
           <div className="setfoot" style={{ gap: 8, display: 'flex', justifyContent: 'flex-end' }}>
             <button className="btn" onClick={() => { setPlan(null); setSrc(null); setErr(null); setChoice({}); }}>{L('取消', 'Cancel')}</button>
+            {prog && <span className="mut" style={{ fontSize: 12.5, alignSelf: 'center' }}>{prog}</span>}
             {plan.toAdd > 0 && <button className="btn p" disabled={busy} onClick={apply}>{L(`补入 ${plan.toAdd} 笔打卡`, `Add ${plan.toAdd} punches`)}</button>}
           </div>
         </>

@@ -124,9 +124,9 @@ const RulesSchema = z.object({
   otHours: z.number().min(1).max(24).optional().default(9),
   breakMinutes: z.number().int().min(0).max(1440).nullable().optional().default(90),
   breakUnit: z.enum(['h', 'm']).optional().default('m'),
-  // a clock out attaches to an open session up to 20 h after clock in, so the reminder must come before that
-  forgotOutHours: z.number().min(1).max(15).refine((h) => Math.abs(h * 60 - Math.round(h * 60)) < 1e-6, 'whole minutes only').optional().default(9.75),
-  forgotOutUnit: z.enum(['h', 'm']).optional().default('h'),
+  // minutes after the scheduled shift end with no clock out → the bot asks about OT (07:30–16:30 + 45 → 17:15)
+  outAskMin: z.number().int().min(0).max(480).optional().default(45),
+  outAskUnit: z.enum(['h', 'm']).optional().default('m'),
   earlyAskMin: z.number().int().min(0).max(240).optional().default(30),
   answerBy: z.enum(['any', 'own']).optional().default('any'),
   currency: z.string().trim().toUpperCase().max(10).optional(), // set → these are that currency's own rules
@@ -142,7 +142,8 @@ settingsRoutes.put('/settings/rules', async (c) => {
   const actor = c.get('admin').username;
   const before = await loadSettings(db);
   const since = addDays(localDate(now, bizTz(c.env)), -31);
-  const changed = (a: Pick<Rules, 'lateAsException' | 'windowHours' | 'breakMinutes' | 'forgotOutHours'>, b: typeof a) => a.lateAsException !== b.lateAsException || a.windowHours !== b.windowHours || a.breakMinutes !== b.breakMinutes || a.forgotOutHours !== b.forgotOutHours;
+  // only rules that change computed results need a recalculation (the OT question time does not)
+  const changed = (a: Pick<Rules, 'lateAsException' | 'windowHours' | 'breakMinutes'>, b: typeof a) => a.lateAsException !== b.lateAsException || a.windowHours !== b.windowHours || a.breakMinutes !== b.breakMinutes;
   const statements: D1PreparedStatement[] = [];
   if (currency) {
     // one currency's own rules (each currency is set on its own)
