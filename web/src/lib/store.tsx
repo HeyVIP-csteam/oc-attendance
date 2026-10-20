@@ -4,11 +4,14 @@ import { api, type ApiErr } from './api';
 export interface MetaEmployee { id: number; code: string; name: string; currency: string | null; status: string; thread: number | null }
 export interface MetaShift { id: number; code: string; name: string; start_time: string; end_time: string; late_grace_min: number; early_grace_min: number; break_minutes: number | null; is_active: number; created_at: number; timezone: string }
 export interface MetaRules { breakMinutes?: number | null; breakUnit?: 'h' | 'm'; lateAsException: boolean; botReply: boolean; otHours?: number; outAskMin?: number; outAskUnit?: 'h' | 'm'; earlyAskMin?: number; answerBy?: 'any' | 'own' }
+/** This account's access to one Settings tab: 'e' can edit, 'v' view only, null hidden (the owner: always 'e'). */
+export const settingAccess = (m: Pick<Meta, 'user'>, tab: import('../../../src/shared/perms').SettingTab): 'v' | 'e' | null =>
+  m.user.owner ? 'e' : m.user.role !== 'admin' && m.user.perms?.[tab] ? 'v' : m.user.perms?.[tab] ?? null;
 /** The attendance rules of one currency. */
 export const rulesOf = (m: Pick<Meta, 'rules' | 'rulesCur'>, cur: string | null | undefined): MetaRules => (cur && m.rulesCur?.[cur]) || m.rules;
 export interface Meta {
   /** currencies: null = all currencies; owner: settings, accounts and bots. */
-  user: { id: number; username: string; role: 'admin' | 'viewer'; currencies: string[] | null; owner: boolean };
+  user: { id: number; username: string; role: 'admin' | 'viewer'; currencies: string[] | null; owner: boolean; perms?: import('../../../src/shared/perms').SettingPerms };
   tz: string; today: string;
   currencies: { code: string; name: string; employees: number; active_employees: number }[];
   shifts: MetaShift[];

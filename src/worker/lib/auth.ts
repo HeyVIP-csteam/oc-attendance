@@ -3,6 +3,8 @@ import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import type { AppBindings } from '../env';
 import { randomToken, sha256Hex } from './crypto';
 import { first, stmt } from './db';
+import { ensurePermsColumn } from './perms';
+import { parsePerms } from '../../shared/perms';
 import { ApiError, clientIp } from './http';
 
 export const COOKIE = 'att_session';
@@ -32,9 +34,10 @@ export const requireSession: MiddlewareHandler<AppBindings> = async (c, next) =>
   if (!token) throw new ApiError(401, 'UNAUTHENTICATED', { zh: '请先登录', en: 'Please sign in' });
   const id = await sha256Hex(token);
   const now = Date.now();
-  const row = await first<{ id: string; admin_id: number; created_at: number; expires_at: number; last_seen_at: number; username: string; role: 'admin' | 'viewer'; is_active: number; currencies: string | null; is_owner: number }>(
+  await ensurePermsColumn(c.env.DB);
+  const row = await first<{ id: string; admin_id: number; created_at: number; expires_at: number; last_seen_at: number; username: string; role: 'admin' | 'viewer'; is_active: number; currencies: string | null; is_owner: number; settings_perms: string | null }>(
     c.env.DB,
-    `SELECT s.id, s.admin_id, s.created_at, s.expires_at, s.last_seen_at, u.username, u.role, u.is_active, u.currencies, u.is_owner
+    `SELECT s.id, s.admin_id, s.created_at, s.expires_at, s.last_seen_at, u.username, u.role, u.is_active, u.currencies, u.is_owner, u.settings_perms
      FROM admin_sessions s JOIN admin_users u ON u.id = s.admin_id WHERE s.id = ?`, id);
   if (!row || row.expires_at < now || row.created_at + SESSION_MAX_MS < now || !row.is_active) {
     clearSessionCookie(c);
@@ -49,7 +52,7 @@ export const requireSession: MiddlewareHandler<AppBindings> = async (c, next) =>
     const touch = stmt(c.env.DB, 'UPDATE admin_sessions SET last_seen_at = ?, expires_at = ? WHERE id = ?', now, Math.min(now + SESSION_TTL_MS, row.created_at + SESSION_MAX_MS), id).run();
     try { c.executionCtx.waitUntil(touch); } catch { await touch; }
   }
-  c.set('admin', { id: row.admin_id, username: row.username, role: row.role, currencies: row.is_owner ? null : parseCurrencies(row.currencies), owner: !!row.is_owner, sessionId: id });
+  c.set('admin', { id: row.admin_id, username: row.username, role: row.role, currencies: row.is_owner ? null : parseCurrencies(row.currencies), owner: !!row.is_owner, perms: row.is_owner ? {} : parsePerms(row.settings_perms, row.role), sessionId: id });
   await next();
 };
 

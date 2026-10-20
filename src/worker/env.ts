@@ -21,6 +21,8 @@ export interface AdminPrincipal {
   currencies: string[] | null;
   /** the owner: every setting and admin account */
   owner: boolean;
+  /** Settings tabs this account may view / edit (the owner: everything, not listed) */
+  perms: import('../shared/perms').SettingPerms;
   sessionId: string;
 }
 

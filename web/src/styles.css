@@ -439,3 +439,72 @@ select.need{border-color:#f59e0b;background:#fffbeb}
 .bmsw-t::after{content:'';position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#fff;transition:left .15s;box-shadow:0 1px 2px rgba(0,0,0,.2)}
 .bmsw.on{color:#15803d}.bmsw.on .bmsw-t{background:#16a34a}.bmsw.on .bmsw-t::after{left:16px}
 .bmsw input:focus-visible+.bmsw-t{outline:2px solid var(--pri);outline-offset:2px}
+
+/* ---------------------------------------------------------------- Bot messages → ▶ Preview (animated demo) */
+.bd-play{border:0;background:var(--pri);color:#fff;border-radius:8px;padding:4px 10px;font:inherit;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap}
+.bd-play:hover{filter:brightness(.92)}
+.bmsw+.bd-play{margin-left:4px}
+.bd-hd{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.bd-hd h3{margin:0;font-size:15px}
+.bd-tag{font-size:11.5px;color:var(--mut);background:var(--greyb);border-radius:999px;padding:2px 8px}
+.bd-hd .btn{margin-left:auto}
+.bd-paths{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+.bd-paths>span{font-size:12px;color:var(--mut);margin-right:2px}
+.bd-paths button{border:1px solid var(--line);background:var(--card);border-radius:999px;padding:4px 11px;font:inherit;font-size:12px;cursor:pointer;color:var(--grey)}
+.bd-paths button.on{background:var(--pri);border-color:var(--pri);color:#fff}
+.bd-stage{border-radius:12px;overflow:hidden;position:relative;background:#9bbad6 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='40'%3E%3Ccircle cx='20' cy='20' r='1.5' fill='%23ffffff33'/%3E%3C/svg%3E")}
+.bd-top{background:#fff;color:#0f172a;padding:8px 12px;font-weight:600;font-size:12.5px;display:flex;justify-content:space-between;gap:8px;border-bottom:1px solid #dbe4ee}
+.bd-top span{color:#64748b;font-weight:400}
+.bd-chat{height:400px;max-height:52vh;overflow-y:auto;padding:10px 12px 14px;scroll-behavior:smooth;color:#0f172a}
+.bd-day{text-align:center;margin:6px 0 10px}.bd-day span{background:rgba(0,0,0,.18);color:#fff;font-size:11px;padding:2px 10px;border-radius:10px}
+.bd-msg{max-width:86%;border-radius:12px;padding:7px 11px 5px;margin-bottom:6px;box-shadow:0 1px 1px rgba(0,0,0,.08);line-height:1.45;background:#fff;white-space:pre-wrap;overflow-wrap:anywhere;animation:bdpop .25s ease-out;transition:background .3s;font-size:13px}
+@keyframes bdpop{from{opacity:0;transform:translateY(6px) scale(.98)}to{opacity:1;transform:none}}
+.bd-msg .n{font-weight:600;font-size:12px;margin-bottom:2px;white-space:normal}
+.bd-msg .tm{font-size:10.5px;color:#8a98a8;text-align:right;margin-top:2px;white-space:normal}
+.bd-msg.me{margin-left:auto;background:#effdde}.bd-msg.me .n{color:#2a9d8f}
+.bd-msg.bot .n{color:#d97706}
+.bd-msg.flash{background:#fef9c3}
+.bd-msg .q{border-left:2px solid #d97706;background:#fff7ed;border-radius:4px;padding:3px 7px;margin-bottom:4px;font-size:12px;color:#475569;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bd-msg .sch{font-size:10.5px;color:#64748b}
+.bd-typing{display:flex;width:max-content;gap:4px;background:#fff;border-radius:12px;padding:9px 12px;margin-bottom:6px;box-shadow:0 1px 1px rgba(0,0,0,.08)}
+.bd-typing.me{margin-left:auto;background:#effdde}
+.bd-typing i{width:6px;height:6px;border-radius:50%;background:#94a3b8;animation:bddot 1s infinite}.bd-typing i:nth-child(2){animation-delay:.15s}.bd-typing i:nth-child(3){animation-delay:.3s}
+@keyframes bddot{0%,60%,100%{opacity:.3;transform:none}30%{opacity:1;transform:translateY(-3px)}}
+.bd-kb{max-width:86%;display:grid;gap:4px;margin:-2px 0 8px;animation:bdpop .25s ease-out}
+.bd-kb.c1{grid-template-columns:1fr}.bd-kb.c2{grid-template-columns:1fr 1fr}.bd-kb.c3{grid-template-columns:1fr 1fr 1fr}
+.bd-kb span{background:rgba(255,255,255,.6);border-radius:8px;padding:8px 6px;font-size:12px;font-weight:600;color:#1e3a5f;text-align:center;transition:background .15s,transform .15s}
+.bd-kb span.tap{background:#fff;transform:scale(.95)}
+.bd-silent{text-align:center;margin:12px 0;animation:bdpop .25s ease-out}.bd-silent span{background:rgba(15,23,42,.6);color:#fff;font-size:11.5px;padding:5px 12px;border-radius:10px}
+.bd-toast{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);background:rgba(15,23,42,.9);color:#fff;padding:12px 18px;border-radius:12px;font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none;max-width:80%;text-align:center}
+.bd-toast.on{opacity:1}
+.bd-finger{position:absolute;left:0;top:0;font-size:24px;pointer-events:none;opacity:0;transition:left .55s ease,top .55s ease,opacity .2s;z-index:3;filter:drop-shadow(0 2px 2px rgba(0,0,0,.3))}
+.bd-cap{margin-top:10px;min-height:42px;background:var(--pri2);border-radius:10px;padding:8px 12px;font-size:12.5px;color:var(--pri);display:flex;gap:8px;align-items:center}
+.bd-cap b{background:var(--pri);color:#fff;border-radius:999px;min-width:20px;height:20px;display:inline-grid;place-items:center;font-size:11px;flex:none}
+.bd-ctl{display:flex;align-items:center;gap:8px;margin-top:10px}
+.bd-ctl .btn{min-width:84px}
+.bd-bar{flex:1;height:6px;background:var(--greyb);border-radius:999px;overflow:hidden}.bd-bar i{display:block;height:100%;background:var(--pri);transition:width .3s}
+@media (prefers-reduced-motion:reduce){.bd-msg,.bd-kb,.bd-silent{animation:none}.bd-finger{transition:none}}
+
+/* ---------------------------------------------------------------- Admin accounts → Edit → Settings access */
+.pmx{border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-top:4px}
+.pmx-h{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:10px 14px;background:var(--greyb)}
+.pmx-h b{font-size:13px}.pmx-h span{color:var(--mut);font-size:12px}
+.pmx-r{display:flex;align-items:center;gap:12px;padding:9px 14px;border-top:1px solid var(--line);min-height:50px}
+.pmx-m{flex:1;min-width:0}.pmx-m b{display:block;font-size:13px;font-weight:600}.pmx-m small{color:var(--mut);font-size:11.5px}
+.pmx-c{display:flex;align-items:center;gap:12px}
+.pmx-c .bmsw{margin-left:0;min-width:58px}
+.pmx-seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.pmx-seg.off{visibility:hidden}
+.pmx-seg button{border:0;background:var(--card);padding:5px 11px;font:inherit;font-size:12px;cursor:pointer;color:var(--grey);white-space:nowrap}
+.pmx-seg button+button{border-left:1px solid var(--line)}
+.pmx-seg button.on.v{background:var(--pri);color:#fff;font-weight:600}
+.pmx-seg button.on.e{background:#16a34a;color:#fff;font-weight:600}
+.pmx-seg button:disabled{color:#cbd5e1;cursor:not-allowed}
+.pmx-lock{font-size:12px;color:#92400e;background:#fef3c7;border-radius:6px;padding:3px 8px}
+@media (max-width:600px){.pmx-r{flex-wrap:wrap}.pmx-c{width:100%;justify-content:space-between}}
+.viewonly{background:var(--pri2);color:var(--pri);border:1px solid #c7d7fe;border-radius:10px;padding:9px 14px;font-size:12.5px;margin:0 0 12px}
+/* the switch sits inside the modal's form grid: undo the form's label / input styles */
+.fg .pmx label.bmsw{display:inline-flex;align-items:center;gap:6px;margin:0;font-size:12px;font-weight:600;color:var(--mut);cursor:pointer;width:auto}
+.fg .pmx label.bmsw.on{color:#15803d}
+.fg .pmx label.bmsw input{position:absolute;opacity:0;width:0;height:0;padding:0;border:0}
+.fg .pmx label.bmsw:has(input:disabled){opacity:.5;cursor:not-allowed}

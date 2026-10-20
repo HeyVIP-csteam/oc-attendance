@@ -9,6 +9,7 @@ import { encryptString, randomBytes, webhookSecret } from '../lib/crypto';
 import { all, first, stmt } from '../lib/db';
 import { ApiError, bad, body, clientIp, conflict, notFound, requireAdminRole } from '../lib/http';
 import { checkCur, requireOwner, scopeSql } from '../lib/scope';
+import { requireSetting } from '../lib/perms';
 import { reparsePending } from '../lib/ingest';
 import { bizTz, loadSettings, rulesFor } from '../lib/settings';
 import { ALLOWED_UPDATES, type BotRow, botToken, hasSecretToken, loadBot, TelegramError, tgCall, type TgUser, type TgWebhookInfo, TOKEN_RE } from '../lib/telegram';
@@ -53,7 +54,7 @@ const BotTextsSchema = z.object(Object.fromEntries((Object.keys(DEFAULT_BOT_TEXT
 
 settingsRoutes.put('/settings/bot-texts', async (c) => {
   requireAdminRole(c);
-  requireOwner(c);
+  requireSetting(c, 'msgs', 'e');
   const v = await body(c, BotTextsSchema);
   const db = c.env.DB;
   const now = Date.now();
@@ -73,7 +74,7 @@ settingsRoutes.put('/settings/bot-texts', async (c) => {
 /** On / off for each automatic bot message (OT questions, reply to a scheduled punch). */
 settingsRoutes.put('/settings/bot-switches', async (c) => {
   requireAdminRole(c);
-  requireOwner(c);
+  requireSetting(c, 'msgs', 'e');
   const v: BotSwitches = await body(c, z.object({ early: z.boolean(), late: z.boolean(), scheduled: z.boolean() }));
   const db = c.env.DB;
   const now = Date.now();
@@ -94,7 +95,7 @@ const KwSchema = z.object(Object.fromEntries(EVENT_TYPES.map((k) => [k, z.array(
 
 settingsRoutes.put('/settings/keywords', async (c) => {
   requireAdminRole(c);
-  requireOwner(c);
+  requireSetting(c, 'kw', 'e');
   const { keywords } = await body(c, z.object({ keywords: KwSchema }));
   const kw = Object.fromEntries(Object.entries(keywords).map(([k, v]) => [k, [...new Set(v)]])) as unknown as KeywordConfig;
   const err = validateKeywords(kw);
@@ -119,7 +120,7 @@ const ParserSchema = z.object({
 
 settingsRoutes.put('/settings/parser', async (c) => {
   requireAdminRole(c);
-  requireOwner(c);
+  requireSetting(c, 'kw', 'e');
   const v = await body(c, ParserSchema);
   const parser = { ...v, skipLabels: [...new Set(v.skipLabels.map((l) => l.replace(/[:：]\s*$/, '').trim()).filter(Boolean))] };
   const db = c.env.DB;
@@ -153,7 +154,8 @@ settingsRoutes.put('/settings/rules', async (c) => {
   requireAdminRole(c);
   const { currency, ...rules } = await body(c, RulesSchema);
   // a limited account may only change its own currencies' rules; the base rules are for the owner
-  if (currency) checkCur(c, currency); else requireOwner(c);
+  requireSetting(c, 'rules', 'e');
+  if (currency) checkCur(c, currency); else requireOwner(c); // the base rules (all currencies) stay with the owner
   const db = c.env.DB;
   const now = Date.now();
   const actor = c.get('admin').username;
@@ -189,7 +191,7 @@ settingsRoutes.put('/settings/rules', async (c) => {
 
 settingsRoutes.post('/messages/reparse', async (c) => {
   requireAdminRole(c);
-  requireOwner(c);
+  requireSetting(c, 'kw', 'e');
   const now = Date.now();
   const n = await reparsePending(c.env, c.get('admin').username, now);
   if (n) await auditStmt(c.env.DB, { actor: c.get('admin').username, action: 'MESSAGES_REPARSED', entityType: 'telegram_messages', entityId: 'pending', after: { count: n }, ip: clientIp(c), at: now }).run();
@@ -219,7 +221,7 @@ async function checkCode(db: D1Database, code: string) {
 }
 settingsRoutes.post('/roster-codes', async (c) => {
   requireAdminRole(c);
-  requireOwner(c);
+  requireSetting(c, 'codes', 'e');
   const v = await body(c, CodeSchema);
   const before = (await loadSettings(c.env.DB)).rosterCodes;
   if (before.some((x) => x.code === v.code)) throw conflict('EXISTS', `${v.code} 已存在`, `${v.code} already exists`);
@@ -229,7 +231,7 @@ settingsRoutes.post('/roster-codes', async (c) => {
 });
 settingsRoutes.put('/roster-codes/:code', async (c) => {
   requireAdminRole(c);
-  requireOwner(c);
+  requireSetting(c, 'codes', 'e');
   const old = c.req.param('code').toUpperCase();
   const v = await body(c, CodeSchema);
   const db = c.env.DB;
@@ -246,7 +248,7 @@ settingsRoutes.put('/roster-codes/:code', async (c) => {
 });
 settingsRoutes.delete('/roster-codes/:code', async (c) => {
   requireAdminRole(c);
-  requireOwner(c);
+  requireSetting(c, 'codes', 'e');
   const code = c.req.param('code').toUpperCase();
   const db = c.env.DB;
   const before = (await loadSettings(db)).rosterCodes;
@@ -260,7 +262,7 @@ settingsRoutes.delete('/roster-codes/:code', async (c) => {
 // ---------------------------------------------------------------- currencies
 settingsRoutes.post('/currencies', async (c) => {
   requireAdminRole(c);
-  requireOwner(c);
+  requireSetting(c, 'cur', 'e');
   const v = await body(c, z.object({ code: z.string().trim().toUpperCase().regex(/^[A-Z0-9]{2,10}$/), name: z.string().trim().max(60).optional().default('') }));
   const db = c.env.DB;
   const now = Date.now();
@@ -275,7 +277,7 @@ settingsRoutes.post('/currencies', async (c) => {
 
 settingsRoutes.delete('/currencies/:code', async (c) => {
   requireAdminRole(c);
-  requireOwner(c);
+  requireSetting(c, 'cur', 'e');
   const code = c.req.param('code').toUpperCase();
   const db = c.env.DB;
   const now = Date.now();
@@ -344,10 +346,12 @@ function botView(env: Env, b: BotRow & { employees?: number }, url: string) {
 }
 
 settingsRoutes.get('/bots', async (c) => {
-  requireOwner(c);
+  requireSetting(c, 'bot', 'v');
+  const owner = c.get('admin').owner;
   const rows = await all<BotRow & { employees: number }>(c.env.DB, `SELECT b.*, (SELECT COUNT(*) FROM employees e WHERE e.currency_code = b.currency_code AND e.employment_status = 'ACTIVE') AS employees
     FROM telegram_bots b ORDER BY b.currency_code`);
-  return c.json({ rows: rows.map((b) => botView(c.env, b, defaultUrl(c, b.currency_code))) });
+  // view-only accounts never see any part of a token
+  return c.json({ rows: rows.map((b) => ({ ...botView(c.env, b, defaultUrl(c, b.currency_code)), ...(owner ? {} : { tokenLast4: null }) })) });
 });
 
 /** Registers the webhook for a row with the row's (group's) secret. */

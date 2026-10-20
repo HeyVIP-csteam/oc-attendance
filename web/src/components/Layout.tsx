@@ -75,7 +75,8 @@ function PasswordModal({ onClose }: { onClose: () => void }) {
 export function Layout({ page, onNav, paused, onResume, onLogout, children }: { page: PageKey; onNav: (p: PageKey) => void; paused: boolean; onResume: () => void; onLogout: () => void; children: ReactNode }) {
   const { L, lang, setLang } = useI18n();
   const { meta } = useData();
-  const nav = useNav();
+  // the Settings page only for accounts with at least one Settings tab
+  const nav = useNav().filter(([k]) => k !== 'settings' || meta.user.owner || Object.keys(meta.user.perms ?? {}).length > 0);
   const [navOpen, setNavOpen] = useState(false);
   const [menu, setMenu] = useState(false);
   const [pw, setPw] = useState(false);

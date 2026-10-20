@@ -1463,3 +1463,91 @@ describe('bot replies only in bound employee topics', () => {
     expect(replies()).toBe(1);
   });
 });
+
+describe('settings access per account (owner-controlled)', () => {
+  it('Off / View only / Can edit per tab, checked on the server; caps and defaults', async () => {
+    const { h } = await fixture();
+    await h.setupBot('LKR');
+    // a new account starts with nothing; the owner turns tabs on
+    expect((await h.req('POST', '/api/admins', { username: 'lead', password: 'lead-password-12', role: 'admin', currencies: ['LKR'],
+      settingsPerms: { msgs: 'v', bot: 'e', rules: 'e' } })).status).toBe(200);
+    // Bot Setting is capped at view only
+    const lead = (await h.req('GET', '/api/admins')).json.rows.find((r: any) => r.username === 'lead');
+    expect(lead.perms).toEqual({ msgs: 'v', bot: 'v', rules: 'e' });
+    const ownerCookie = h.cookie;
+
+    await h.login('lead', 'lead-password-12');
+    expect((await h.req('GET', '/api/meta')).json.user.perms).toEqual({ msgs: 'v', bot: 'v', rules: 'e' });
+    // view only: can read, cannot save
+    const t = { ...(await h.req('GET', '/api/meta')).json.botTexts, scheduled: 'changed' };
+    const no = await h.req('PUT', '/api/settings/bot-texts', t);
+    expect(no.status).toBe(403);
+    expect(no.json.error).toBe('NO_SETTING_ACCESS');
+    // Bot Setting view: rows without any part of the token; changes refused
+    const bots = await h.req('GET', '/api/bots');
+    expect(bots.status).toBe(200);
+    expect(bots.json.rows[0].tokenLast4).toBeNull();
+    expect((await h.req('POST', '/api/bots/LKR/rotate')).status).toBe(403);
+    // off: hidden and refused
+    expect((await h.req('PUT', '/api/settings/keywords', { CLOCK_IN: ['IN'], BREAK_START: ['BREAK'], BREAK_END: ['RESUME'], CLOCK_OUT: ['OUT'] })).status).toBe(403);
+    expect((await h.req('POST', '/api/roster-codes', { code: 'ZZ', name: 'Test', color: 1 })).status).toBe(403);
+    expect((await h.req('GET', '/api/admins')).status).toBe(403);
+
+    // the owner gives "Can edit" on Bot messages: the save now works and the change is audited
+    h.cookie = ownerCookie;
+    expect((await h.req('PUT', `/api/admins/${lead.id}`, { role: 'admin', isActive: true, currencies: ['LKR'], settingsPerms: { msgs: 'e', rules: 'e' } })).status).toBe(200);
+    const audit = h.db.get<{ before_json: string; after_json: string }>("SELECT before_json, after_json FROM audit_logs WHERE action = 'ADMIN_USER_UPDATED' ORDER BY id DESC LIMIT 1")!;
+    expect(JSON.parse(audit.before_json).settings).toBe('Attendance rules: Can edit · Bot messages: View only · Bot Setting: View only');
+    expect(JSON.parse(audit.after_json).settings).toBe('Attendance rules: Can edit · Bot messages: Can edit');
+    await h.login('lead', 'lead-password-12');
+    expect((await h.req('PUT', '/api/settings/bot-texts', t)).status).toBe(200);
+    expect((await h.req('GET', '/api/bots')).status).toBe(403);   // Bot Setting turned off again
+
+    // a read-only account is capped at view only
+    h.cookie = ownerCookie;
+    expect((await h.req('POST', '/api/admins', { username: 'look', password: 'look-password-12', role: 'viewer', currencies: null, settingsPerms: { msgs: 'e', kw: 'e' } })).status).toBe(200);
+    expect((await h.req('GET', '/api/admins')).json.rows.find((r: any) => r.username === 'look').perms).toEqual({ msgs: 'v', kw: 'v' });
+    // an account saved before this existed keeps what it had: Attendance rules of its own currencies
+    h.db.x("UPDATE admin_users SET settings_perms = NULL WHERE username = 'lead'");
+    expect((await h.req('GET', '/api/admins')).json.rows.find((r: any) => r.username === 'lead').perms).toEqual({ rules: 'e' });
+    // saving without settingsPerms leaves them unchanged
+    expect((await h.req('PUT', `/api/admins/${lead.id}`, { role: 'admin', isActive: true, currencies: ['LKR'] })).status).toBe(200);
+    expect((await h.req('GET', '/api/admins')).json.rows.find((r: any) => r.username === 'lead').perms).toEqual({ rules: 'e' });
+  });
+});
+
+describe('Admin accounts opened to another account', () => {
+  it('can manage accounts within its currencies, but never permissions, the owner or itself', async () => {
+    const { h } = await fixture();
+    expect((await h.req('POST', '/api/admins', { username: 'hrdesk', password: 'hr-password-123', role: 'admin', currencies: ['LKR'], settingsPerms: { admins: 'v' } })).status).toBe(200);
+    expect((await h.req('POST', '/api/admins', { username: 'staff', password: 'staff-password-1', role: 'admin', currencies: ['LKR'], settingsPerms: { rules: 'e' } })).status).toBe(200);
+    const ownerCookie = h.cookie;
+    const ids = Object.fromEntries((await h.req('GET', '/api/admins')).json.rows.map((r: any) => [r.username, r.id]));
+
+    // view only: sees the list, cannot change anything
+    await h.login('hrdesk', 'hr-password-123');
+    expect((await h.req('GET', '/api/admins')).status).toBe(200);
+    expect((await h.req('POST', '/api/admins', { username: 'x1', password: 'x1-password-123', role: 'admin', currencies: ['LKR'] })).status).toBe(403);
+
+    h.cookie = ownerCookie;
+    expect((await h.req('PUT', `/api/admins/${ids.hrdesk}`, { role: 'admin', isActive: true, currencies: ['LKR'], settingsPerms: { admins: 'e' } })).status).toBe(200);
+    await h.login('hrdesk', 'hr-password-123');
+    // adds an account: any Settings access it sends is ignored (every tab off until the owner opens them)
+    expect((await h.req('POST', '/api/admins', { username: 'new1', password: 'new1-password-12', role: 'admin', currencies: ['LKR'], settingsPerms: { msgs: 'e', admins: 'e' } })).status).toBe(200);
+    expect((await h.req('GET', '/api/admins')).json.rows.find((r: any) => r.username === 'new1').perms).toEqual({});
+    // only its own currencies
+    expect((await h.req('POST', '/api/admins', { username: 'new2', password: 'new2-password-12', role: 'admin', currencies: null })).status).toBe(403);
+    expect((await h.req('POST', '/api/admins', { username: 'new3', password: 'new3-password-12', role: 'admin', currencies: ['MYR'] })).status).toBe(403);
+    // edits another account (password, status) but its Settings access stays as the owner set it
+    expect((await h.req('PUT', `/api/admins/${ids.staff}`, { role: 'admin', isActive: true, currencies: ['LKR'], password: 'staff-new-pass-1', settingsPerms: { msgs: 'e', admins: 'e' } })).status).toBe(200);
+    expect((await h.req('GET', '/api/admins')).json.rows.find((r: any) => r.username === 'staff').perms).toEqual({ rules: 'e' });
+    // never the owner, never itself
+    expect((await h.req('PUT', `/api/admins/${ids.owner}`, { role: 'admin', isActive: true, currencies: null, password: 'owner-new-pass-1' })).status).toBe(403);
+    expect((await h.req('PUT', `/api/admins/${ids.hrdesk}`, { role: 'admin', isActive: true, currencies: ['LKR'], settingsPerms: { msgs: 'e', admins: 'e' } })).status).toBe(403);
+    // the owner still has the last word
+    h.cookie = ownerCookie;
+    ids.new1 = (await h.req('GET', '/api/admins')).json.rows.find((r: any) => r.username === 'new1').id;
+    expect((await h.req('PUT', `/api/admins/${ids.new1}`, { role: 'admin', isActive: true, currencies: ['LKR'], settingsPerms: { msgs: 'e' } })).status).toBe(200);
+    expect((await h.req('GET', '/api/admins')).json.rows.find((r: any) => r.username === 'new1').perms).toEqual({ msgs: 'e' });
+  });
+});

@@ -5,7 +5,8 @@ import type { AppBindings } from '../env';
 import { auditStmt } from '../lib/audit';
 import { all, chunk, first, stmt } from '../lib/db';
 import { bad, body, clientIp, conflict, intParam, notFound, query, requireAdminRole } from '../lib/http';
-import { assertEmployee, checkCur, inScope, requireOwner, scopeOf, scopeSql } from '../lib/scope';
+import { assertEmployee, checkCur, inScope, scopeOf, scopeSql } from '../lib/scope';
+import { requireSetting } from '../lib/perms';
 import { afterInstancesChanged, cancelInstanceStmt, loadTemplates, type ShiftTemplate, upsertInstanceStmt } from '../lib/roster';
 import { ensureOtMarks } from '../lib/otMarks';
 import type { Key } from '../lib/sessions';
@@ -80,16 +81,15 @@ async function saveTemplate(c: Context<AppBindings>, id: number | null, v: z.inf
   return { count: r.count };
 }
 
-shiftRoutes.post('/shifts', async (c) => { requireAdminRole(c); requireOwner(c); return c.json(await saveTemplate(c, null, await body(c, ShiftSchema))); });
-shiftRoutes.put('/shifts/:id', async (c) => { requireAdminRole(c); requireOwner(c); return c.json(await saveTemplate(c, intParam(c, 'id'), await body(c, ShiftSchema))); });
+shiftRoutes.post('/shifts', async (c) => { requireSetting(c, 'shift3', 'e'); return c.json(await saveTemplate(c, null, await body(c, ShiftSchema))); });
+shiftRoutes.put('/shifts/:id', async (c) => { requireSetting(c, 'shift3', 'e'); return c.json(await saveTemplate(c, intParam(c, 'id'), await body(c, ShiftSchema))); });
 
 const BulkSchema = z.object({
   items: z.array(z.object({ id: z.number().int(), name: z.string().trim().min(1).max(40), start: z.string().refine(isHHMM), end: z.string().refine(isHHMM) })).min(1).max(10),
   applyFuture: z.boolean().default(true),
 });
 shiftRoutes.put('/shifts-bulk', async (c) => {
-  requireAdminRole(c);
-  requireOwner(c);
+  requireSetting(c, 'shift3', 'e');
   const v = await body(c, BulkSchema);
   const tpls = new Map((await loadTemplates(c.env.DB)).map((t) => [t.id, t]));
   let count = 0;

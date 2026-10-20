@@ -1,25 +1,33 @@
-import { useMemo, useState } from 'react';
+import { type ReactNode, useMemo, useState } from 'react';
 import { type BotSwitches, type BotTexts, DEFAULT_BOT_SWITCHES, DEFAULT_BOT_TEXTS, DEFAULT_PARSER, EVENT_LABEL, EVENT_TYPES, type KeywordConfig, type ParserRules, ROSTER_COLORS } from '../../../src/shared/codes';
 import { toMin } from '../../../src/shared/time';
+import { capOf, cleanPerms, type SettingLevel, type SettingPerms, type SettingTab } from '../../../src/shared/perms';
+import { BotDemo, type DemoKey } from '../components/BotDemo';
 import { CurSeg, Empty, ErrBox, Field, Modal, ModalActions, Mut, Tabs } from '../components/ui';
 import { api, ApiErr } from '../lib/api';
 import { fmtDT } from '../lib/format';
 import { useI18n } from '../lib/i18n';
-import { type MetaRules, rulesOf, toast, useApi, useData, usePageState } from '../lib/store';
+import { DataCtx, type MetaRules, rulesOf, settingAccess, toast, useApi, useData, usePageState } from '../lib/store';
 
 type Tab = 'shift3' | 'cur' | 'kw' | 'rules' | 'msgs' | 'codes' | 'bot' | 'admins';
 
 export function SettingsPage() {
   const { L } = useI18n();
-  const { owner } = useData();
+  const data = useData();
+  const { owner, meta } = data;
   const [s, set] = usePageState('st', () => ({ tab: 'shift3' as Tab }));
   const all: [Tab, string][] = [['shift3', L('班次设置', 'Shift Setting')], ['cur', L('货币', 'Currency')], ['kw', L('打卡关键词', 'Punch keywords')], ['rules', L('考勤与异常规则', 'Attendance rules')], ['msgs', L('Bot 消息', 'Bot messages')], ['codes', L('排班代号', 'Roster codes')], ['bot', L('Bot 设置', 'Bot Setting')], ['admins', L('管理员账号', 'Admin accounts')]];
-  // accounts other than the owner only set their own currencies' attendance rules
-  const tabs = owner ? all : all.filter(([k]) => k === 'rules');
+  // the owner sees every tab; other accounts see the tabs the owner turned on (Admin accounts -> Edit); Admin accounts is the owner's
+  const access = (k: Tab) => settingAccess(meta, k);
+  const tabs = all.filter(([k]) => access(k));
+  if (!tabs.length) return <Empty>{L('你没有任何设置页的权限，请联系 Owner', 'You have no access to Settings. Ask the owner.')}</Empty>;
   const tab: Tab = tabs.some(([k]) => k === s.tab) ? s.tab : tabs[0][0];
+  const viewOnly = access(tab) === 'v';
   return (
-    <>
-      <Tabs items={tabs} value={tab} onChange={(t) => set({ tab: t })} />
+    // view only: the tab is shown with every field and button disabled (Preview still plays)
+    <DataCtx.Provider value={viewOnly ? { ...data, readOnly: true } : data}>
+      <Tabs items={tabs.map(([k, l]) => [k, access(k) === 'v' ? `${l} 👁` : l] as [Tab, string])} value={tab} onChange={(t) => set({ tab: t })} />
+      {viewOnly && <div className="viewonly">👁 {L('你只能查看这一页：可以看设定（Bot 消息可以按「▶ 预览」），但不能修改或保存。要修改请联系 Owner。', 'View only: you can see this page (and play ▶ Preview on Bot messages) but cannot change or save anything. Ask the owner to change it.')}</div>}
       {tab === 'shift3' && <Shift3 />}
       {tab === 'cur' && <Currencies />}
       {tab === 'kw' && <Keywords />}
@@ -28,7 +36,7 @@ export function SettingsPage() {
       {tab === 'codes' && <RosterCodes />}
       {tab === 'bot' && <Bots />}
       {tab === 'admins' && <Admins />}
-    </>
+    </DataCtx.Provider>
   );
 }
 
@@ -250,6 +258,11 @@ function BotMessages() {
   const { meta, readOnly, reloadMeta } = useData();
   const [v, setV] = useState<BotTexts>({ ...DEFAULT_BOT_TEXTS, ...(meta.botTexts ?? {}) });
   const [sw, setSw] = useState<BotSwitches>({ ...DEFAULT_BOT_SWITCHES, ...(meta.botSwitches ?? {}) });
+  // ▶ Preview: an animated demo with the texts and switches as they are in the form now (saved or not)
+  const [demo, setDemo] = useState<{ k: DemoKey; path?: string } | null>(null);
+  const play = (k: DemoKey, path?: string, small = false) => (
+    <button type="button" className="bd-play" style={small ? { marginLeft: 8, padding: '2px 8px', fontSize: 11.5 } : undefined} onClick={() => setDemo({ k, path })}>▶ {L('预览', 'Preview')}</button>
+  );
   const onErr = useErr();
   const save = async () => {
     try {
@@ -265,9 +278,9 @@ function BotMessages() {
       <span className="bmsw-t" />{sw[k] ? L('开启', 'On') : L('关闭', 'Off')}
     </label>
   );
-  const f = (k: keyof BotTexts, label: string, btn = false) => (
+  const f = (k: keyof BotTexts, label: string, btn = false, extra?: ReactNode) => (
     <div className={`bmrow ${btn ? 'btn' : ''}`}>
-      <label>{label}</label>
+      <label>{label}{extra}</label>
       {btn ? <input type="text" maxLength={40} value={v[k]} disabled={readOnly} onChange={(e) => setV({ ...v, [k]: e.target.value })} />
         : <textarea rows={2} maxLength={400} value={v[k]} disabled={readOnly} onChange={(e) => setV({ ...v, [k]: e.target.value })} />}
     </div>
@@ -277,14 +290,14 @@ function BotMessages() {
       <p className="mut" style={{ fontSize: 12.5, margin: '0 0 12px', lineHeight: 1.6 }}>{L('会自动替换：', 'Filled in automatically: ')}<code>{'{name}'}</code> {L('员工姓名', 'employee name')} · <code>{'{shift}'}</code> {L('班次时间', 'shift time')} · <code>{'{in}'}</code> {L('上班打卡时间', 'clock-in time')} · <code>{'{hours}'}</code> {L('上班多久', 'time since clock in')} · <code>{'{out}'}</code> {L('下班时间（忘记打卡）', 'clock-out time (forgot)')}</p>
       <div className="bmgrid">
         <div className="bmcol">
-          <div className="bmh">{L('提早上班', 'Early clock in')}{toggle('early')}</div>
+          <div className="bmh">{L('提早上班', 'Early clock in')}{toggle('early')}{play('early')}</div>
           {f('earlyQ', L('问题', 'Question'))}
           <div className="bmbtns">{f('earlyYes', L('按钮 1', 'Button 1'), true)}{f('earlyNo', L('按钮 2', 'Button 2'), true)}</div>
           {f('earlyRYes', L(`按「${v.earlyYes}」后的回复`, `Reply to "${v.earlyYes}"`))}
           {f('earlyRNo', L(`按「${v.earlyNo}」后的回复`, `Reply to "${v.earlyNo}"`))}
         </div>
         <div className="bmcol">
-          <div className="bmh">{L('超时未下班', 'No clock out')}{toggle('late')}</div>
+          <div className="bmh">{L('超时未下班', 'No clock out')}{toggle('late')}{play('late')}</div>
           {f('lateQ', L('问题', 'Question'))}
           <div className="bmbtns">{f('lateStill', L('按钮 1', 'Button 1'), true)}{f('lateOt', L('按钮 2', 'Button 2'), true)}{f('lateForgot', L('按钮 3', 'Button 3'), true)}</div>
           {f('lateRStill', L(`按「${v.lateStill}」后的回复（不计算 OT）`, `Reply to "${v.lateStill}" (no OT)`))}
@@ -293,11 +306,12 @@ function BotMessages() {
         </div>
       </div>
       <div className="bmcol" style={{ marginTop: 12 }}>
-        <div className="bmh">{L('定时发送的打卡', 'Scheduled punch')}{toggle('scheduled')}</div>
+        <div className="bmh">{L('定时发送的打卡', 'Scheduled punch')}{toggle('scheduled')}{play('scheduled')}</div>
         <p className="mut" style={{ fontSize: 12, margin: '0 0 8px', lineHeight: 1.6 }}>{L('员工用 Telegram「定时发送」打卡时：这笔打卡不计入，并在「异常与审计」记一条「定时发送的打卡」。关闭只是 Bot 不回复，打卡仍然不计入、异常仍然记录。', 'When an employee punches with Telegram\'s "Schedule message": the punch is not counted and "Scheduled message" is listed under Exceptions. Off only stops the reply — the punch is still not counted and the exception is still listed.')}</p>
         {f('scheduled', L('Bot 回复', 'Bot reply'))}
       </div>
-      <div className="bmbtns" style={{ marginTop: 6 }}>{f('change', L('「更改答案」按钮', '"Change answer" button'), true)}{f('notYou', L('别人按时显示（只有员工本人可以回答时）', 'Shown when someone else presses (only the employee may answer)'), true)}</div>
+      <div className="bmbtns" style={{ marginTop: 6 }}>{f('change', L('「更改答案」按钮', '"Change answer" button'), true, play('early', 'change', true))}{f('notYou', L('别人按时显示（只有员工本人可以回答时）', 'Shown when someone else presses (only the employee may answer)'), true, play('early', 'notyou', true))}</div>
+      {demo && <BotDemo demo={demo.k} path={demo.path} texts={v} switches={sw} punchReplies={rulesOf(meta, null).botReply} onClose={() => setDemo(null)} />}
       {!readOnly && <div className="setfoot" style={{ gap: 8, display: 'flex', justifyContent: 'flex-end' }}>
         <button className="btn" onClick={() => setV({ ...DEFAULT_BOT_TEXTS })}>{L('恢复预设文字', 'Reset to default')}</button>
         <button className="btn p" onClick={save}>{L('保存', 'Save')}</button>
@@ -416,7 +430,7 @@ function Bots() {
             return (
               <tr key={b.currency}>
                 <td className="c"><span className="b i">{b.currency}</span></td>
-                <td>{configured ? <><b>@{b.username}</b><div className="mut" style={{ fontSize: 11.5 }}>Token ••••{b.tokenLast4}{b.tokenSource === 'secret' ? ' · Cloudflare secret' : ''}</div></> : <Mut />}</td>
+                <td>{configured ? <><b>@{b.username}</b><div className="mut" style={{ fontSize: 11.5 }}>Token {b.tokenLast4 ? `••••${b.tokenLast4}` : L('•••• 已隐藏', '•••• hidden')}{b.tokenSource === 'secret' ? ' · Cloudflare secret' : ''}</div></> : <Mut />}</td>
                 <td style={{ fontSize: 12, maxWidth: 300, overflowWrap: 'anywhere', whiteSpace: 'normal' }}>{configured ? b.webhookUrl : <span className="mut">{b.defaultUrl}</span>}{b.lastError && <div style={{ color: 'var(--bad)', fontSize: 11.5 }}>{b.lastError}</div>}</td>
                 <td className="c"><span className={`b ${sc}`}>{sl}</span></td>
                 <td className="c">{b.employees}</td>
@@ -499,7 +513,50 @@ function BotModal({ b, onClose }: { b: BotView; onClose: () => void }) {
 }
 
 // ---------------------------------------------------------------- Admin accounts (D1 table admin_users)
-interface AdminRow { id: number; username: string; role: 'admin' | 'viewer'; is_active: number; is_owner: number; currencies: string[] | null; last_login_at: number | null; locked_until: number | null; created_at: number }
+interface AdminRow { id: number; username: string; role: 'admin' | 'viewer'; is_active: number; is_owner: number; currencies: string[] | null; perms: SettingPerms | null; last_login_at: number | null; locked_until: number | null; created_at: number }
+
+/** The Settings tabs as listed on the Settings page. */
+const PERM_TABS = (L: (zh: string, en: string) => string): [SettingTab, string, string][] => [
+  ['shift3', L('班次设置', 'Shift Setting'), L('班次时间、宽限 · 全系统', 'Shift times and grace · all currencies')],
+  ['cur', L('货币', 'Currency'), L('货币与团队 · 全系统', 'Currencies and teams · all currencies')],
+  ['kw', L('打卡关键词', 'Punch keywords'), L('IN / BREAK / RESUME / OUT 的写法 · 全系统', 'How IN / BREAK / RESUME / OUT are written · all currencies')],
+  ['rules', L('考勤与异常规则', 'Attendance rules'), L('只能改他负责的货币', 'Only their own currencies')],
+  ['msgs', L('Bot 消息', 'Bot messages'), L('Bot 文字、开关、▶ 预览 · 全系统', 'Bot texts, switches, ▶ Preview · all currencies')],
+  ['codes', L('排班代号', 'Roster codes'), L('OFF、VL 等代号 · 全系统', 'OFF, VL and other codes · all currencies')],
+  ['bot', L('Bot 设置', 'Bot Setting'), L('Bot 连线（Token 永远隐藏）', 'Bot connection (tokens always hidden)')],
+  ['admins', L('管理员账号', 'Admin accounts'), L('新增账号、密码、货币（设置权限永远只有 Owner 能改）', 'Add accounts, passwords, currencies (Settings access stays with the owner)')],
+];
+
+/** Edit account → Settings access: per tab On / Off, and when on View only / Can edit. */
+function PermsEditor({ perms, role, onChange, locked }: { perms: SettingPerms; role: 'admin' | 'viewer'; onChange: (p: SettingPerms) => void; locked?: boolean }) {
+  const { L } = useI18n();
+  const set = (t: SettingTab, v: SettingLevel | null) => { const n = { ...perms }; if (v) n[t] = v; else delete n[t]; onChange(n); };
+  return (
+    <div className="pmx">
+      <div className="pmx-h"><b>{L('设置权限', 'Settings access')}</b><span>· {L('开启 = 这个页签会出现在他的「设置」里', 'On = the tab shows in their Settings')}{role === 'viewer' ? L(' · 只读账号最多「只能看」', ' · read-only accounts: View only') : ''}</span>{locked && <span className="pmx-lock" style={{ marginLeft: 'auto' }}>🔒 {L('只有 Owner 可以修改', 'Only the owner can change this')}</span>}</div>
+      {PERM_TABS(L).map(([t, name, sub]) => {
+        const v = perms[t];
+        const eff = v && capOf(role, t) === 'v' ? 'v' : v;
+        const canEdit = capOf(role, t) === 'e';
+        return (
+          <div className="pmx-r" key={t}>
+            <div className="pmx-m"><b>{name}</b><small>{sub}</small></div>
+            <div className="pmx-c">
+              <div className={`pmx-seg ${v ? '' : 'off'}`} aria-hidden={!v}>
+                <button type="button" className={eff === 'v' ? 'on v' : ''} disabled={!v || locked} onClick={() => set(t, 'v')}>{L('只能看', 'View only')}</button>
+                <button type="button" className={eff === 'e' ? 'on e' : ''} disabled={!v || !canEdit || locked} title={canEdit ? undefined : t === 'bot' ? L('Bot 设置最多只能看', 'Bot Setting is view only') : L('只读账号不能修改', 'Read-only accounts cannot edit')} onClick={() => set(t, 'e')}>{L('可以修改', 'Can edit')}</button>
+              </div>
+              <label className={`bmsw ${v ? 'on' : ''}`}>
+                <input type="checkbox" checked={!!v} disabled={locked} onChange={(e) => set(t, e.target.checked ? 'v' : null)} />
+                <span className="bmsw-t" />{v ? L('开启', 'On') : L('关闭', 'Off')}
+              </label>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 function Access({ a }: { a: AdminRow }) {
   const { L } = useI18n();
@@ -510,8 +567,10 @@ function Access({ a }: { a: AdminRow }) {
 
 function Admins() {
   const { L } = useI18n();
-  const { readOnly } = useData();
+  const { readOnly, owner } = useData();
   const { data, error, reload } = useApi<{ rows: AdminRow[]; me: number }>('/admins');
+  // an account the owner gave "Admin accounts" can edit others, but not the owner and not itself
+  const canEditRow = (a: AdminRow) => !readOnly && (owner || (!a.is_owner && a.id !== data?.me));
   const [edit, setEdit] = useState<AdminRow | 'new' | null>(null);
   return (
     <div className="card"><h3>{L('管理员账号', 'Admin accounts')}</h3>
@@ -527,7 +586,7 @@ function Admins() {
               <td><Access a={a} /></td>
               <td>{!a.is_active ? <span className="b">{L('已停用', 'Disabled')}</span> : a.locked_until && a.locked_until > Date.now() ? <span className="b r">{L('暂时锁定', 'Locked')}</span> : <span className="b ok">{L('启用', 'Active')}</span>}</td>
               <td>{a.last_login_at ? fmtDT(a.last_login_at) : <Mut />}</td><td>{fmtDT(a.created_at).slice(0, 10)}</td>
-              <td>{!readOnly && <button className="btn sm" onClick={() => setEdit(a)}>{L('编辑', 'Edit')}</button>}</td>
+              <td>{canEditRow(a) && <button className="btn sm" onClick={() => setEdit(a)}>{L('编辑', 'Edit')}</button>}</td>
             </tr>
           ))}
         </tbody></table></div>
@@ -550,6 +609,8 @@ function AdminModal({ a, isMe, onClose }: { a: AdminRow | null; isMe: boolean; o
   const [curs, setCurs] = useState<string[]>(a?.currencies ?? []);
   const [pw, setPw] = useState('');
   const [pw2, setPw2] = useState('');
+  // Settings access: a new account starts with every tab off
+  const [perms, setPerms] = useState<SettingPerms>(a?.perms ?? {});
   const [err, setErr] = useState<ApiErr | Error | null>(null);
   const [busy, setBusy] = useState(false);
   const toggle = (c: string) => setCurs((x) => (x.includes(c) ? x.filter((y) => y !== c) : [...x, c]));
@@ -561,8 +622,9 @@ function AdminModal({ a, isMe, onClose }: { a: AdminRow | null; isMe: boolean; o
     const currencies = isOwner || allCur ? null : curs;
     setBusy(true);
     try {
-      if (a) await api(`/admins/${a.id}`, { method: 'PUT', body: { role: isOwner ? 'admin' : role, isActive: isOwner ? true : active, password: pw, currencies } });
-      else await api('/admins', { method: 'POST', body: { username: username.trim(), password: pw, role, currencies } });
+      const settingsPerms = isOwner ? undefined : cleanPerms(perms, role);
+      if (a) await api(`/admins/${a.id}`, { method: 'PUT', body: { role: isOwner ? 'admin' : role, isActive: isOwner ? true : active, password: pw, currencies, settingsPerms } });
+      else await api('/admins', { method: 'POST', body: { username: username.trim(), password: pw, role, currencies, settingsPerms } });
       toast(L('账号已保存，并写入 Audit Log', 'Account saved and written to the audit log'));
       onClose();
     } catch (e) { setErr(e as ApiErr); } finally { setBusy(false); }
@@ -579,14 +641,16 @@ function AdminModal({ a, isMe, onClose }: { a: AdminRow | null; isMe: boolean; o
         <div className="full"><label>{L('可查看货币', 'Access')}</label>
           {isOwner ? <div className="accbox"><span className="b ok">{L('全部货币', 'All currencies')}</span> <span className="mut" style={{ fontSize: 12 }}>{L('Owner 固定看得到全部资料', 'The owner always sees everything')}</span></div> : (
             <div className="accbox">
-              <label className="ck"><input type="checkbox" checked={allCur} onChange={(e) => setAllCur(e.target.checked)} /> {L('全部货币', 'All currencies')}</label>
-              <span className="accsep" />
+              {/* "all currencies" only for someone who has all currencies; the list holds only the editor's own currencies */}
+              {meta.user.currencies === null && <><label className="ck"><input type="checkbox" checked={allCur} onChange={(e) => setAllCur(e.target.checked)} /> {L('全部货币', 'All currencies')}</label>
+              <span className="accsep" /></>}
               {meta.currencies.map((c) => (
                 <label key={c.code} className={`ck ${allCur ? 'dis' : ''}`}><input type="checkbox" disabled={allCur} checked={allCur || curs.includes(c.code)} onChange={() => toggle(c.code)} /> {c.code}</label>
               ))}
             </div>
           )}
         </div>
+        {!isOwner && <div className="full"><PermsEditor perms={perms} role={role} onChange={setPerms} locked={!meta.user.owner} /></div>}
         <div><label>{a ? L('新密码（留空 = 不更改）', 'New password (empty = unchanged)') : L('密码（至少 10 个字符）', 'Password (min. 10 characters)')}</label><input type="password" autoComplete="new-password" value={pw} onChange={(e) => setPw(e.target.value)} /></div>
         <div><label>{L('再次输入密码', 'Repeat password')}</label><input type="password" autoComplete="new-password" value={pw2} onChange={(e) => setPw2(e.target.value)} /></div>
       </div>

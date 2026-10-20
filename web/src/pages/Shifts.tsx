@@ -5,7 +5,7 @@ import { api, type ApiErr, qs } from '../lib/api';
 import { exportXLSX, readGrid } from '../lib/files';
 import { fmtDT, fmtDur, fmtMDT, fmtMine, fmtT, mineLabel, today } from '../lib/format';
 import { useI18n } from '../lib/i18n';
-import { type MetaShift, rulesOf, toast, useApi, useData, usePageState } from '../lib/store';
+import { type MetaShift, rulesOf, toast, useApi, useData, usePageState, settingAccess } from '../lib/store';
 
 interface Inst { employee_id: number; shift_date: string; shift_id: number; shift_code: string; shift_name: string; scheduled_start_at: number; scheduled_end_at: number; adjustment_status: string; source: string }
 interface RosterData { counts?: Record<string, number>; ot?: { employee_id: number; work_date: string; actual_in_at: number; actual_out_at: number | null; ot_ms?: number | null; kind: 'OFF' | 'LONG' }[]; from: string; to: string; total: number; employees: { id: number; employee_code: string; name: string; currency_code: string | null; employment_status: string }[]; instances: Inst[]; marks?: { employee_id: number; mark_date: string; code: string }[]; otManual?: OtManual[] }
@@ -253,7 +253,8 @@ function ImportModal({ grid, file, plan, currency, onClose }: { grid: (string | 
 
 function Templates() {
   const { L } = useI18n();
-  const { meta, readOnly, owner } = useData();
+  const { meta, readOnly } = useData();
+  const canEditShifts = settingAccess(meta, 'shift3') === 'e';
   const [edit, setEdit] = useState<MetaShift | 'new' | null>(null);
   const date = (ms: number) => fmtDT(ms).slice(0, 10);
   return (
@@ -267,7 +268,7 @@ function Templates() {
             <td><span className={`chip cell ${s.code}`}>{s.code}</span></td><td>{s.name}</td><td>{s.start_time}–{s.end_time}</td><td className="n">{s.late_grace_min}m</td><td className="n">{s.early_grace_min}m</td>
             <td>{date(s.created_at)}</td>
             <td>{s.is_active ? <span className="b ok">Active</span> : <span className="b">Off</span>}</td>
-            <td>{!readOnly && owner && <button className="btn sm" onClick={() => setEdit(s)}>{L('编辑', 'Edit')}</button>}</td>
+            <td>{!readOnly && canEditShifts && <button className="btn sm" onClick={() => setEdit(s)}>{L('编辑', 'Edit')}</button>}</td>
           </tr>
         ))}
       </tbody></table></div>
