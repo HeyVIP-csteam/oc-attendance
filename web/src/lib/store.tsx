@@ -18,6 +18,7 @@ export interface Meta {
   rulesCur?: Record<string, MetaRules>; // each currency's own attendance rules
   rosterCodes?: { code: string; name: string; color: number }[];
   botTexts?: import('../../../src/shared/codes').BotTexts;
+  botSwitches?: import('../../../src/shared/codes').BotSwitches;
   parser?: { skipLabels: string[]; typoTolerance: boolean; ignoreBrackets: boolean; typedTimeReview: boolean };
   dataVersion: number;
 }

@@ -706,6 +706,49 @@ describe('roster hides deactivated employees', () => {
   });
 });
 
+describe('scheduled punches (Telegram "Schedule message")', () => {
+  const replies = (h: Harness) => h.tg.filter((x) => x.method === 'sendMessage').map((x) => String(x.body.text));
+  it('are not counted, listed as a HIGH exception, and the bot replies with the configured text (can be switched off)', async () => {
+    const { h, e1 } = await fixture();
+    await h.roster(e1, D, 'A');
+    const r = await h.send({ text: 'IN', ts: lk(D, '07:00'), thread: 1001, scheduled: true });
+    expect(r.json).toMatchObject({ status: 'REJECTED_IDENTITY', codes: ['SCHEDULED_MESSAGE'] });
+    expect(h.db.get('SELECT COUNT(*) AS n FROM attendance_events')).toEqual({ n: 0 });
+    expect(h.db.get<any>("SELECT severity, employee_id FROM attendance_exceptions WHERE code = 'SCHEDULED_MESSAGE'")).toEqual({ severity: 'HIGH', employee_id: e1 });
+    expect(h.db.get<any>('SELECT processing_status, error_code FROM telegram_messages ORDER BY id DESC LIMIT 1')).toEqual({ processing_status: 'REJECTED_IDENTITY', error_code: 'SCHEDULED_MESSAGE' });
+    expect(replies(h)).toEqual(['⚠️ 定时发送的消息不计入打卡，请本人即时打卡。谢谢']);
+    // the text can be changed in Settings → Bot messages
+    const { DEFAULT_BOT_TEXTS } = await import('../src/shared/codes');
+    expect((await h.req('PUT', '/api/settings/bot-texts', { ...DEFAULT_BOT_TEXTS, scheduled: 'No scheduled punches please' })).status).toBe(200);
+    await h.send({ text: 'BREAK', ts: lk(D, '10:00'), thread: 1001, scheduled: true });
+    expect(replies(h).at(-1)).toBe('No scheduled punches please');
+    // switched off: no reply, but still not counted and still listed
+    expect((await h.req('PUT', '/api/settings/bot-switches', { early: true, late: true, scheduled: false })).status).toBe(200);
+    expect((await h.req('GET', '/api/meta')).json.botSwitches).toEqual({ early: true, late: true, scheduled: false });
+    const before = replies(h).length;
+    await h.send({ text: 'OUT', ts: lk(D, '15:00'), thread: 1001, scheduled: true });
+    expect(replies(h).length).toBe(before);
+    expect(h.db.get<any>("SELECT COUNT(*) AS n FROM attendance_exceptions WHERE code = 'SCHEDULED_MESSAGE'").n).toBe(3);
+    expect(h.db.get('SELECT COUNT(*) AS n FROM attendance_events')).toEqual({ n: 0 });
+    // an ordinary punch still works
+    expect((await h.send({ text: 'IN', ts: lk(D, '07:05'), thread: 1001 })).json.status).toBe('PROCESSED');
+  });
+
+  it('the OT questions can be switched off one by one', async () => {
+    const { h, e1 } = await fixture();
+    expect((await h.req('PUT', '/api/settings/bot-switches', { early: false, late: true, scheduled: true })).status).toBe(200);
+    await h.roster(e1, D, 'A'); // 07:00–15:00
+    await h.send({ text: 'IN', ts: lk(D, '06:00'), thread: 1001 }); // 1 h early
+    expect(h.db.get<any>("SELECT COUNT(*) AS n FROM ot_questions WHERE kind = 'EARLY'").n).toBe(0);
+    expect((await h.req('PUT', '/api/settings/bot-switches', { early: false, late: false, scheduled: true })).status).toBe(200);
+    await h.cron(lk(D, '15:50'));
+    expect(h.db.get<any>("SELECT COUNT(*) AS n FROM ot_questions WHERE kind = 'LATE'").n).toBe(0);
+    expect((await h.req('PUT', '/api/settings/bot-switches', { early: false, late: true, scheduled: true })).status).toBe(200);
+    await h.cron(lk(D, '16:00'));
+    expect(h.db.get<any>("SELECT COUNT(*) AS n FROM ot_questions WHERE kind = 'LATE'").n).toBe(1);
+  });
+});
+
 describe('manual OT on the roster', () => {
   it('OT is counted in times: every day with the red OT badge counts once (marked by hand, day off worked, bot-confirmed)', async () => {
     const { h, e1, e2 } = await fixture();

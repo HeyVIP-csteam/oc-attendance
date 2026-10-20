@@ -430,3 +430,11 @@ select.need{border-color:#f59e0b;background:#fffbeb}
 .otpill{background:#dc2626;color:#fff;font-size:9px;font-weight:700;line-height:13px;padding:0 4px;border-radius:7px}
 .otbox-r{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}.otbox-r input{flex:1;min-width:160px}
 .btn.otadd{background:#dc2626;border-color:#dc2626;color:#fff}.btn.otadd:hover{background:#b91c1c}
+/* on / off switch in the Bot messages section titles */
+.bmh{display:flex;align-items:center;gap:10px}
+.bmsw{margin-left:auto;display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--mut);cursor:pointer;user-select:none}
+.bmsw input{position:absolute;opacity:0;width:0;height:0}
+.bmsw-t{width:32px;height:18px;border-radius:999px;background:#cbd5e1;position:relative;transition:background .15s;flex:none}
+.bmsw-t::after{content:'';position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#fff;transition:left .15s;box-shadow:0 1px 2px rgba(0,0,0,.2)}
+.bmsw.on{color:#15803d}.bmsw.on .bmsw-t{background:#16a34a}.bmsw.on .bmsw-t::after{left:16px}
+.bmsw input:focus-visible+.bmsw-t{outline:2px solid var(--pri);outline-offset:2px}

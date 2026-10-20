@@ -33,6 +33,8 @@ export interface TgMessage {
   forward_origin?: unknown;
   forward_date?: number;
   via_bot?: unknown;
+  /** true when Telegram sent the message by itself: a scheduled message ("Schedule message"), an away / greeting message */
+  is_from_offline?: boolean;
   text?: string;
   caption?: string;
 }
@@ -42,11 +44,13 @@ export interface IngestResult { http: number; status: string; codes: string[]; e
 
 interface MappingRow { employee_id: number; employee_code: string; name: string; currency_code: string | null; employment_status: string; deactivated_at: number | null; emp_tg_bot: number | null; emp_cur_status: string | null }
 
-export const IDENTITY_CODES = ['UNTRUSTED_SOURCE', 'NO_TOPIC', 'WRONG_TOPIC_UNMAPPED', 'INACTIVE_EMPLOYEE'] as const;
+export const IDENTITY_CODES = ['UNTRUSTED_SOURCE', 'SCHEDULED_MESSAGE', 'NO_TOPIC', 'WRONG_TOPIC_UNMAPPED', 'INACTIVE_EMPLOYEE'] as const;
 
-export function identify(msg: Pick<TgMessage, 'forward_origin' | 'forward_date' | 'sender_chat' | 'via_bot' | 'from'>, threadId: number | null, mapping: MappingRow | null, ts: number):
+export function identify(msg: Pick<TgMessage, 'forward_origin' | 'forward_date' | 'sender_chat' | 'via_bot' | 'from' | 'is_from_offline'>, threadId: number | null, mapping: MappingRow | null, ts: number):
   { ok: true; employeeId: number } | { ok: false; code: ExceptionCode; employeeId: number | null } {
   if (msg.forward_origin || msg.forward_date || msg.sender_chat || msg.via_bot || msg.from?.is_bot) return { ok: false, code: 'UNTRUSTED_SOURCE', employeeId: mapping?.employee_id ?? null };
+  // sent by Telegram at a time chosen in advance ("Schedule message"): the employee did not punch at that moment
+  if (msg.is_from_offline) return { ok: false, code: 'SCHEDULED_MESSAGE', employeeId: mapping?.employee_id ?? null };
   if (threadId == null) return { ok: false, code: 'NO_TOPIC', employeeId: null };
   if (!mapping) return { ok: false, code: 'WRONG_TOPIC_UNMAPPED', employeeId: null };
   if (mapping.employment_status !== 'ACTIVE' && mapping.deactivated_at != null && ts >= mapping.deactivated_at) return { ok: false, code: 'INACTIVE_EMPLOYEE', employeeId: mapping.employee_id };
@@ -95,7 +99,7 @@ export async function ingestUpdate(env: Env, bot: BotRow, upd: TgUpdate, receive
     edited
       ? stmt(db, 'SELECT id FROM telegram_messages WHERE (bot_id = ? AND update_id = ?) OR (chat_id = ? AND message_id = ? AND is_edit = 1 AND edit_ts IS ?) LIMIT 1', bot.id, upd.update_id, chatId, msg.message_id, editTs)
       : stmt(db, 'SELECT id FROM telegram_messages WHERE (bot_id = ? AND update_id = ?) OR (chat_id = ? AND message_id = ? AND is_edit = 0) LIMIT 1', bot.id, upd.update_id, chatId, msg.message_id),
-    stmt(db, "SELECT key, value FROM system_settings WHERE key IN ('keywords','rules','rules_cur','parser')"),
+    stmt(db, "SELECT key, value FROM system_settings WHERE key IN ('keywords','rules','rules_cur','parser','bot_texts','bot_switches')"),
     stmt(db, mappingSql, chatId, threadId ?? -1, tgTs, tgTs),
     stmt(db, 'SELECT 1 AS ok FROM telegram_topic_mappings WHERE chat_id = ? LIMIT 1', chatId),
   ]);
@@ -184,8 +188,12 @@ export async function ingestUpdate(env: Env, bot: BotRow, upd: TgUpdate, receive
     const detail = threadId != null ? bi(`Topic #${threadId}`, `Topic #${threadId}`) : bi('General（无 Topic）', 'General (no topic)');
     const r = await write([rawInsert('REJECTED_IDENTITY', id.code, id.employeeId, parsed.type), exInsert(id.code, id.employeeId, detail)]);
     if (r === 'dup') return { http: 200, status: 'DUPLICATE', codes: [] };
-    // General or a topic not bound in the web app: recorded as an exception, but the bot stays silent there
-    return { http: 200, status: 'REJECTED_IDENTITY', codes: [id.code], reply: rules.botReply && mapping ? replyText('id', { code: id.code, tz }) : null };
+    // General or a topic not bound in the web app: recorded as an exception, but the bot stays silent there.
+    // A scheduled punch gets its own reply (Settings → Bot messages; can be switched off — it is still not counted).
+    const reply = !rules.botReply || !mapping ? null
+      : id.code === 'SCHEDULED_MESSAGE' ? (settings.botSwitches.scheduled ? settings.botTexts.scheduled : null)
+      : replyText('id', { code: id.code, tz });
+    return { http: 200, status: 'REJECTED_IDENTITY', codes: [id.code], reply };
   }
 
   // ---------------------------------------------------------------- punch: event

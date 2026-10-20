@@ -109,7 +109,7 @@ export class Harness {
 
   /** Sends a Telegram update to the webhook. `ts` = message time; `at` = when the Worker receives it (default ts + 2 s). */
   async send(o: { text: string; ts: number; thread?: number | null; at?: number; code?: string; updateId?: number; messageId?: number; fromId?: number;
-    forwarded?: boolean; edited?: { editTs: number }; secret?: string; chat?: number }) {
+    forwarded?: boolean; scheduled?: boolean; edited?: { editTs: number }; secret?: string; chat?: number }) {
     const updateId = o.updateId ?? ++this.seq;
     const messageId = o.messageId ?? updateId;
     const msg: Record<string, unknown> = {
@@ -118,6 +118,7 @@ export class Harness {
     };
     if (o.thread != null) { msg.message_thread_id = o.thread; msg.is_topic_message = true; }
     if (o.forwarded) msg.forward_origin = { type: 'user', date: Math.floor(o.ts / 1000) - 60 };
+    if (o.scheduled) msg.is_from_offline = true; // Telegram "Schedule message"
     if (o.edited) msg.edit_date = Math.floor(o.edited.editTs / 1000);
     const update = o.edited ? { update_id: updateId, edited_message: msg } : { update_id: updateId, message: msg };
     this.now(o.at ?? o.ts + 2000);

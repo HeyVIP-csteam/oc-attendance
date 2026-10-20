@@ -1,6 +1,6 @@
 import { type Context, Hono } from 'hono';
 import { z } from 'zod';
-import { type BotTexts, DEFAULT_BOT_TEXTS, EVENT_TYPES, FIXED, type KeywordConfig, ROSTER_COLORS, type RosterCode, type Rules } from '../../shared/codes';
+import { type BotSwitches, type BotTexts, DEFAULT_BOT_TEXTS, EVENT_TYPES, FIXED, type KeywordConfig, ROSTER_COLORS, type RosterCode, type Rules } from '../../shared/codes';
 import { validateKeywords } from '../../shared/parser';
 import { addDays, localDate } from '../../shared/time';
 import type { AppBindings, Env } from '../env';
@@ -37,7 +37,7 @@ settingsRoutes.get('/meta', async (c) => {
     user: c.get('admin'), tz, today: localDate(Date.now(), tz), now: Date.now(),
     currencies: cur.results, shifts: sh.results, employees: emps.results,
     keywords: settings.keywords, rules: settings.rules, parser: settings.parser,
-    rosterCodes: settings.rosterCodes, botTexts: settings.botTexts,
+    rosterCodes: settings.rosterCodes, botTexts: settings.botTexts, botSwitches: settings.botSwitches,
     rulesCur: Object.fromEntries((cur.results as { code: string }[]).map((x) => [x.code, rulesFor(settings, x.code)])), fixed: FIXED, dataVersion: settings.dataVersion,
   });
 });
@@ -65,6 +65,25 @@ settingsRoutes.put('/settings/bot-texts', async (c) => {
     stmt(db, `INSERT INTO system_settings (key, value, updated_at, updated_by) VALUES ('bot_texts', ?, ?, ?)
               ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, updated_by = excluded.updated_by`, JSON.stringify(save), now, actor),
     auditStmt(db, { actor, action: 'SETTINGS_UPDATED', entityType: 'system_settings', entityId: 'bot_texts', before, after: { ...DEFAULT_BOT_TEXTS, ...save }, ip: clientIp(c), at: now }),
+    bump(db, now),
+  ]);
+  return c.json({ ok: true });
+});
+
+/** On / off for each automatic bot message (OT questions, reply to a scheduled punch). */
+settingsRoutes.put('/settings/bot-switches', async (c) => {
+  requireAdminRole(c);
+  requireOwner(c);
+  const v: BotSwitches = await body(c, z.object({ early: z.boolean(), late: z.boolean(), scheduled: z.boolean() }));
+  const db = c.env.DB;
+  const now = Date.now();
+  const actor = c.get('admin').username;
+  const before = (await loadSettings(db)).botSwitches;
+  if (before.early === v.early && before.late === v.late && before.scheduled === v.scheduled) return c.json({ ok: true, unchanged: true });
+  await db.batch([
+    stmt(db, `INSERT INTO system_settings (key, value, updated_at, updated_by) VALUES ('bot_switches', ?, ?, ?)
+              ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, updated_by = excluded.updated_by`, JSON.stringify(v), now, actor),
+    auditStmt(db, { actor, action: 'SETTINGS_UPDATED', entityType: 'system_settings', entityId: 'bot_switches', before, after: v, ip: clientIp(c), at: now }),
     bump(db, now),
   ]);
   return c.json({ ok: true });

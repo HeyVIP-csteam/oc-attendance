@@ -1,15 +1,15 @@
-import { type BotTexts, DEFAULT_BOT_TEXTS, DEFAULT_KEYWORDS, DEFAULT_PARSER, DEFAULT_RULES, type KeywordConfig, type ParserRules, type RosterCode, type Rules, BIZ_TZ_DEFAULT } from '../../shared/codes';
+import { type BotSwitches, type BotTexts, DEFAULT_BOT_SWITCHES, DEFAULT_BOT_TEXTS, DEFAULT_KEYWORDS, DEFAULT_PARSER, DEFAULT_RULES, type KeywordConfig, type ParserRules, type RosterCode, type Rules, BIZ_TZ_DEFAULT } from '../../shared/codes';
 import type { Env } from '../env';
 
 /** rules = the base set (also used for a currency that was never saved); rulesCur = each saved currency's own complete set. */
-export interface Settings { keywords: KeywordConfig; rules: Rules; rulesCur: Record<string, Rules>; parser: ParserRules; rosterCodes: RosterCode[]; botTexts: BotTexts; dataVersion: number }
+export interface Settings { keywords: KeywordConfig; rules: Rules; rulesCur: Record<string, Rules>; parser: ParserRules; rosterCodes: RosterCode[]; botTexts: BotTexts; botSwitches: BotSwitches; dataVersion: number }
 
 /** The attendance rules of one currency (every currency has its own set; an unsaved currency starts from the base set). */
 export function rulesFor(s: Pick<Settings, 'rules' | 'rulesCur'>, cur: string | null | undefined): Rules {
   return (cur && s.rulesCur[cur]) || s.rules;
 }
 
-export const settingsStmt = (db: D1Database) => db.prepare("SELECT key, value FROM system_settings WHERE key IN ('keywords','rules','rules_cur','parser','roster_codes','bot_texts','data_version')");
+export const settingsStmt = (db: D1Database) => db.prepare("SELECT key, value FROM system_settings WHERE key IN ('keywords','rules','rules_cur','parser','roster_codes','bot_texts','bot_switches','data_version')");
 
 export function parseSettings(rows: { key: string; value: string }[]): Settings {
   const m = new Map(rows.map((r) => [r.key, r.value]));
@@ -42,6 +42,8 @@ export function parseSettings(rows: { key: string; value: string }[]): Settings 
     rosterCodes: (() => { try { const v = JSON.parse(m.get('roster_codes') ?? '[]'); return Array.isArray(v) ? (v as RosterCode[]) : []; } catch { return []; } })(),
     // empty texts fall back to the default wording
     botTexts: (() => { const t = safe<Partial<BotTexts>>(m.get('bot_texts'), {}); const o = { ...DEFAULT_BOT_TEXTS }; for (const k of Object.keys(o) as (keyof BotTexts)[]) if (typeof t[k] === 'string' && t[k]!.trim()) o[k] = t[k]!; return o; })(),
+    // only true / false are taken from the stored value; anything else keeps the default (on)
+    botSwitches: (() => { const v = safe<Partial<Record<keyof BotSwitches, unknown>>>(m.get('bot_switches'), {}); const o = { ...DEFAULT_BOT_SWITCHES }; for (const k of Object.keys(o) as (keyof BotSwitches)[]) if (typeof v[k] === 'boolean') o[k] = v[k] as boolean; return o; })(),
     dataVersion: Number(m.get('data_version') ?? 0),
   };
 }

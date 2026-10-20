@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { type BotTexts, DEFAULT_BOT_TEXTS, DEFAULT_PARSER, EVENT_LABEL, EVENT_TYPES, type KeywordConfig, type ParserRules, ROSTER_COLORS } from '../../../src/shared/codes';
+import { type BotSwitches, type BotTexts, DEFAULT_BOT_SWITCHES, DEFAULT_BOT_TEXTS, DEFAULT_PARSER, EVENT_LABEL, EVENT_TYPES, type KeywordConfig, type ParserRules, ROSTER_COLORS } from '../../../src/shared/codes';
 import { toMin } from '../../../src/shared/time';
 import { CurSeg, Empty, ErrBox, Field, Modal, ModalActions, Mut, Tabs } from '../components/ui';
 import { api, ApiErr } from '../lib/api';
@@ -249,10 +249,22 @@ function BotMessages() {
   const { L } = useI18n();
   const { meta, readOnly, reloadMeta } = useData();
   const [v, setV] = useState<BotTexts>({ ...DEFAULT_BOT_TEXTS, ...(meta.botTexts ?? {}) });
+  const [sw, setSw] = useState<BotSwitches>({ ...DEFAULT_BOT_SWITCHES, ...(meta.botSwitches ?? {}) });
   const onErr = useErr();
   const save = async () => {
-    try { await api('/settings/bot-texts', { method: 'PUT', body: v }); toast(L('Bot 消息已保存', 'Bot messages saved')); await reloadMeta(); } catch (e) { onErr(e); }
+    try {
+      await api('/settings/bot-texts', { method: 'PUT', body: v });
+      await api('/settings/bot-switches', { method: 'PUT', body: sw });
+      toast(L('Bot 消息已保存', 'Bot messages saved')); await reloadMeta();
+    } catch (e) { onErr(e); }
   };
+  /** On / off switch in a section title: off = the bot does not send this message. */
+  const toggle = (k: keyof BotSwitches) => (
+    <label className={`bmsw ${sw[k] ? 'on' : ''}`} title={L('关闭后 Bot 不会发送这一种消息', 'When off, the bot does not send this message')}>
+      <input type="checkbox" checked={sw[k]} disabled={readOnly} onChange={(e) => setSw({ ...sw, [k]: e.target.checked })} />
+      <span className="bmsw-t" />{sw[k] ? L('开启', 'On') : L('关闭', 'Off')}
+    </label>
+  );
   const f = (k: keyof BotTexts, label: string, btn = false) => (
     <div className={`bmrow ${btn ? 'btn' : ''}`}>
       <label>{label}</label>
@@ -265,20 +277,25 @@ function BotMessages() {
       <p className="mut" style={{ fontSize: 12.5, margin: '0 0 12px', lineHeight: 1.6 }}>{L('会自动替换：', 'Filled in automatically: ')}<code>{'{name}'}</code> {L('员工姓名', 'employee name')} · <code>{'{shift}'}</code> {L('班次时间', 'shift time')} · <code>{'{in}'}</code> {L('上班打卡时间', 'clock-in time')} · <code>{'{hours}'}</code> {L('上班多久', 'time since clock in')} · <code>{'{out}'}</code> {L('下班时间（忘记打卡）', 'clock-out time (forgot)')}</p>
       <div className="bmgrid">
         <div className="bmcol">
-          <div className="bmh">{L('提早上班', 'Early clock in')}</div>
+          <div className="bmh">{L('提早上班', 'Early clock in')}{toggle('early')}</div>
           {f('earlyQ', L('问题', 'Question'))}
           <div className="bmbtns">{f('earlyYes', L('按钮 1', 'Button 1'), true)}{f('earlyNo', L('按钮 2', 'Button 2'), true)}</div>
           {f('earlyRYes', L(`按「${v.earlyYes}」后的回复`, `Reply to "${v.earlyYes}"`))}
           {f('earlyRNo', L(`按「${v.earlyNo}」后的回复`, `Reply to "${v.earlyNo}"`))}
         </div>
         <div className="bmcol">
-          <div className="bmh">{L('超时未下班', 'No clock out')}</div>
+          <div className="bmh">{L('超时未下班', 'No clock out')}{toggle('late')}</div>
           {f('lateQ', L('问题', 'Question'))}
           <div className="bmbtns">{f('lateStill', L('按钮 1', 'Button 1'), true)}{f('lateOt', L('按钮 2', 'Button 2'), true)}{f('lateForgot', L('按钮 3', 'Button 3'), true)}</div>
           {f('lateRStill', L(`按「${v.lateStill}」后的回复（不计算 OT）`, `Reply to "${v.lateStill}" (no OT)`))}
           {f('lateROt', L(`按「${v.lateOt}」后的回复（计算 OT）`, `Reply to "${v.lateOt}" (OT counted)`))}
           {f('lateRForgot', L(`按「${v.lateForgot}」后的回复（下班时间 = 排班下班）`, `Reply to "${v.lateForgot}" (clock out = shift end)`))}
         </div>
+      </div>
+      <div className="bmcol" style={{ marginTop: 12 }}>
+        <div className="bmh">{L('定时发送的打卡', 'Scheduled punch')}{toggle('scheduled')}</div>
+        <p className="mut" style={{ fontSize: 12, margin: '0 0 8px', lineHeight: 1.6 }}>{L('员工用 Telegram「定时发送」打卡时：这笔打卡不计入，并在「异常与审计」记一条「定时发送的打卡」。关闭只是 Bot 不回复，打卡仍然不计入、异常仍然记录。', 'When an employee punches with Telegram\'s "Schedule message": the punch is not counted and "Scheduled message" is listed under Exceptions. Off only stops the reply — the punch is still not counted and the exception is still listed.')}</p>
+        {f('scheduled', L('Bot 回复', 'Bot reply'))}
       </div>
       <div className="bmbtns" style={{ marginTop: 6 }}>{f('change', L('「更改答案」按钮', '"Change answer" button'), true)}{f('notYou', L('别人按时显示（只有员工本人可以回答时）', 'Shown when someone else presses (only the employee may answer)'), true)}</div>
       {!readOnly && <div className="setfoot" style={{ gap: 8, display: 'flex', justifyContent: 'flex-end' }}>

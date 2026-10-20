@@ -21,6 +21,7 @@ export const EXCEPTIONS = {
   NO_TOPIC: { label: bi('未在 Topic 内打卡', 'Not in a topic'), sev: 'MEDIUM' },
   WRONG_TOPIC_UNMAPPED: { label: bi('Topic 未映射', 'Unmapped topic'), sev: 'MEDIUM' },
   UNTRUSTED_SOURCE: { label: bi('转发/非本人消息', 'Forwarded / untrusted'), sev: 'HIGH' },
+  SCHEDULED_MESSAGE: { label: bi('定时发送的打卡', 'Scheduled message'), sev: 'HIGH' },
   UNRECOGNIZED: { label: bi('无法识别的打卡', 'Unrecognised punch'), sev: 'LOW' },
   EDITED_MESSAGE: { label: bi('打卡消息被编辑', 'Punch message edited'), sev: 'LOW' },
   DUPLICATE_CLOCK_IN: { label: bi('重复上班打卡', 'Duplicate clock in'), sev: 'LOW' },
@@ -140,7 +141,13 @@ export interface BotTexts {
   earlyQ: string; earlyYes: string; earlyNo: string; earlyRYes: string; earlyRNo: string;
   lateQ: string; lateStill: string; lateOt: string; lateForgot: string; lateRStill: string; lateROt: string; lateRForgot: string;
   change: string; notYou: string;
+  /** reply to a punch sent with Telegram's "Schedule message" (it is not counted) */
+  scheduled: string;
 }
+
+/** Which automatic bot messages are sent (Settings → Bot messages). Detection and exceptions do not depend on these. */
+export interface BotSwitches { early: boolean; late: boolean; scheduled: boolean }
+export const DEFAULT_BOT_SWITCHES: BotSwitches = { early: true, late: true, scheduled: true };
 export const DEFAULT_BOT_TEXTS: BotTexts = {
   earlyQ: '⏰ Your shift is {shift}, but you clocked in early at {in}. Is this OT?',
   earlyYes: 'Yes', earlyNo: 'No',
@@ -152,4 +159,5 @@ export const DEFAULT_BOT_TEXTS: BotTexts = {
   lateROt: 'OK, please clock out again when your OT ends. Good luck with your work!',
   lateRForgot: '✅ Recorded: CS forgot clock out — time {out}.',
   change: 'Change answer', notYou: 'This button is not for you',
+  scheduled: '⚠️ 定时发送的消息不计入打卡，请本人即时打卡。谢谢',
 };

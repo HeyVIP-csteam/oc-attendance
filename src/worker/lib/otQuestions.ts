@@ -67,7 +67,7 @@ export async function askOtQuestions(env: Env, now: number, earlyOnly = false, s
   for (const c of await all<Cand>(db, `${CAND} AND s.actual_in_at >= ? AND s.actual_in_at < s.scheduled_start_at
       AND NOT EXISTS (SELECT 1 FROM ot_questions q WHERE q.employee_id = s.employee_id AND q.work_date = s.work_date AND q.kind = 'EARLY') LIMIT 100`, now - LATE_LIMIT)) {
     const rules = rulesFor(st, c.currency_code);
-    if (rules.botReply && rules.earlyAskMin > 0 && c.actual_in_at <= c.scheduled_start_at - rules.earlyAskMin * MIN) due.push({ c, kind: 'EARLY', rules });
+    if (st.botSwitches.early && rules.botReply && rules.earlyAskMin > 0 && c.actual_in_at <= c.scheduled_start_at - rules.earlyAskMin * MIN) due.push({ c, kind: 'EARLY', rules });
   }
   if (!earlyOnly) {
     // shifts that ended in the last 8 h (max setting) + 2 h (LATE_LIMIT), clocked in and still not clocked out
@@ -76,7 +76,7 @@ export async function askOtQuestions(env: Env, now: number, earlyOnly = false, s
       now - 10 * HOUR - LATE_LIMIT, now, now - 30 * HOUR)) {
       const rules = rulesFor(st, c.currency_code);
       const at = lateAskAt(c, rules.outAskMin);
-      if (rules.botReply && now >= at && now - at <= LATE_LIMIT) due.push({ c, kind: 'LATE', rules });
+      if (st.botSwitches.late && rules.botReply && now >= at && now - at <= LATE_LIMIT) due.push({ c, kind: 'LATE', rules });
     }
   }
   let sent = 0;
