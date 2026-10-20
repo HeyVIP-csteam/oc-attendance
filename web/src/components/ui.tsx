@@ -78,7 +78,8 @@ export function Modal({ onClose, children, wide }: { onClose: () => void; childr
   }, [onClose]);
   return (
     <div className="modal" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="mbox" style={wide ? { maxWidth: 760 } : undefined} role="dialog" aria-modal="true">{children}</div>
+      {/* the rounded box clips; the inner layer scrolls, so the scrollbar never covers the rounded corners */}
+      <div className="mbox" style={wide ? { maxWidth: 760 } : undefined} role="dialog" aria-modal="true"><div className="mscroll">{children}</div></div>
     </div>
   );
 }
@@ -93,7 +94,7 @@ export function Drawer({ onClose, children }: { onClose: () => void; children: R
   }, [onClose]);
   return (
     <div className="drawer" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="dbox" role="dialog" aria-modal="true">{children}</div>
+      <div className="dbox" role="dialog" aria-modal="true"><div className="dscroll">{children}</div></div>
     </div>
   );
 }
