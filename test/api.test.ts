@@ -706,25 +706,49 @@ describe('roster hides deactivated employees', () => {
   });
 });
 
-describe('manual OT mark on the roster', () => {
-  it('an admin marks any day as OT by hand (no punches needed), can change the note and remove it; audited', async () => {
-    const { h, e1 } = await fixture();
-    await h.roster(e1, D, 'A');
-    const man = async () => (await h.req('GET', `/api/roster?from=${D}&to=${D}`)).json.otManual.map((m: any) => [m.employee_id, m.work_date, m.note]);
-    expect(await man()).toEqual([]);
-    expect((await h.req('PUT', '/api/roster/ot', { employeeId: e1, date: D, on: true, note: '2h overtime' })).status).toBe(200);
-    expect(await man()).toEqual([[e1, D, '2h overtime']]);
-    expect((await h.req('PUT', '/api/roster/ot', { employeeId: e1, date: D, on: true, note: '3h' })).status).toBe(200);
-    expect(await man()).toEqual([[e1, D, '3h']]);
-    // display only: the attendance figures are untouched
-    expect((await h.session(e1, D))?.ot_ms ?? null).toBeNull();
-    expect((await h.req('PUT', '/api/roster/ot', { employeeId: e1, date: D, on: false })).status).toBe(200);
-    expect(await man()).toEqual([]);
+describe('manual OT on the roster', () => {
+  it('OT is counted in times: every day with the red OT badge counts once (marked by hand, day off worked, bot-confirmed)', async () => {
+    const { h, e1, e2 } = await fixture();
+    await h.roster(e1, D, 'A'); // 07:00–15:00
+    await h.send({ text: 'IN', ts: lk(D, '06:20'), thread: 1001, fromId: 111 }); // early → the bot asks
+    const q = h.db.get<any>("SELECT * FROM ot_questions WHERE kind = 'EARLY'");
+    await h.press({ data: `ot:${q.id}:y`, messageId: q.tg_message_id, fromId: 111, name: 'Ali', at: lk(D, '06:25') });
+    await h.send({ text: 'OUT', ts: lk(D, '15:00'), thread: 1001, fromId: 111 });
+    const R = `from=${D}&to=${D}`;
+    const att = async (id: number) => (await h.req('GET', `/api/attendance?${R}`)).json.rows.find((r: any) => r.employee_id === id)?.ot_day;
+    const rep = async (id: number, r = R) => (await h.req('GET', `/api/reports?${r}`)).json.rows.find((x: any) => x.employee_id === id)?.ot_times;
+    expect([await att(e1), await rep(e1)]).toEqual([1, 1]); // bot: Yes
+    // marked by hand on the same day: still 1 (no double counting); no duration needed
+    expect((await h.req('PUT', '/api/roster/ot', { employeeId: e1, date: D, on: true, note: 'stayed late' })).status).toBe(200);
+    expect((await h.req('GET', `/api/roster?${R}`)).json.otManual.map((m: any) => [m.employee_id, m.note])).toEqual([[e1, 'stayed late']]);
+    expect([await att(e1), await rep(e1)]).toEqual([1, 1]);
+    expect((await h.req('GET', `/api/reports/export?${R}`)).json.rows.find((r: any) => r.employee_id === e1).ot_times).toBe(1);
+    expect((await h.req('GET', `/api/attendance/export?${R}`)).json.rows.find((r: any) => r.employee_id === e1).ot_day).toBe(1);
+    expect((await h.req('GET', `/api/sessions/${e1}/${D}`)).json.otMark).toMatchObject({ note: 'stayed late' });
+    // a day without any punches can be marked too and counts; another marked day → 2 times in the range
+    const D2 = '2026-10-14';
+    expect((await h.req('PUT', '/api/roster/ot', { employeeId: e1, date: D2, on: true })).status).toBe(200);
+    expect(await rep(e1, `from=${D2}&to=${D}`)).toBe(2);
+    // worked on a day off (no shift) counts once by itself
+    await h.send({ text: 'IN', ts: lk(D, '09:00'), thread: 1002 });
+    await h.send({ text: 'OUT', ts: lk(D, '13:00'), thread: 1002 });
+    expect([await att(e2), await rep(e2)]).toEqual([1, 1]);
+    // an ordinary day is 0
+    expect((await h.req('PUT', '/api/roster/ot', { employeeId: e1, date: D2, on: false })).status).toBe(200);
+    expect(await rep(e1, `from=${D2}&to=${D2}`)).toBeUndefined(); // no session that day, no mark → not in the summary
     expect(h.db.rows("SELECT action FROM audit_logs WHERE action LIKE 'OT_MARK_%' ORDER BY id").map((r: any) => r.action)).toEqual(['OT_MARK_ADDED', 'OT_MARK_ADDED', 'OT_MARK_REMOVED']);
     // the employee can still be deleted with a mark on file
-    await h.req('PUT', '/api/roster/ot', { employeeId: e1, date: D, on: true });
     const code = h.db.get<any>('SELECT employee_code FROM employees WHERE id = ?', e1).employee_code;
     expect((await h.req('POST', `/api/employees/${e1}/delete`, { confirm: code })).status).toBe(200);
+  });
+
+  it('upgrades a table created by the first (display-only) version', async () => {
+    const { h } = await fixture();
+    h.db.sqlite.exec('DROP TABLE ot_marks; CREATE TABLE ot_marks (employee_id INTEGER NOT NULL, work_date TEXT NOT NULL, note TEXT, created_by TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (employee_id, work_date))');
+    const { ensureOtMarks, resetOtMarksForTests } = await import('../src/worker/lib/otMarks');
+    resetOtMarksForTests();
+    await ensureOtMarks(h.env.DB);
+    expect(h.db.rows("SELECT name FROM pragma_table_info('ot_marks')").map((r: any) => r.name)).toContain('minutes');
   });
 });
 

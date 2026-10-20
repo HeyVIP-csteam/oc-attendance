@@ -10,6 +10,7 @@ import { all, first, stmt } from '../lib/db';
 import { bad, body, clientIp, intParam, notFound, query, requireAdminRole } from '../lib/http';
 import { keyStr, recomputeMany, snapshot } from '../lib/sessions';
 import { bizTz, loadSettings } from '../lib/settings';
+import { ensureOtMarks, OT_DAY_SQL, OT_MARKS_WITHOUT_SESSION_SQL } from '../lib/otMarks';
 
 export const attendanceRoutes = new Hono<AppBindings>();
 
@@ -32,12 +33,12 @@ type Filters = z.infer<typeof Filters>;
 const SORT: Record<string, string> = {
   emp: 'e.employee_code', name: 'e.name', cur: 'e.currency_code', workDate: 's.work_date', shiftName: 'i.shift_name', schedIn: 's.scheduled_start_at', inT: 's.actual_in_at',
   lateMin: 's.late_min', schedOut: 's.scheduled_end_at', outT: 's.actual_out_at', earlyMin: 's.early_min', completedBreaks: 's.break_count',
-  totalBreak: 's.total_break_ms', net: 's.net_worked_ms', ot: 's.ot_ms', status: 's.status', flags: 's.exception_count',
+  totalBreak: 's.total_break_ms', net: 's.net_worked_ms', ot: OT_DAY_SQL, status: 's.status', flags: 's.exception_count',
 };
 
 export const ROW_SELECT = `SELECT s.employee_id, s.work_date, e.employee_code, e.name, e.currency_code, i.shift_id, i.shift_code, i.shift_name, i.adjustment_status,
   s.scheduled_start_at, s.actual_in_at, s.late_min, s.scheduled_end_at, s.actual_out_at, s.early_min, s.break_count, s.open_break_count, s.total_break_ms,
-  s.shift_duration_ms, s.net_worked_ms, s.status, s.state, s.missing, s.exception_count, s.has_major_exception, s.adjusted, s.break_exceeded, s.id AS session_id, s.ot_ms,
+  s.shift_duration_ms, s.net_worked_ms, s.status, s.state, s.missing, s.exception_count, s.has_major_exception, s.adjusted, s.break_exceeded, s.id AS session_id, s.ot_ms, ${OT_DAY_SQL} AS ot_day,
   rm.code AS mark_code
   FROM attendance_sessions s JOIN employees e ON e.id = s.employee_id LEFT JOIN shift_instances i ON i.id = s.shift_instance_id
   LEFT JOIN roster_marks rm ON rm.employee_id = s.employee_id AND rm.mark_date = s.work_date`;
@@ -62,6 +63,8 @@ export function sessionWhere(f: { from: string; to: string; cur?: string; shift?
   return { sql: c.join(' AND '), params: p };
 }
 
+/** [from, to, today] for the manual-OT subquery in the reports (same range as sessionWhere). */
+const otRange = (f: { from: string; to: string }, c: { env: { BIZ_TZ?: string } }) => [...(f.from <= f.to ? [f.from, f.to] : [f.to, f.from]), todayOf(c)];
 const todayOf = (c: { env: { BIZ_TZ?: string } }) => localDate(Date.now(), c.env.BIZ_TZ || 'Asia/Colombo');
 /** sessionWhere + the account's currency access. */
 function sw(c: Ctx, f: Parameters<typeof sessionWhere>[0]) {
@@ -106,6 +109,7 @@ attendanceRoutes.get('/overview', async (c) => {
 // ---------------------------------------------------------------- Attendance list + export
 attendanceRoutes.get('/attendance', async (c) => {
   const f = query(c, Filters);
+  await ensureOtMarks(c.env.DB);
   const w = sw(c, f);
   const order = `${SORT[f.sort] ?? 's.work_date'} ${f.dir > 0 ? 'ASC' : 'DESC'}, s.work_date DESC, e.employee_code ASC`;
   const db = c.env.DB;
@@ -118,6 +122,7 @@ attendanceRoutes.get('/attendance', async (c) => {
 
 attendanceRoutes.get('/attendance/export', async (c) => {
   const f = query(c, Filters.omit({ page: true, size: true }));
+  await ensureOtMarks(c.env.DB);
   const w = sw(c, f);
   const rows = await all(c.env.DB, `${ROW_SELECT} WHERE ${w.sql} ORDER BY s.work_date DESC, e.employee_code ASC LIMIT 20000`, ...w.params);
   const now = Date.now();
@@ -132,6 +137,7 @@ attendanceRoutes.get('/sessions/:emp/:date', async (c) => {
   if (!isDate(date)) throw bad('VALIDATION', '日期无效', 'Invalid date');
   await assertEmployee(c, emp);
   const db = c.env.DB;
+  await ensureOtMarks(db);
   const [empR, instR, sessR, evR, brR, exR, adjR] = await db.batch([
     stmt(db, 'SELECT id, employee_code, name, currency_code, employment_status FROM employees WHERE id = ?', emp),
     stmt(db, 'SELECT * FROM shift_instances WHERE employee_id = ? AND shift_date = ?', emp, date),
@@ -151,6 +157,8 @@ attendanceRoutes.get('/sessions/:emp/:date', async (c) => {
     markCode: (await first<{ code: string }>(db, 'SELECT code FROM roster_marks WHERE employee_id = ? AND mark_date = ?', emp, date))?.code ?? null,
     // the bot's OT questions for this day and their answers
     otQuestions: await all(db, 'SELECT kind, asked_at, answer, answered_by, answered_at FROM ot_questions WHERE employee_id = ? AND work_date = ? ORDER BY asked_at', emp, date),
+    // OT marked by hand on the roster (its minutes replace the bot-confirmed OT of the day)
+    otMark: await first(db, 'SELECT minutes, note, created_by, created_at FROM ot_marks WHERE employee_id = ? AND work_date = ?', emp, date),
     events: evR.results, breaks: await withRemarks(db, brR.results as { start_text: string | null }[]), exceptions: exR.results, adjustments: adjR.results,
   });
 });
@@ -250,6 +258,7 @@ async function withRemarks<T extends { start_text: string | null }>(db: D1Databa
 
 attendanceRoutes.get('/breaks', async (c) => {
   const f = query(c, Filters.pick({ from: true, to: true, cur: true, q: true, page: true, size: true }));
+  await ensureOtMarks(c.env.DB);
   const w = sw(c, f);
   const db = c.env.DB;
   const cond = `${w.sql} AND (s.break_count + s.open_break_count) > 0`;
@@ -266,6 +275,7 @@ attendanceRoutes.get('/breaks', async (c) => {
 /** Breaks of a date range for the HTML export (every session with a break, all its breaks). */
 attendanceRoutes.get('/breaks/export', async (c) => {
   const f = query(c, Filters.pick({ from: true, to: true, cur: true }));
+  await ensureOtMarks(c.env.DB);
   const w = sw(c, f);
   const db = c.env.DB;
   const rows = await all<{ session_id: number }>(db, `${ROW_SELECT} WHERE ${w.sql} AND (s.break_count + s.open_break_count) > 0 ORDER BY s.work_date DESC, e.employee_code ASC LIMIT 5000`, ...w.params);
@@ -282,6 +292,7 @@ attendanceRoutes.get('/breaks/export', async (c) => {
 // ---------------------------------------------------------------- Reports
 attendanceRoutes.get('/reports', async (c) => {
   const f = query(c, Filters);
+  await ensureOtMarks(c.env.DB);
   const w = sw(c, f);
   const db = c.env.DB;
   const FROM = 'FROM attendance_sessions s JOIN employees e ON e.id = s.employee_id LEFT JOIN shift_instances i ON i.id = s.shift_instance_id';
@@ -292,8 +303,9 @@ attendanceRoutes.get('/reports', async (c) => {
                   COUNT(s.shift_instance_id) AS scheduled, SUM(s.actual_in_at IS NOT NULL) AS present, SUM(s.status = 'ABSENT') AS absent,
                   SUM(s.late_min > 0) AS late_times, SUM(COALESCE(s.late_min, 0)) AS late_min, SUM(s.early_min > 0) AS early_times, SUM(COALESCE(s.early_min, 0)) AS early_min,
                   SUM(s.break_count) AS breaks, SUM(s.total_break_ms) AS break_ms,
-                  SUM(CASE WHEN s.net_worked_ms IS NOT NULL THEN s.shift_duration_ms ELSE 0 END) AS shift_ms, SUM(COALESCE(s.ot_ms, 0)) AS ot_ms, SUM(s.exception_count) AS exceptions
-                ${FROM} WHERE ${w.sql} GROUP BY e.id ORDER BY COALESCE(e.sort_order, 1000000000), e.employee_code LIMIT ? OFFSET ?`, ...w.params, f.size, (f.page - 1) * f.size),
+                  SUM(CASE WHEN s.net_worked_ms IS NOT NULL THEN s.shift_duration_ms ELSE 0 END) AS shift_ms,
+                  SUM(${OT_DAY_SQL}) + ${OT_MARKS_WITHOUT_SESSION_SQL} AS ot_times, SUM(s.exception_count) AS exceptions
+                ${FROM} WHERE ${w.sql} GROUP BY e.id ORDER BY COALESCE(e.sort_order, 1000000000), e.employee_code LIMIT ? OFFSET ?`, ...otRange(f, c), ...w.params, f.size, (f.page - 1) * f.size),
     ]);
     return c.json({ mode: 'summary', total: (cnt.results[0] as { n: number }).n, rows: rows.results });
   }
@@ -307,13 +319,15 @@ attendanceRoutes.get('/reports', async (c) => {
 /** Per-employee summary of a date range for the HTML export (all employees, no paging). */
 attendanceRoutes.get('/reports/export', async (c) => {
   const f = query(c, Filters.pick({ from: true, to: true, cur: true }));
+  await ensureOtMarks(c.env.DB);
   const w = sw(c, f);
   const rows = await all(c.env.DB, `SELECT e.id AS employee_id, e.employee_code, e.name, e.currency_code,
       COUNT(s.shift_instance_id) AS scheduled, SUM(s.actual_in_at IS NOT NULL) AS present, SUM(s.status = 'ABSENT') AS absent,
       SUM(s.late_min > 0) AS late_times, SUM(COALESCE(s.late_min, 0)) AS late_min, SUM(s.early_min > 0) AS early_times, SUM(COALESCE(s.early_min, 0)) AS early_min,
-      SUM(s.break_count) AS breaks, SUM(s.total_break_ms) AS break_ms, SUM(COALESCE(s.net_worked_ms, 0)) AS net_ms, SUM(COALESCE(s.ot_ms, 0)) AS ot_ms,
+      SUM(s.break_count) AS breaks, SUM(s.total_break_ms) AS break_ms, SUM(COALESCE(s.net_worked_ms, 0)) AS net_ms,
+      SUM(${OT_DAY_SQL}) + ${OT_MARKS_WITHOUT_SESSION_SQL} AS ot_times,
       SUM(CASE WHEN s.net_worked_ms IS NOT NULL THEN s.shift_duration_ms ELSE 0 END) AS shift_ms, SUM(s.missing <> 'NONE') AS missing, SUM(s.exception_count) AS exceptions
     FROM attendance_sessions s JOIN employees e ON e.id = s.employee_id LEFT JOIN shift_instances i ON i.id = s.shift_instance_id
-    WHERE ${w.sql} GROUP BY e.id ORDER BY COALESCE(e.sort_order, 1000000000), e.employee_code`, ...w.params);
+    WHERE ${w.sql} GROUP BY e.id ORDER BY COALESCE(e.sort_order, 1000000000), e.employee_code`, ...otRange(f, c), ...w.params);
   return c.json({ rows });
 });

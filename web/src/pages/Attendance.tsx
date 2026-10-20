@@ -13,7 +13,7 @@ export interface AttRow {
   employee_id: number; work_date: string; employee_code: string; name: string; currency_code: string | null; shift_id: number | null; shift_code: string | null; shift_name: string | null; mark_code?: string | null;
   adjustment_status: string | null; scheduled_start_at: number | null; actual_in_at: number | null; late_min: number | null; scheduled_end_at: number | null; actual_out_at: number | null;
   early_min: number | null; break_count: number; open_break_count: number; total_break_ms: number; shift_duration_ms: number | null; net_worked_ms: number | null; status: string; state: string;
-  missing: string; exception_count: number; has_major_exception: number; adjusted: number; break_exceeded: number | null; session_id: number; ot_ms?: number | null;
+  missing: string; exception_count: number; has_major_exception: number; adjusted: number; break_exceeded: number | null; session_id: number; ot_ms?: number | null; ot_day?: number;
 }
 
 export function useDetailExport() {
@@ -68,7 +68,7 @@ export function Attendance() {
                 <td>{r.scheduled_start_at ? fmtT(r.scheduled_start_at) : <Mut />}</td><td>{r.actual_in_at ? fmtT(r.actual_in_at) : <Mut />}</td><td className="n">{num(r.late_min)}</td>
                 <td>{r.scheduled_end_at ? fmtT(r.scheduled_end_at) : <Mut />}</td><td>{r.actual_out_at ? fmtT(r.actual_out_at) : <Mut />}</td><td className="n">{num(r.early_min)}</td>
                 <td className="n">{r.break_count}{r.open_break_count > 0 && <> <span className="b r">+{r.open_break_count} {L('未结束', 'open')}</span></>}</td>
-                <td className="n">{fmtDur(r.total_break_ms)}</td><td className="n">{r.net_worked_ms == null ? <Mut /> : fmtDur(r.net_worked_ms)}</td><td className="n">{r.ot_ms ? <b style={{ color: LATE_RED }}>{fmtDur(r.ot_ms)}</b> : <Mut />}</td>
+                <td className="n">{fmtDur(r.total_break_ms)}</td><td className="n">{r.net_worked_ms == null ? <Mut /> : fmtDur(r.net_worked_ms)}</td><td className="n">{r.ot_day ? <b style={{ color: LATE_RED }}>OT</b> : <Mut />}</td>
                 <td><StatusBadge st={r.status} mark={r.mark_code} />{r.adjusted ? <> <span className="b v">{L('已修正', 'Adjusted')}</span></> : null}</td>
                 <td className="c">{r.exception_count ? <span className={`b ${r.has_major_exception ? 'r' : ''}`}>{r.exception_count}</span> : <span className="mut">0</span>}</td>
               </tr>
@@ -91,6 +91,7 @@ interface Detail {
   events: { id: number; event_type: EventType; event_ts: number; source: string; is_voided: number; sm_result: string | null; adjustment_id: number | null; voided_by_adjustment_id: number | null; raw_text: string | null; tg_message_id: number | null; message_thread_id: number | null; from_user_id: number | null; telegram_message_ts: number | null; raw_received_at: number | null; raw_source?: string | null; processed_at: number | null }[];
   breaks: { seq: number; start_at: number; end_at: number | null; duration_ms: number | null; status: string; remark: string | null }[];
   exceptions: { id: number; code: string; occurred_at: number; detail: string | null; status: string }[];
+  otMark?: { note: string | null; created_by: string; created_at: number } | null;
   otQuestions?: { kind: 'EARLY' | 'LATE'; asked_at: number; answer: 'YES' | 'NO' | 'STILL' | 'OT' | 'FORGOT' | null; answered_by: string | null; answered_at: number | null }[];
   adjustments: { id: number; action: string; event_type: EventType | null; event_ts: number | null; target_event_id: number | null; reason: string; before_json: string | null; after_json: string | null; created_by: string; created_at: number }[];
 }
@@ -214,10 +215,14 @@ export function SessionDrawer({ emp, date, onClose }: { emp: number; date: strin
               )}
             </div>
 
-            {(data.otQuestions ?? []).length > 0 && (
+            {((data.otQuestions ?? []).length > 0 || data.otMark) && (
               <div className="sd-card">
-                <div className="sd-ch"><h3>{L('OT 问题', 'OT questions')}</h3><span className="c">{s?.ot_ms ? L(`OT ${fmtDur(s.ot_ms)}`, `OT ${fmtDur(s.ot_ms)}`) : L('不计算 OT', 'No OT counted')}</span></div>
-                <table className="sd-t"><thead><tr><th>{L('问题', 'Question')}</th><th>{L('发送时间', 'Asked')}</th><th>{L('回答', 'Answer')}</th><th>{L('回答人', 'Answered by')}</th><th>{L('回答时间', 'Answered at')}</th></tr></thead><tbody>
+                {/* the day's OT: a manual mark on the roster wins over the bot-confirmed OT */}
+                <div className="sd-ch"><h3>OT</h3><span className="c">{data.otMark || (s?.ot_ms ?? 0) > 0 ? L('OT · 算 1 次', 'OT · counts as 1') : L('不计 OT', 'No OT')}</span></div>
+                {data.otMark && <div className="sd-exi" style={{ padding: '6px 2px 10px' }}><span className="b r">OT</span>
+                  <span className="x">{L(`排班表手动标记 · ${data.otMark.created_by}`, `Marked by hand on the roster · ${data.otMark.created_by}`)}{data.otMark.note ? ` · ${data.otMark.note}` : ''}</span>
+                  <span className="t">{fmtDT(data.otMark.created_at).slice(0, 16)}</span></div>}
+                {(data.otQuestions ?? []).length > 0 && <table className="sd-t"><thead><tr><th>{L('问题', 'Question')}</th><th>{L('发送时间', 'Asked')}</th><th>{L('回答', 'Answer')}</th><th>{L('回答人', 'Answered by')}</th><th>{L('回答时间', 'Answered at')}</th></tr></thead><tbody>
                   {data.otQuestions!.map((q) => {
                     const t = { ...DEFAULT_BOT_TEXTS, ...(meta.botTexts ?? {}) };
                     const lab = q.answer ? { YES: t.earlyYes, NO: t.earlyNo, STILL: t.lateStill, OT: t.lateOt, FORGOT: t.lateForgot }[q.answer] : null;
@@ -225,7 +230,7 @@ export function SessionDrawer({ emp, date, onClose }: { emp: number; date: strin
                     return <tr key={q.kind}><td>{q.kind === 'EARLY' ? L('提早上班', 'Early clock in') : L('超时未下班', 'No clock out')}</td><td>{fmtT(q.asked_at)}</td>
                       <td>{lab ? <span className={`b ${cls}`}>{lab}</span> : <span className="b">{L('未回答', 'No answer')}</span>}</td><td>{q.answered_by ?? <Mut />}</td><td>{q.answered_at ? fmtT(q.answered_at) : <Mut />}</td></tr>;
                   })}
-                </tbody></table>
+                </tbody></table>}
               </div>
             )}
             <div className="sd-two">

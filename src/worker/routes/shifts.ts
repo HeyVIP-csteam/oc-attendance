@@ -147,33 +147,33 @@ shiftRoutes.get('/roster', async (c) => {
       ...ids, from, to),
     all(db, `SELECT employee_id, mark_date, code FROM roster_marks WHERE employee_id IN (${inList}) AND mark_date BETWEEN ? AND ?`, ...ids, from, to),
     // OT marked by hand on the roster (display only)
-    all(db, `SELECT employee_id, work_date, note, created_by, created_at FROM ot_marks WHERE employee_id IN (${inList}) AND work_date BETWEEN ? AND ?`, ...ids, from, to),
+    all(db, `SELECT employee_id, work_date, minutes, note, created_by, created_at FROM ot_marks WHERE employee_id IN (${inList}) AND work_date BETWEEN ? AND ?`, ...ids, from, to),
   ]) : [[], [], [], []];
   return c.json({ from, to, total: (cnt.results[0] as { n: number }).n, counts, employees: emps.results, instances, ot, marks, otManual });
 });
 
-/** Manual OT mark on a roster day: on = show the red OT badge, off = remove it. Display only; written to the audit log. */
+/** Manual OT on a roster day: on = OT (red badge; counts once in Attendance and Reports), off = remove. Audited. */
 shiftRoutes.put('/roster/ot', async (c) => {
   requireAdminRole(c);
-  const v = await body(c, z.object({ employeeId: z.number().int(), date: z.string().refine(isDate), on: z.boolean(), note: z.string().trim().max(200).optional().default('') }));
+  const v = await body(c, z.object({ employeeId: z.number().int(), date: z.string().refine(isDate), on: z.boolean(), minutes: z.number().int().min(1).max(1440).optional(), note: z.string().trim().max(200).optional().default('') }));
   await assertEmployee(c, v.employeeId);
   const db = c.env.DB;
   const e = await first<{ employee_code: string }>(db, 'SELECT employee_code FROM employees WHERE id = ?', v.employeeId);
   if (!e) throw notFound('Employee not found');
   await ensureOtMarks(db);
-  const cur = await first<{ note: string | null; created_by: string }>(db, 'SELECT note, created_by FROM ot_marks WHERE employee_id = ? AND work_date = ?', v.employeeId, v.date);
+  const cur = await first<{ note: string | null; created_by: string; minutes: number | null }>(db, 'SELECT note, created_by, minutes FROM ot_marks WHERE employee_id = ? AND work_date = ?', v.employeeId, v.date);
   if (v.on === !!cur && (!v.on || (cur?.note ?? '') === v.note)) return c.json({ ok: true, unchanged: true });
   const now = Date.now();
   const actor = c.get('admin').username;
   await db.batch([
     v.on
-      ? stmt(db, `INSERT INTO ot_marks (employee_id, work_date, note, created_by, created_at) VALUES (?,?,?,?,?)
-                  ON CONFLICT (employee_id, work_date) DO UPDATE SET note = excluded.note, created_by = excluded.created_by, created_at = excluded.created_at`,
-          v.employeeId, v.date, v.note || null, actor, now)
+      ? stmt(db, `INSERT INTO ot_marks (employee_id, work_date, minutes, note, created_by, created_at) VALUES (?,?,?,?,?,?)
+                  ON CONFLICT (employee_id, work_date) DO UPDATE SET minutes = excluded.minutes, note = excluded.note, created_by = excluded.created_by, created_at = excluded.created_at`,
+          v.employeeId, v.date, v.minutes ?? null, v.note || null, actor, now)
       : stmt(db, 'DELETE FROM ot_marks WHERE employee_id = ? AND work_date = ?', v.employeeId, v.date),
     auditStmt(db, { actor, action: v.on ? 'OT_MARK_ADDED' : 'OT_MARK_REMOVED', entityType: 'shift_instance', entityId: `${e.employee_code}@${v.date}`,
       before: cur ? { ot: true, note: cur.note ?? '' } : { ot: false }, after: v.on ? { ot: true, note: v.note } : { ot: false },
-      note: v.on ? `OT marked${v.note ? ` — ${v.note}` : ''}` : 'OT mark removed', ip: clientIp(c), at: now }),
+      note: v.on ? `OT marked${v.note ? ` — ${v.note}` : ''}` : 'OT removed', ip: clientIp(c), at: now }),
     bump(db, now),
   ]);
   return c.json({ ok: true });

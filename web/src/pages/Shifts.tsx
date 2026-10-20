@@ -10,7 +10,7 @@ import { type MetaShift, rulesOf, toast, useApi, useData, usePageState } from '.
 interface Inst { employee_id: number; shift_date: string; shift_id: number; shift_code: string; shift_name: string; scheduled_start_at: number; scheduled_end_at: number; adjustment_status: string; source: string }
 interface RosterData { counts?: Record<string, number>; ot?: { employee_id: number; work_date: string; actual_in_at: number; actual_out_at: number | null; ot_ms?: number | null; kind: 'OFF' | 'LONG' }[]; from: string; to: string; total: number; employees: { id: number; employee_code: string; name: string; currency_code: string | null; employment_status: string }[]; instances: Inst[]; marks?: { employee_id: number; mark_date: string; code: string }[]; otManual?: OtManual[] }
 /** OT marked by hand on the roster (display only). */
-interface OtManual { employee_id: number; work_date: string; note: string | null; created_by: string; created_at: number }
+interface OtManual { employee_id: number; work_date: string; minutes: number | null; note: string | null; created_by: string; created_at: number }
 
 export function Shifts() {
   const { L } = useI18n();
@@ -189,9 +189,11 @@ function CellModal({ emp, date, inst, mark, manual, onClose }: { emp: { id: numb
       <div style={{ marginTop: 10 }}><label className="mut" style={{ fontSize: 12 }}>{L('原因（必填）', 'Reason (required)')}</label><textarea rows={2} value={reason} onChange={(e) => setReason(e.target.value)} /></div>
       <div className="otbox">
         <div className="otbox-h"><span className="otpill">OT</span><b>{L('OT 标记', 'OT mark')}</b>
-          <span className="mut">{manual ? L(`已标记 · ${manual.created_by} · ${fmtDT(manual.created_at).slice(0, 16)}`, `Marked · ${manual.created_by} · ${fmtDT(manual.created_at).slice(0, 16)}`) : L('只在排班表显示红色 OT，不影响考勤数字', 'Shows the red OT badge on the roster only; attendance figures are not changed')}</span></div>
+          <span className="mut">{manual ? L(`已标记 · ${manual.created_by} · ${fmtDT(manual.created_at).slice(0, 16)}`, `Marked · ${manual.created_by} · ${fmtDT(manual.created_at).slice(0, 16)}`) : L('每标记一天 = 1 次 OT，计入考勤明细和报表', 'Each marked day counts as 1 OT in Attendance and Reports')}</span></div>
         <div className="otbox-r">
-          <input type="text" maxLength={200} value={otNote} placeholder={L('备注（可选），例如：加班 2 小时', 'Note (optional), e.g. 2 hours overtime')} onChange={(e) => setOtNote(e.target.value)} />
+          <input type="text" maxLength={200} value={otNote} placeholder={L('备注（可选）', 'Note (optional)')} onChange={(e) => setOtNote(e.target.value)} />
+        </div>
+        <div className="otbox-r" style={{ justifyContent: 'flex-end' }}>
           {manual
             ? <><button className="btn" disabled={busy || otNote.trim() === (manual.note ?? '')} onClick={() => setOt(true)}>{L('更新备注', 'Update note')}</button><button className="btn d" disabled={busy} onClick={() => setOt(false)}>{L('移除 OT', 'Remove OT')}</button></>
             : <button className="btn otadd" disabled={busy} onClick={() => setOt(true)}>{L('标记 OT', 'Mark as OT')}</button>}
