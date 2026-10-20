@@ -465,6 +465,11 @@ describe('dashboard queries', () => {
     expect(p2.json.rows[0].employee_code).toBe('E001');
     const exp = await h.req('GET', `/api/attendance/export?from=${D}&to=${D}`);
     expect(exp.json.rows).toHaveLength(2);
+    // the downloaded report carries each day's punches, so a row opens the same popup offline
+    const sid = exp.json.rows.find((r: any) => r.employee_code === 'E002').session_id;
+    expect(exp.json.detail.events.filter((ev: any) => ev.session_id === sid).map((ev: any) => [ev.event_type, ev.raw_text])).toEqual([['CLOCK_IN', 'IN'], ['CLOCK_OUT', 'OUT']]);
+    expect(exp.json.detail).toMatchObject({ breaks: [], otMarks: [], otQuestions: [] });
+    expect(exp.json.detail.quotas).toHaveLength(2);
     const ov = await h.req('GET', `/api/overview?date=${D}`);
     expect(ov.json).toMatchObject({ totalEmployees: 2, expected: 2, late: 1, lateMin: 30, startedPresent: 2, started: 2 });
     const meta = await h.req('GET', '/api/meta');

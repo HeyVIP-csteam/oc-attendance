@@ -124,11 +124,40 @@ attendanceRoutes.get('/attendance/export', async (c) => {
   const f = query(c, Filters.omit({ page: true, size: true }));
   await ensureOtMarks(c.env.DB);
   const w = sw(c, f);
-  const rows = await all(c.env.DB, `${ROW_SELECT} WHERE ${w.sql} ORDER BY s.work_date DESC, e.employee_code ASC LIMIT 20000`, ...w.params);
+  const rows = await all<{ session_id: number }>(c.env.DB, `${ROW_SELECT} WHERE ${w.sql} ORDER BY s.work_date DESC, e.employee_code ASC LIMIT 20000`, ...w.params);
+  const detail = await exportDetail(c.env.DB, rows.map((r) => r.session_id));
   const now = Date.now();
   await auditStmt(c.env.DB, { actor: c.get('admin').username, action: 'DATA_EXPORTED', entityType: 'report', entityId: `attendance_${f.from}_${f.to}`, after: { rows: rows.length, filters: f }, ip: clientIp(c), at: now }).run();
-  return c.json({ rows });
+  return c.json({ rows, detail });
 });
+
+/**
+ * What the session popup shows, for every day of an export (punches, breaks, exceptions, OT), so the downloaded report
+ * opens the same popup offline. Read only: the file has no connection to the dashboard.
+ */
+async function exportDetail(db: D1Database, ids: number[]) {
+  const out = { events: [] as unknown[], breaks: [] as { start_text: string | null }[], exceptions: [] as unknown[], otMarks: [] as unknown[], otQuestions: [] as unknown[], quotas: [] as unknown[] };
+  const S = 'JOIN attendance_sessions s ON s.employee_id = x.employee_id AND s.work_date = x.work_date';
+  for (let k = 0; k < ids.length; k += 90) {
+    const part = ids.slice(k, k + 90);
+    const IN = `s.id IN (${part.map(() => '?').join(',')})`;
+    const [ev, br, ex, om, oq, qu] = await db.batch([
+      stmt(db, `SELECT s.id AS session_id, x.id, x.event_type, x.event_ts, x.source, x.is_voided, x.sm_result, m.raw_text, m.source AS raw_source, m.received_at AS raw_received_at,
+                  m.telegram_message_ts, a.reason AS adj_reason, a.target_event_id AS adj_target
+                FROM attendance_events x ${S} LEFT JOIN telegram_messages m ON m.id = x.message_id LEFT JOIN attendance_adjustments a ON a.id = x.adjustment_id
+                WHERE ${IN} ORDER BY s.id, x.event_ts, x.tg_message_id, x.id`, ...part),
+      stmt(db, `SELECT b.session_id, b.seq, b.start_at, b.end_at, b.duration_ms, b.status, ${BREAK_TEXT} AS start_text
+                FROM break_sessions b JOIN attendance_sessions s ON s.id = b.session_id WHERE ${IN} ORDER BY b.session_id, b.seq`, ...part),
+      stmt(db, `SELECT s.id AS session_id, x.code, x.detail, x.occurred_at FROM attendance_exceptions x ${S} WHERE ${IN} ORDER BY x.occurred_at`, ...part),
+      stmt(db, `SELECT s.id AS session_id, x.note, x.created_by, x.created_at FROM ot_marks x ${S} WHERE ${IN}`, ...part),
+      stmt(db, `SELECT s.id AS session_id, x.kind, x.asked_at, x.answer, x.answered_by, x.answered_at FROM ot_questions x ${S} WHERE ${IN} ORDER BY x.asked_at`, ...part),
+      stmt(db, `SELECT s.id AS session_id, i.break_minutes FROM attendance_sessions s JOIN shift_instances i ON i.id = s.shift_instance_id WHERE ${IN}`, ...part),
+    ]);
+    out.events.push(...ev.results); out.breaks.push(...(br.results as { start_text: string | null }[])); out.exceptions.push(...ex.results);
+    out.otMarks.push(...om.results); out.otQuestions.push(...oq.results); out.quotas.push(...qu.results);
+  }
+  return { ...out, breaks: await withRemarks(db, out.breaks) };
+}
 
 // ---------------------------------------------------------------- Session detail
 attendanceRoutes.get('/sessions/:emp/:date', async (c) => {
