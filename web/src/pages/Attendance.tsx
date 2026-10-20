@@ -4,7 +4,7 @@ import { addDays } from '../../../src/shared/time';
 import { Cnt, CurB, CurrencyOptions, Drawer, EmpSearch, Empty, ErrBox, ExB, Field, Modal, Mut, Pager, ShiftName, ShiftOptions, StatusBadge, StatusOptions, TblTop } from '../components/ui';
 import { api, type ApiErr, qs } from '../lib/api';
 import { ExportHtmlButton } from '../components/ExportHtml';
-import { countAttendance, exportAttendance } from '../lib/exports';
+import { exportAttendance } from '../lib/exports';
 import { fmtDT, fmtDur, fmtMin, fmtT, fromLocalInput, LATE_RED, toLocalInput, today, TZ } from '../lib/format';
 import { parseBi, useI18n } from '../lib/i18n';
 import { rulesOf, toast, useApi, useData, usePageState } from '../lib/store';
@@ -52,7 +52,7 @@ export function Attendance() {
         <Field label={L('班次', 'Shift')}><select value={f.shift} onChange={(e) => setF({ shift: e.target.value })}><ShiftOptions withNone /></select></Field>
         <Field label={L('状态', 'Status')}><select value={f.status} onChange={(e) => setF({ status: e.target.value })}><StatusOptions all={L('全部状态', 'All statuses')} /></select></Field>
         <Field label={L('搜索', 'Search')}><EmpSearch value={f.q} onChange={(q) => setF({ q })} /></Field>
-        <div className="rowact"><ExportHtmlButton title={L('导出考勤报表', 'Export attendance report')} init={{ from: f.from, to: f.to, cur: f.cur }} count={countAttendance} run={(q) => exportAttendance({ L, dt, meta }, q)} /></div>
+        <div className="rowact"><ExportHtmlButton title={L('导出考勤报表', 'Export attendance report')} init={{ from: f.from, to: f.to, cur: f.cur }} run={(q) => exportAttendance({ L, dt, meta }, q)} /></div>
       </div></div>
       <ErrBox error={error} />
       {data && (data.rows.length === 0 ? <Empty>{L('没有符合条件的考勤记录', 'No attendance records match these filters')}</Empty> : (
@@ -111,6 +111,12 @@ export function SessionDrawer({ emp, date, onClose }: { emp: number; date: strin
   const [err, setErr] = useState<ApiErr | Error | null>(null);
   const [busy, setBusy] = useState(false);
   const [dlg, setDlg] = useState<{ kind: 'edit' | 'del'; ev: Ev } | null>(null);
+  const [xBusy, setXBusy] = useState(false);
+  const exportDay = async () => {
+    setXBusy(true);
+    try { await exportAttendance({ L, dt, meta }, { from: date, to: date, cur: '', emp }); toast(L('已下载', 'Downloaded')); }
+    catch (e) { toast((e as Error).message || L('导出失败', 'Export failed')); } finally { setXBusy(false); }
+  };
   const s = data?.session;
   const inst = data?.instance;
   const defaultTs = s?.actual_out_at ?? s?.scheduled_end_at ?? s?.actual_in_at ?? Date.now();
@@ -169,7 +175,10 @@ export function SessionDrawer({ emp, date, onClose }: { emp: number; date: strin
                 <span>{L('斯里兰卡时间', 'Sri Lanka time')}</span>
               </div>
             </div>
-            <div className="sd-r">{s && <StatusBadge st={s.status} mark={data.markCode} />}<button className="btn" onClick={onClose}>{L('关闭', 'Close')}</button></div>
+            <div className="sd-r">{s && <StatusBadge st={s.status} mark={data.markCode} />}
+              {/* this day only, downloaded at once (the same interactive report; its row opens this popup) */}
+              <button className="btn" disabled={xBusy} onClick={exportDay}>{xBusy ? '…' : L('导出 HTML', 'Export HTML')}</button>
+              <button className="btn" onClick={onClose}>{L('关闭', 'Close')}</button></div>
           </div>
 
           <div className="sd-body">

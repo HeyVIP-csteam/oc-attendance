@@ -470,6 +470,12 @@ describe('dashboard queries', () => {
     expect(exp.json.detail.events.filter((ev: any) => ev.session_id === sid).map((ev: any) => [ev.event_type, ev.raw_text])).toEqual([['CLOCK_IN', 'IN'], ['CLOCK_OUT', 'OUT']]);
     expect(exp.json.detail).toMatchObject({ breaks: [], otMarks: [], otQuestions: [] });
     expect(exp.json.detail.quotas).toHaveLength(2);
+    // one employee only (the popup's Export HTML)
+    const one = await h.req('GET', `/api/attendance/export?from=${D}&to=${D}&emp=${e2}`);
+    expect(one.json.rows.map((r: any) => r.employee_code)).toEqual(['E002']);
+    expect(one.json.detail.events.every((ev: any) => ev.session_id === sid)).toBe(true);
+    expect((await h.req('GET', `/api/reports/export?from=${D}&to=${D}&emp=${e2}`)).json.rows.map((r: any) => r.employee_code)).toEqual(['E002']);
+    expect((await h.req('GET', `/api/breaks/export?from=${D}&to=${D}&emp=${e2}`)).status).toBe(200);
     const ov = await h.req('GET', `/api/overview?date=${D}`);
     expect(ov.json).toMatchObject({ totalEmployees: 2, expected: 2, late: 1, lateMin: 30, startedPresent: 2, started: 2 });
     const meta = await h.req('GET', '/api/meta');

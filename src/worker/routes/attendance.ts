@@ -23,6 +23,7 @@ const Filters = z.object({
   shift: z.string().max(10).optional().default(''),
   status: z.string().max(20).optional().default(''),
   q: z.string().max(80).optional().default(''),
+  emp: z.coerce.number().int().positive().optional(), // one employee (the popup's Export HTML)
   page: z.coerce.number().int().min(1).max(100000).default(1),
   size: PageSize,
   sort: z.string().max(20).optional().default('workDate'),
@@ -45,7 +46,7 @@ export const ROW_SELECT = `SELECT s.employee_id, s.work_date, e.employee_code, e
 
 const likeEsc = (q: string) => `%${q.replace(/[\\%_]/g, (m) => '\\' + m)}%`;
 
-export function sessionWhere(f: { from: string; to: string; cur?: string; shift?: string; status?: string; q?: string }, today: string): { sql: string; params: unknown[] } {
+export function sessionWhere(f: { from: string; to: string; cur?: string; shift?: string; status?: string; q?: string; emp?: number }, today: string): { sql: string; params: unknown[] } {
   if (dayDiff(f.to, f.from) > 400 || dayDiff(f.from, f.to) > 400) throw bad('RANGE', '日期范围最多 400 天', 'Date range is limited to 400 days');
   const [from, to] = f.from <= f.to ? [f.from, f.to] : [f.to, f.from];
   const c: string[] = ['s.work_date BETWEEN ? AND ?', 's.work_date <= ?'];
@@ -59,6 +60,7 @@ export function sessionWhere(f: { from: string; to: string; cur?: string; shift?
   else if (f.status === 'ANY_EARLY') c.push('s.early_min > 0');
   else if (f.status === 'HAS_SHIFT') c.push('s.shift_instance_id IS NOT NULL');
   else if (f.status) { c.push('s.status = ?'); p.push(f.status); }
+  if (f.emp) { c.push('s.employee_id = ?'); p.push(f.emp); }
   if (f.q) { c.push("(e.employee_code LIKE ? ESCAPE '\\' OR e.name LIKE ? ESCAPE '\\')"); p.push(likeEsc(f.q), likeEsc(f.q)); }
   return { sql: c.join(' AND '), params: p };
 }
@@ -303,7 +305,7 @@ attendanceRoutes.get('/breaks', async (c) => {
 
 /** Breaks of a date range for the HTML export (every session with a break, all its breaks). */
 attendanceRoutes.get('/breaks/export', async (c) => {
-  const f = query(c, Filters.pick({ from: true, to: true, cur: true }));
+  const f = query(c, Filters.pick({ from: true, to: true, cur: true, emp: true }));
   await ensureOtMarks(c.env.DB);
   const w = sw(c, f);
   const db = c.env.DB;
@@ -347,7 +349,7 @@ attendanceRoutes.get('/reports', async (c) => {
 
 /** Per-employee summary of a date range for the HTML export (all employees, no paging). */
 attendanceRoutes.get('/reports/export', async (c) => {
-  const f = query(c, Filters.pick({ from: true, to: true, cur: true }));
+  const f = query(c, Filters.pick({ from: true, to: true, cur: true, emp: true }));
   await ensureOtMarks(c.env.DB);
   const w = sw(c, f);
   const rows = await all(c.env.DB, `SELECT e.id AS employee_id, e.employee_code, e.name, e.currency_code,

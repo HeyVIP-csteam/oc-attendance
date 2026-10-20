@@ -13,17 +13,14 @@ import type { Meta } from './store';
 type L = (zh: string, en: string) => string;
 interface Ctx { L: L; dt: (b: Bi) => string; meta: Meta }
 
-const count = async (path: string, q: ExportRange) => (await api<{ total: number }>(`${path}?${qs({ ...q, page: 1, size: 10 })}`)).total;
-export const countAttendance = (q: ExportRange) => count('/attendance', q);
-export const countBreaks = (q: ExportRange) => count('/breaks', q);
-export const countReports = (q: ExportRange) => count('/reports', q);
 
 function common(x: Ctx, q: ExportRange, title: string, kind: string): Pick<ReportCfg, 'title' | 'file' | 'brand' | 'brandSub' | 'meta' | 'searchLabel' | 'searchPh' | 't'> {
   const { L } = x;
+  const emp = q.emp ? x.meta.employees.find((e) => e.id === q.emp) : undefined;
   return {
-    title, brand: 'OC Attendance', brandSub: 'Outsource CS Attendance',
-    file: `${kind}_${q.cur ? q.cur + '_' : ''}${q.from}_${q.to}.html`,
-    meta: [[L('期间', 'Period'), `${q.from} → ${q.to}`], [L('货币', 'Currency'), q.cur || L('全部货币', 'All currencies')],
+    title: emp ? `${title} · ${emp.name} (${emp.code})` : title, brand: 'OC Attendance', brandSub: 'Outsource CS Attendance',
+    file: `${kind}_${emp ? emp.code + '_' : q.cur ? q.cur + '_' : ''}${q.from === q.to ? q.from : `${q.from}_${q.to}`}.html`,
+    meta: [[L('期间', 'Period'), `${q.from} → ${q.to}`], [L('货币', 'Currency'), (emp ? emp.currency : q.cur) || L('全部货币', 'All currencies')],
       [L('导出', 'Exported'), `${fmtDT(Date.now()).slice(0, 16)} (${L('斯里兰卡时间', 'Sri Lanka time')}) · ${x.meta.user.username}`]],
     searchLabel: L('搜索', 'Search'), searchPh: L('姓名或 PSD ID', 'Name or PSD ID'),
     t: { reset: L('重置', 'Reset'), print: L('打印', 'Print'), of: '/', rows: L('行', 'rows'), none: L('没有记录', 'No records') },

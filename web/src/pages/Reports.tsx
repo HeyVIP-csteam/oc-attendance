@@ -5,7 +5,7 @@ import { fmtDur, fmtMin, today } from '../lib/format';
 import { useI18n } from '../lib/i18n';
 import { useApi, useData, usePageState } from '../lib/store';
 import { ExportHtmlButton } from '../components/ExportHtml';
-import { countReports, exportReports } from '../lib/exports';
+import { exportReports } from '../lib/exports';
 import { type AttRow, useDetailExport } from './Attendance';
 
 interface SummaryRow { employee_id: number; employee_code: string; name: string; scheduled: number; present: number; absent: number; late_times: number; late_min: number; early_times: number; early_min: number; breaks: number; break_ms: number; shift_ms: number; ot_times?: number; exceptions: number }
@@ -40,7 +40,7 @@ export function Reports() {
         <Field label={L('班次', 'Shift')}><select value={f.shift} onChange={(e) => setF({ shift: e.target.value })}><ShiftOptions withNone /></select></Field>
         <Field label={L('状态', 'Status')}><select value={f.status} onChange={(e) => setF({ status: e.target.value })}><StatusOptions all={L('全部', 'All')} /></select></Field>
         <Field label={L('搜索', 'Search')}><EmpSearch value={f.q} onChange={(q) => setF({ q })} /></Field>
-        <div className="rowact"><ExportHtmlButton title={L('导出考勤汇总报表', 'Export attendance summary')} init={{ from, to, cur: f.cur }} count={countReports} run={(q) => exportReports({ L, dt, meta }, q)} /></div>
+        <div className="rowact"><ExportHtmlButton title={L('导出考勤汇总报表', 'Export attendance summary')} init={{ from, to, cur: f.cur }} run={(q) => exportReports({ L, dt, meta }, q)} /></div>
       </div></div>
       <ErrBox error={error} />
       {data && (
