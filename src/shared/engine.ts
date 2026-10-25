@@ -4,8 +4,10 @@
 //   NOT_STARTED --CLOCK_IN--> WORKING --BREAK_START--> ON_BREAK --BREAK_END--> WORKING --CLOCK_OUT--> COMPLETED
 //
 // Formulas (all instants in UTC ms, results in whole minutes):
-//   Late Minutes        = max(0, ceil((actualIn  − scheduledStart − lateGrace)  / 1 min))
-//   Early Leave Minutes = max(0, floor((scheduledEnd − earlyGrace − actualOut) / 1 min))
+//   Late Minutes        = floor((actualIn − scheduledStart) / 1 min)   when actualIn − scheduledStart > lateGrace, else 0
+//   Early Leave Minutes = floor((scheduledEnd − actualOut) / 1 min)    when scheduledEnd − actualOut > earlyGrace, else 0
+//   Incomplete Hours    = the shift length (breaks included) not completed; a late employee counts from the clock in
+//                         and must stay until clock in + shift length (see incompleteHours)
 //   Break Duration      = breakEnd − breakStart   (clipped to [actualIn, actualOut])
 //   Total Break         = Σ closed break durations (each break counted once)
 //   Total Shift         = actualOut − actualIn
@@ -59,13 +61,32 @@ export interface SessionSummary {
   netMs: number | null;
   breakExceeded: boolean | null;
   otMs: number;             // OT confirmed through the bot's questions
+  /** the shift length (breaks included) was not completed; null = complete, or not applicable */
+  incomplete: Incomplete | null;
   flags: Flag[];
   eventResults: Map<number, ExceptionCode | null>;
   eventCount: number;
   nextCheckAt: number | null;
 }
 
-export const sortEvents = (a: EngineEvent, b: EngineEvent): number =>
+/**
+ * Working hours check (breaks included). The required time is the scheduled shift length.
+ *   not late (within the late grace)  → counted from the shift start (or the clock in, if later); must stay until the shift end
+ *   late                              → counted from the actual clock in; must stay until clock in + shift length
+ * Shortfalls within the early-leave grace are not flagged.
+ */
+export interface Incomplete { needMs: number; workedMs: number; untilAt: number; shortMs: number; fromAt: number }
+
+export function incompleteHours(inst: Pick<EngineInstance, 'startAt' | 'endAt' | 'earlyGraceMin'>, inT: number, outT: number, late: boolean): Incomplete | null {
+  const needMs = inst.endAt - inst.startAt;
+  const fromAt = Math.max(inT, inst.startAt);
+  const untilAt = late ? inT + needMs : inst.endAt;
+  const shortMs = untilAt - outT;
+  if (shortMs <= inst.earlyGraceMin * MIN) return null;
+  return { needMs, workedMs: Math.max(0, outT - fromAt), untilAt, shortMs, fromAt };
+}
+
+export const sortEvents =(a: EngineEvent, b: EngineEvent): number =>
   a.ts - b.ts || (a.tgMessageId ?? 1e15) - (b.tgMessageId ?? 1e15) || a.id - b.id;
 
 export interface SMResult {
@@ -123,6 +144,10 @@ export interface ComputeInput {
   tz: string;                     // display time zone for detail texts
   otDay?: boolean;                // the roster marks this day OT (overtime on a day off): punches without a shift are expected
   questions?: EngineQuestion[];   // the bot's OT questions for this session
+  /** an OT / ST day (or a day marked OT by hand): the employee was not scheduled to work, working hours are not checked */
+  skipHours?: boolean;
+  /** the bot's "Incomplete working hours" questions for this session (answer null = not answered yet) */
+  hoursQuestions?: { answer: string | null; askedAt: number }[];
 }
 
 export function computeSession(input: ComputeInput): SessionSummary | null {
@@ -209,6 +234,13 @@ export function computeSession(input: ComputeInput): SessionSummary | null {
     } else checks.push(limitAt + 1);
   }
   if (!inst && !input.otDay && active.length) flags.push({ code: 'UNSCHEDULED_PUNCH', ts: active[0].ts, eventId: null, detail: bi('当天没有该员工的班次', 'No shift scheduled for this employee on this date') });
+  const incomplete = inst && inT != null && outT != null && !input.skipHours ? incompleteHours(inst, inT, outT, (lateMin ?? 0) > 0) : null;
+  if (incomplete) {
+    const sm = Math.floor(incomplete.shortMs / MIN) * MIN;
+    flags.push({ code: 'INCOMPLETE_HOURS', ts: outT!, eventId: null, detail: bi(
+      `应上满 ${fmtHm(incomplete.needMs)}（含休息）· ${fmtTime(incomplete.fromAt, tz)}–${fmtTime(outT!, tz)} = ${fmtHm(incomplete.workedMs)} · 应 ${fmtTime(incomplete.untilAt, tz)} 下班，差 ${fmtHm(sm)}`,
+      `Needs ${fmtHm(incomplete.needMs)} (breaks included) · ${fmtTime(incomplete.fromAt, tz)}–${fmtTime(outT!, tz)} = ${fmtHm(incomplete.workedMs)} · should clock out at ${fmtTime(incomplete.untilAt, tz)}, ${fmtHm(sm)} short`) });
+  }
   if (rules.lateAsException) {
     if (lateMin && lateMin > 0) flags.push({ code: 'LATE', ts: inT!, eventId: null, detail: bi(`迟到 ${lateMin} 分钟`, `${lateMin} min late`) });
     if (earlyMin && earlyMin > 0) flags.push({ code: 'EARLY_LEAVE', ts: outT!, eventId: null, detail: bi(`早退 ${earlyMin} 分钟`, `left ${earlyMin} min early`) });
@@ -229,9 +261,17 @@ export function computeSession(input: ComputeInput): SessionSummary | null {
   }
   for (const q of waiting) if (!overdue.includes(q)) checks.push(q.askedAt + FIXED.otAnswerWaitMin * MIN + 1);
 
+  // the working hours question: unanswered for the same wait as the OT questions (only while the hours are still short)
+  if (incomplete) {
+    const hw = (input.hoursQuestions ?? []).filter((q) => q.answer == null);
+    const late = hw.find((q) => now > q.askedAt + FIXED.otAnswerWaitMin * MIN);
+    if (late) flags.push({ code: 'INCOMPLETE_NO_ANSWER', ts: late.askedAt, eventId: null, detail: bi('没有人回答工时不足问题（YES / NO / 忘记上班打卡）', 'Nobody answered the working hours question (Yes / No / Forgot clock in)') });
+    else for (const q of hw) checks.push(q.askedAt + FIXED.otAnswerWaitMin * MIN + 1);
+  }
+
   return {
     state: sm.state, status, missing, inT, outT, schedIn, schedOut, lateMin, earlyMin, breaks,
-    breakCount: closed.length, openBreakCount: open.length, totalBreakMs, shiftDurMs, netMs, breakExceeded, otMs,
+    breakCount: closed.length, openBreakCount: open.length, totalBreakMs, shiftDurMs, netMs, breakExceeded, otMs, incomplete,
     flags, eventResults: sm.results, eventCount: active.length,
     nextCheckAt: checks.length ? Math.min(...checks) : null,
   };

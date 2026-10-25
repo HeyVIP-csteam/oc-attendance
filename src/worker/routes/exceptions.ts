@@ -43,7 +43,7 @@ exceptionRoutes.get('/exceptions', async (c) => {
 
 /** Which event fixes which exception (null = guess from the raw message text). */
 const EX_FIX: Record<string, EventType | null> = {
-  MISSING_CLOCK_OUT: 'CLOCK_OUT', MISSING_CLOCK_IN: 'CLOCK_IN', NO_SHOW: 'CLOCK_IN', BREAK_NOT_ENDED: 'BREAK_END', CLOCK_OUT_DURING_BREAK: 'BREAK_END',
+  MISSING_CLOCK_OUT: 'CLOCK_OUT', MISSING_CLOCK_IN: 'CLOCK_IN', FORGOT_CLOCK_IN: 'CLOCK_IN', NO_SHOW: 'CLOCK_IN', BREAK_NOT_ENDED: 'BREAK_END', CLOCK_OUT_DURING_BREAK: 'BREAK_END',
   NO_TOPIC: null, WRONG_TOPIC_UNMAPPED: null, UNTRUSTED_SOURCE: null, UNRECOGNIZED: null, EDITED_MESSAGE: null,
 };
 
@@ -59,7 +59,7 @@ exceptionRoutes.get('/exceptions/:id/fix', async (c) => {
   if (!x.employee_id) return c.json({ fix: null });
   const settings = await loadSettings(db);
   let workDate = x.work_date;
-  if (x.source === 'INGEST') {
+  if (x.source === 'INGEST' && x.code !== 'FORGOT_CLOCK_IN') {
     const { ctx, instances } = await assignmentContext(db, x.employee_id, x.telegram_message_ts ?? x.occurred_at);
     const emp = await first<{ currency_code: string | null }>(db, 'SELECT currency_code FROM employees WHERE id = ?', x.employee_id);
     workDate = chooseWorkDate({ type: 'CLOCK_OUT', ts: x.telegram_message_ts ?? x.occurred_at }, ctx, instances, tz);
@@ -85,6 +85,14 @@ exceptionRoutes.get('/exceptions/:id/fix', async (c) => {
     ts = s.actual_out_at ?? (ob ? ob.start_at + 30 * MIN : ts);
   }
   const label = (EXCEPTIONS as Record<string, { label: { zh: string; en: string } }>)[x.code]?.label ?? { zh: x.code, en: x.code };
+  // "Forgot clock in" (the employee's button): approving = moving the recorded clock in to the shift start (editable)
+  if (x.code === 'FORGOT_CLOCK_IN') {
+    const ci = await first<{ id: number; event_ts: number }>(db, "SELECT id, event_ts FROM attendance_events WHERE employee_id = ? AND work_date = ? AND event_type = 'CLOCK_IN' AND is_voided = 0 ORDER BY event_ts, id LIMIT 1", x.employee_id, workDate);
+    return c.json({ fix: {
+      employeeId: x.employee_id, workDate, type: 'CLOCK_IN', ts: s?.scheduled_start_at ?? ci?.event_ts ?? x.occurred_at, on: true, targetEventId: ci?.id ?? null,
+      reason: { zh: '批准：忘记上班打卡，修改上班时间', en: 'Approved: forgot clock in — clock-in time corrected' },
+    } });
+  }
   return c.json({ fix: {
     employeeId: x.employee_id, workDate, type, ts, on: x.code in EX_FIX,
     reason: { zh: `补录${EVENT_LABEL[type].zh}（${label.zh}）`, en: `Added ${EVENT_LABEL[type].en} (${label.en})` },
@@ -94,7 +102,8 @@ exceptionRoutes.get('/exceptions/:id/fix', async (c) => {
 const EditSchema = z.object({
   status: z.enum(['OPEN', 'RESOLVED', 'DISMISSED']),
   note: z.string().trim().max(500).optional().default(''),
-  fix: z.object({ employeeId: z.number().int(), workDate: z.string().refine(isDate), eventType: z.enum(EVENT_TYPES), ts: z.number().int(), reason: z.string().trim().min(4).max(500) }).optional(),
+  // targetEventId set → that punch is corrected (edit) instead of adding a new one
+  fix: z.object({ employeeId: z.number().int(), workDate: z.string().refine(isDate), eventType: z.enum(EVENT_TYPES), ts: z.number().int(), reason: z.string().trim().min(4).max(500), targetEventId: z.number().int().nullable().optional() }).optional(),
 });
 
 exceptionRoutes.put('/exceptions/:id', async (c) => {
@@ -119,7 +128,9 @@ exceptionRoutes.put('/exceptions/:id', async (c) => {
   ]);
   if (v.fix) {
     try {
-      await applyAdjustment(c.env, actor, ip, v.fix.employeeId, v.fix.workDate, { action: 'ADD_EVENT', eventType: v.fix.eventType, ts: v.fix.ts, reason: v.fix.reason });
+      await applyAdjustment(c.env, actor, ip, v.fix.employeeId, v.fix.workDate, v.fix.targetEventId
+        ? { action: 'EDIT_EVENT', targetEventId: v.fix.targetEventId, eventType: v.fix.eventType, ts: v.fix.ts, reason: v.fix.reason }
+        : { action: 'ADD_EVENT', eventType: v.fix.eventType, ts: v.fix.ts, reason: v.fix.reason });
     } catch (e) {
       const prev = x as ExRow & { handled_by: string | null; handled_at: number | null };
       await setStatus(x.status, x.note, prev.handled_by, prev.handled_at).run();

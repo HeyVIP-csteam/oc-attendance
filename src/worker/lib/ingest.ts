@@ -13,11 +13,13 @@
 
 import { bi, type Bi, EVENT_LABEL, type EventType, EXCEPTIONS, exceptionSeverity, type ExceptionCode, type KeywordConfig, type Rules } from '../../shared/codes';
 import { buildKeywordIndex, parseText } from '../../shared/parser';
+import type { SessionSummary } from '../../shared/engine';
 import { fmtTime, localDate } from '../../shared/time';
+import { type HoursAsk, hoursVars } from './hoursQuestions';
 import type { Env } from '../env';
 import { log } from './audit';
 import { isConstraintError, stmt } from './db';
-import { assignmentContext, chooseWorkDate, keyStr, recomputeMany } from './sessions';
+import { assignmentContext, chooseWorkDate, type InstanceRow, keyStr, recomputeMany } from './sessions';
 import { parseSettings, rulesFor } from './settings';
 import { type BotRow } from './telegram';
 
@@ -40,7 +42,9 @@ export interface TgMessage {
 }
 export interface TgUpdate { update_id: number; message?: TgMessage; edited_message?: TgMessage; callback_query?: import('./otQuestions').TgCallback }
 
-export interface IngestResult { http: number; status: string; codes: string[]; event?: EventType; reply?: string | null }
+export interface IngestResult { http: number; status: string; codes: string[]; event?: EventType; reply?: string | null;
+  /** clocked out short of the shift length: send the reply together with the working hours question and its buttons */
+  hours?: HoursAsk }
 
 interface MappingRow { employee_id: number; employee_code: string; name: string; currency_code: string | null; employment_status: string; deactivated_at: number | null; emp_tg_bot: number | null; emp_cur_status: string | null }
 
@@ -210,19 +214,34 @@ export async function ingestUpdate(env: Env, bot: BotRow, upd: TgUpdate, receive
   if (r === 'dup') return { http: 200, status: 'DUPLICATE', codes: [] };
 
   let code: string | null = null;
+  let outEventId: number | null = null;
+  let summary: SessionSummary | null = null;
+  let instance: InstanceRow | null = null;
   try {
     const rec = await recomputeMany(db, [[empId, workDate]], { now: Date.now(), tz, rules });
     const ev = await db.prepare(`SELECT id FROM attendance_events WHERE message_id = ${rawRef}`).first<{ id: number }>();
-    code = (ev && rec.get(keyStr([empId, workDate]))?.summary?.eventResults.get(ev.id)) ?? null;
+    const r = rec.get(keyStr([empId, workDate]));
+    summary = r?.summary ?? null;
+    instance = r?.instance ?? null;
+    code = (ev && summary?.eventResults.get(ev.id)) ?? null;
+    outEventId = ev?.id ?? null;
   } catch (e) {
     // the event is safely stored; the cron job recomputes sessions with events newer than their computation
     log('error', 'recompute_failed', { employeeId: empId, workDate, error: String((e as Error).message) });
   }
   const accepted = code === null || code === 'CLOCK_OUT_DURING_BREAK';
-  return {
-    http: 200, status: 'PROCESSED', codes: code ? [code] : [], event: parsed.type,
-    reply: rules.botReply ? (accepted ? replyText('ok', { type: parsed.type, ts: tgTs, tz, readAs: parsed.norm === parsed.keyword ? undefined : parsed.remark, typedTime: parsed.typedTime }) : replyText('sm', { type: parsed.type, code: code!, tz, readAs: parsed.remark })) : null,
-  };
+  let reply: string | null = null;
+  let hours: HoursAsk | undefined;
+  if (rules.botReply) {
+    reply = accepted ? replyText('ok', { type: parsed.type, ts: tgTs, tz, readAs: parsed.norm === parsed.keyword ? undefined : parsed.remark, typedTime: parsed.typedTime }) : replyText('sm', { type: parsed.type, code: code!, tz, readAs: parsed.remark });
+    // clocked out before completing the shift length (breaks included): the confirmation comes with the question
+    const inc = summary?.incomplete;
+    if (accepted && parsed.type === 'CLOCK_OUT' && inc && summary?.outT === tgTs && outEventId != null && settings.botSwitches.incomplete) {
+      hours = { employeeId: empId, workDate, outEventId, outAt: tgTs, chatId, threadId, replyTo: msg.message_id, ownerTgId: msg.from?.id ?? null, confirm: reply,
+        vars: hoursVars(inc, { name: mapping?.name ?? '', inT: summary.inT, outT: tgTs, start: instance?.scheduled_start_at ?? null, end: instance?.scheduled_end_at ?? null, tz }) };
+    }
+  }
+  return { http: 200, status: 'PROCESSED', codes: code ? [code] : [], event: parsed.type, reply, ...(hours ? { hours } : {}) };
 }
 
 /** Re-parses messages that were pending review after the keyword list changed. */

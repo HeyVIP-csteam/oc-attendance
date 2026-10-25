@@ -8,7 +8,7 @@ import type { BotSwitches, BotTexts } from '../../../src/shared/codes';
 import { useI18n } from '../lib/i18n';
 import { Modal } from './ui';
 
-export type DemoKey = 'early' | 'late' | 'scheduled';
+export type DemoKey = 'early' | 'late' | 'scheduled' | 'incomplete';
 type L = (zh: string, en: string) => string;
 
 // sample data only — never a real employee
@@ -17,6 +17,7 @@ const SAMPLE: Record<DemoKey, Record<string, string>> = {
   early: { name: CS1, shift: '14:30–23:30', in: '13:52', hours: '', out: '' },
   late: { name: CS1, shift: '14:30–23:30', in: '14:28', hours: '9h 45m', out: '23:30' },
   scheduled: { name: CS1, shift: '14:30–23:30', in: '14:30', hours: '', out: '' },
+  incomplete: { name: CS1, shift: '14:30–23:30', in: '14:50', hours: '', out: '23:30', worked: '8h 40m', need: '9h', until: '23:50', short: '20m' },
 };
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
@@ -50,7 +51,7 @@ class Player {
 
 // ---------------------------------------------------------------- step builders
 function builders(L: L, t: BotTexts, v: Record<string, string>) {
-  const fill = (s: string) => esc(s).replace(/\{(name|shift|in|hours|out)\}/g, (_, k: string) => v[k] ?? '');
+  const fill = (s: string) => esc(s).replace(/\{(name|shift|in|hours|out|worked|need|until|short)\}/g, (_, k: string) => v[k] ?? '');
   const bubble = (who: 'me' | 'bot', body: string, tm: string, extra = '') =>
     who === 'me' ? `<div class="bd-msg me"><div class="n">${CS1}</div>${body}<div class="tm">${extra}${tm} ✓✓</div></div>`
       : `<div class="bd-msg bot"><div class="n">Attendance Bot</div>${extra}<span class="body">${body}</span><div class="tm">${tm}</div></div>`;
@@ -154,6 +155,30 @@ const DEMOS: Record<DemoKey, Demo> = {
         on.scheduled
           ? b.bot(L('Bot 认出这是定时发送：这笔打卡不计入，并在异常记一条「定时发送的打卡」。', 'The bot sees it was scheduled: the punch is not counted and "Scheduled message" is listed under Exceptions.'), b.fill(t.scheduled), '14:30')
           : b.off(L('回复已关闭：Bot 不发消息，但打卡仍然不计入，异常仍然记录。', 'The reply is off: no message, but the punch is still not counted and still listed under Exceptions.'), L('「定时发送的打卡」回复已关闭 — 不发消息', 'Scheduled punch reply is off — no message'))];
+    },
+  },
+  incomplete: {
+    title: (L) => L('工时不足', 'Incomplete working hours'),
+    paths: (L, t) => [['yes', L(`按「${t.incYes}」`, `Press "${t.incYes}"`)], ['no', L(`按「${t.incNo}」`, `Press "${t.incNo}"`)], ['forgot', L(`按「${t.incForgot}」`, `Press "${t.incForgot}"`)]],
+    steps(L, t, on, pr, path) {
+      const b = builders(L, t, SAMPLE.incomplete);
+      const s: Step[] = [b.me(L(`${CS1} 的班是 14:30–23:30（9 小时，含休息），他 14:50 才上班——迟到 20 分钟。`, `${CS1}'s shift is 14:30–23:30 (9 hours, breaks included). He clocks in at 14:50 — 20 minutes late.`), 'IN', '14:50')];
+      if (pr) s.push(b.punch(L('Bot 确认。', 'The bot confirms it.'), 'Clock In', '14:50'));
+      s.push(b.gap(L('……迟到的人要从上班时间起算满 9 小时，也就是 23:50。', '… a late employee must complete 9 hours from the clock in, i.e. until 23:50.'), '23:30'),
+        b.me(L('23:30 他就打卡下班了。', 'He clocks out at 23:30.'), 'OUT', '23:30'));
+      if (!pr) return [...s, b.off(L('这个货币的 Bot 回复已关闭（考勤规则）：不发消息，异常仍然记录。', 'Bot replies are off for this currency (Attendance rules): no message, the exception is still listed.'), L('Bot 回复已关闭 — 不发消息', 'Bot replies are off — no message'))];
+      const ok = esc('✅ Clock Out recorded · 23:30 (Sri Lanka time)');
+      if (!on.incomplete) return [...s, b.bot(L('问题已关闭：只确认下班，但「工时不足」仍然记在异常。', 'The question is off: only the clock out is confirmed, but "Incomplete working hours" is still listed under Exceptions.'), ok, '23:30')];
+      const labels = [t.incYes, t.incNo, t.incForgot], replies = [t.incRYes, t.incRNo, t.incRForgot];
+      const i = path === 'no' ? 1 : path === 'forgot' ? 2 : 0;
+      const what = [L('下班卡保留，异常记「工时不足」。', 'The clock out stands; "Incomplete working hours" is listed under Exceptions.'),
+        L('这笔下班卡作废，异常记「取消下班（按了 No）」，他继续上班，之后要再打一次 OUT。', 'This clock out is cancelled and "Clock out cancelled (No)" is listed under Exceptions. He keeps working and clocks out again later.'),
+        L('下班卡保留，异常记「忘记上班打卡」，等管理员批准并修改上班时间。', 'The clock out stands; "Forgot clock in" is listed for the admin to approve and correct the clock-in time.')][i];
+      return [...s, b.bot(L('Bot 确认下班，并在同一条消息里问他。', 'The bot confirms the clock out and asks in the same message.'), `${ok}\n\n${b.fill(t.incomplete)}`, '23:30', true),
+        b.buttons(L('三个按钮。', 'Three buttons.'), labels),
+        b.tap(L(`${CS1} 按「${labels[i]}」。`, `${CS1} presses "${labels[i]}".`), i),
+        b.answered(L('问题显示答案和谁按的。', 'The question shows the answer and who pressed it.'), labels[i], '23:31'),
+        b.reply(L(`Bot 回复。${what}`, `The bot replies. ${what}`), b.fill(replies[i]), '23:31')];
     },
   },
 };

@@ -67,7 +67,7 @@ function ExList({ f, set }: { f: { code: string; sev: string; status: string; q:
   );
 }
 
-interface Fix { employeeId: number; workDate: string; type: EventType; ts: number; on: boolean; reason: { zh: string; en: string } }
+interface Fix { employeeId: number; workDate: string; type: EventType; ts: number; on: boolean; reason: { zh: string; en: string }; targetEventId?: number | null }
 
 function ExModal({ x, onClose }: { x: ExRow; onClose: () => void }) {
   const { L, dt } = useI18n();
@@ -90,7 +90,7 @@ function ExModal({ x, onClose }: { x: ExRow; onClose: () => void }) {
       if (t == null) return setErr(new Error(L('请填写时间', 'Please enter a time')));
       let r = (reason ?? dt(fx.reason)).trim() || L('异常修正', 'Exception fix');
       if (r.length < 4) r += ' · ' + dt(exLabel(x.code));
-      body.fix = { employeeId: fx.employeeId, workDate: fx.workDate, eventType: type ?? fx.type, ts: t, reason: r };
+      body.fix = { employeeId: fx.employeeId, workDate: fx.workDate, eventType: type ?? fx.type, ts: t, reason: r, targetEventId: fx.targetEventId ?? null };
     }
     setBusy(true);
     try {
@@ -115,10 +115,10 @@ function ExModal({ x, onClose }: { x: ExRow; onClose: () => void }) {
       <div style={{ marginTop: 12 }}><label className="mut" style={{ fontSize: 12 }}>{L('备注（可选）', 'Note (optional)')}</label><input type="text" style={{ width: '100%' }} value={note} onChange={(e) => setNote(e.target.value)} /></div>
       {fx && (
         <>
-          <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 14, fontSize: 13, cursor: 'pointer' }}><input type="checkbox" checked={on} onChange={(e) => setFixOn(e.target.checked)} /> {L('同时修正考勤', 'Also fix attendance')}</label>
+          <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 14, fontSize: 13, cursor: 'pointer' }}><input type="checkbox" checked={on} onChange={(e) => setFixOn(e.target.checked)} /> {fx.targetEventId ? L('同时修改上班时间（批准）', 'Also correct the clock-in time (approve)') : L('同时修正考勤', 'Also fix attendance')}</label>
           {on && (
             <div className="fixbox"><div className="fg">
-              <div><label>{L('补录事件', 'Add event')}</label><select value={type ?? fx.type} onChange={(e) => setType(e.target.value as EventType)}>{EVENT_TYPES.map((k) => <option key={k} value={k}>{dt(EVENT_LABEL[k])}</option>)}</select></div>
+              <div><label>{fx.targetEventId ? L('修改为', 'Change to') : L('补录事件', 'Add event')}</label><select value={type ?? fx.type} onChange={(e) => setType(e.target.value as EventType)}>{EVENT_TYPES.map((k) => <option key={k} value={k}>{dt(EVENT_LABEL[k])}</option>)}</select></div>
               <div><label>{L('时间（LK）', 'Time (LK)')}</label><input type="datetime-local" step={1} value={ts || toLocalInput(fx.ts)} onChange={(e) => setTs(e.target.value)} /></div>
               <div style={{ gridColumn: '1/-1' }}><label>{L('修正原因', 'Reason')}</label><input type="text" value={reason ?? dt(fx.reason)} onChange={(e) => setReason(e.target.value)} /></div>
             </div></div>

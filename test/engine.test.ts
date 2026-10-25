@@ -185,6 +185,33 @@ describe('calculations', () => {
     expect(mk('14:30').earlyMin).toBe(30);
     expect(mk('14:30').status).toBe('EARLY_LEAVE');
   });
+  it('incomplete working hours: shift length incl. breaks; a late employee counts from the clock in', () => {
+    const N = inst(d, '07:30', '16:30'); // 9 h
+    const mk = (i: string, o: string, extra: EngineEvent[] = []) => computeSession({ events: [ev('CLOCK_IN', lk(d, i)), ...extra, ev('CLOCK_OUT', lk(d, o))], instance: N, now: lk(d, '20:00'), rules, tz: TZ })!;
+    const has = (s: ReturnType<typeof mk>) => s.flags.some((f) => f.code === 'INCOMPLETE_HOURS');
+    // on time (or early) and out at the shift end: complete, breaks do not matter
+    expect(mk('07:30', '16:30', [ev('BREAK_START', lk(d, '12:00')), ev('BREAK_END', lk(d, '13:00'))]).incomplete).toBeNull();
+    expect(mk('07:00', '16:30').incomplete).toBeNull();
+    // within the late grace: not late → until the shift end
+    expect(mk('07:34', '16:30').incomplete).toBeNull();
+    // late 20 min → must stay until 16:50
+    const late = mk('07:50', '16:30');
+    expect(has(late)).toBe(true);
+    expect(late.incomplete).toMatchObject({ needMs: 9 * HOUR, workedMs: 8 * HOUR + 40 * MIN, untilAt: lk(d, '16:50'), shortMs: 20 * MIN });
+    expect(late.flags.find((f) => f.code === 'INCOMPLETE_HOURS')!.detail!.en).toBe('Needs 9h (breaks included) · 07:50–16:30 = 8h 40m · should clock out at 16:50, 20m short');
+    expect(mk('07:50', '16:50').incomplete).toBeNull();
+    expect(mk('07:50', '16:46').incomplete).toBeNull(); // 4 min short: within the 5-minute early grace
+    // on time but left early → short until the shift end; an early clock in does not count
+    expect(mk('07:00', '16:00').incomplete).toMatchObject({ workedMs: 8 * HOUR + 30 * MIN, shortMs: 30 * MIN });
+    // still working / no shift: nothing
+    expect(computeSession({ events: [ev('CLOCK_IN', lk(d, '07:50'))], instance: N, now: lk(d, '12:00'), rules, tz: TZ })!.incomplete).toBeNull();
+    expect(computeSession({ events: [ev('CLOCK_IN', lk(d, '07:50')), ev('CLOCK_OUT', lk(d, '10:00'))], instance: null, now: lk(d, '12:00'), rules, tz: TZ })!.incomplete).toBeNull();
+  });
+  it('incomplete working hours across midnight (late on the C shift)', () => {
+    const C = inst(d, '23:00', '07:00');
+    const s = computeSession({ events: [ev('CLOCK_IN', lk(d, '23:30')), ev('CLOCK_OUT', lk('2026-10-17', '07:00'))], instance: C, now: lk('2026-10-17', '09:00'), rules, tz: TZ })!;
+    expect(s.incomplete).toMatchObject({ untilAt: lk('2026-10-17', '07:30'), shortMs: 30 * MIN });
+  });
   it('test 6: overnight C shift with breaks across midnight', () => {
     const C = inst(d, '23:00', '07:00');
     const s = computeSession({ events: [ev('CLOCK_IN', lk(d, '22:58')), ev('BREAK_START', lk('2026-10-17', '02:00')), ev('BREAK_END', lk('2026-10-17', '02:30')), ev('CLOCK_OUT', lk('2026-10-17', '07:03'))],

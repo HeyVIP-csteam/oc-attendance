@@ -735,7 +735,7 @@ describe('scheduled punches (Telegram "Schedule message")', () => {
     expect(replies(h).at(-1)).toBe('No scheduled punches please');
     // switched off: no reply, but still not counted and still listed
     expect((await h.req('PUT', '/api/settings/bot-switches', { early: true, late: true, scheduled: false })).status).toBe(200);
-    expect((await h.req('GET', '/api/meta')).json.botSwitches).toEqual({ early: true, late: true, scheduled: false });
+    expect((await h.req('GET', '/api/meta')).json.botSwitches).toEqual({ early: true, late: true, scheduled: false, incomplete: true });
     const before = replies(h).length;
     await h.send({ text: 'OUT', ts: lk(D, '15:00'), thread: 1001, scheduled: true });
     expect(replies(h).length).toBe(before);
@@ -757,6 +757,161 @@ describe('scheduled punches (Telegram "Schedule message")', () => {
     expect((await h.req('PUT', '/api/settings/bot-switches', { early: false, late: true, scheduled: true })).status).toBe(200);
     await h.cron(lk(D, '16:00'));
     expect(h.db.get<any>("SELECT COUNT(*) AS n FROM ot_questions WHERE kind = 'LATE'").n).toBe(1);
+  });
+});
+
+describe('incomplete working hours (question with buttons on clock out)', () => {
+  const sent = (h: Harness) => h.tg.filter((x) => x.method === 'sendMessage');
+  const texts = (h: Harness) => sent(h).map((x) => String(x.body.text));
+  const q1 = (h: Harness) => h.db.get<any>('SELECT * FROM hours_questions ORDER BY id DESC LIMIT 1');
+  const exN = (h: Harness, code: string) => h.db.get<any>('SELECT COUNT(*) AS n FROM attendance_exceptions WHERE code = ?', code).n;
+  const outs = (h: Harness, e: number) => h.db.rows<any>("SELECT source, event_ts, is_voided FROM attendance_events WHERE employee_id = ? AND event_type = 'CLOCK_OUT' ORDER BY id", e);
+  const Q = '⚠️ Incomplete working hours: your shift today is 07:00–15:00 — 8h including breaks. You worked 7h 40m. You should clock out at 15:20 — 20m short.\nDo you want to clock out now?';
+  async function lateDay() {
+    const f = await fixture();
+    await f.h.roster(f.e1, D, 'A'); // 07:00–15:00 = 8 h
+    await f.h.send({ text: 'IN', ts: lk(D, '07:20'), thread: 1001 }); // 20 min late → must stay until 15:20
+    await f.h.send({ text: 'BREAK', ts: lk(D, '11:00'), thread: 1001 });
+    await f.h.send({ text: 'RESUME', ts: lk(D, '12:00'), thread: 1001 });
+    await f.h.send({ text: 'OUT', ts: lk(D, '15:00'), thread: 1001 });
+    await f.h.flush();
+    return f;
+  }
+
+  it('a late employee clocking out at the shift end gets the question with 3 buttons; on time gets the plain confirmation', async () => {
+    const { h, e1, e2 } = await lateDay();
+    const m = sent(h).at(-1)!;
+    expect(m.body.text).toBe(`✅ Clock Out recorded · 15:00 (Sri Lanka time)\n\n${Q}`);
+    const q = q1(h);
+    expect(m.body.reply_markup).toEqual({ inline_keyboard: [[{ text: 'Yes', callback_data: `hq:${q.id}:y` }, { text: 'No', callback_data: `hq:${q.id}:n` }, { text: 'Forgot clock in', callback_data: `hq:${q.id}:f` }]] });
+    expect(m.body.message_thread_id).toBe(1001);
+    expect(q).toMatchObject({ employee_id: e1, work_date: D, out_at: lk(D, '15:00'), owner_tg_id: 5100000001, answer: null });
+    expect(exN(h, 'INCOMPLETE_HOURS')).toBe(1);
+    // e2: on time, out at the end → plain confirmation, no question, no exception
+    await h.send({ text: 'IN', ts: lk(D, '06:58'), thread: 1002 });
+    await h.send({ text: 'OUT', ts: lk(D, '15:00'), thread: 1002 });
+    await h.flush();
+    expect(sent(h).at(-1)!.body).not.toHaveProperty('reply_markup');
+    expect(texts(h).at(-1)).toBe('✅ Clock Out recorded · 15:00 (Sri Lanka time)');
+    expect(h.db.get<any>('SELECT COUNT(*) AS n FROM hours_questions').n).toBe(1);
+    expect(exN(h, 'INCOMPLETE_HOURS')).toBe(1);
+    void e2;
+  });
+
+  it('Yes = clock out stands; No = clock out cancelled (still working); answers can be changed', async () => {
+    const { h, e1 } = await lateDay();
+    const q = q1(h);
+    const press = (c: string, at: string) => h.press({ data: `hq:${q.id}:${c}`, messageId: q.tg_message_id, fromId: 5100000001, name: 'Nimal', at: lk(D, at) });
+    await press('y', '15:01');
+    expect(q1(h).answer).toBe('YES');
+    expect(texts(h).at(-1)).toBe('✅ Clock out confirmed at 15:00. Incomplete working hours recorded.');
+    expect(h.tg.filter((x) => x.method === 'editMessageText').at(-1)!.body.text).toBe(`✅ Clock Out recorded · 15:00 (Sri Lanka time)\n\n${Q}\n\n✓ Yes · Nimal · 15:01`);
+    expect(outs(h, e1)).toEqual([{ source: 'TELEGRAM', event_ts: lk(D, '15:00'), is_voided: 0 }]);
+    expect(exN(h, 'INCOMPLETE_HOURS')).toBe(1);
+    // change to No: the clock out is voided, the employee is working again, the exception goes away
+    await press('c', '15:02');
+    await press('n', '15:02');
+    expect(q1(h).answer).toBe('NO');
+    expect(texts(h).at(-1)).toBe('↩️ Clock out at 15:00 cancelled. Please continue working and clock out again at 15:20.');
+    expect(outs(h, e1)).toEqual([{ source: 'TELEGRAM', event_ts: lk(D, '15:00'), is_voided: 1 }]);
+    expect((await h.session(e1, D))!.status).toBe('WORKING');
+    expect(exN(h, 'INCOMPLETE_HOURS')).toBe(0);
+    expect(h.db.get<any>("SELECT COUNT(*) AS n FROM audit_logs WHERE action = 'HOURS_QUESTION_ANSWERED'").n).toBe(2);
+    // …but the cancelled clock out is kept as a record
+    const cx = h.db.get<any>("SELECT severity, status, source, detail FROM attendance_exceptions WHERE code = 'CLOCK_OUT_CANCELLED'");
+    expect(cx).toMatchObject({ severity: 'LOW', status: 'OPEN', source: 'INGEST' });
+    expect(JSON.parse(cx.detail).en).toBe('Nimal pressed "No" in Telegram: the 15:00 clock out was cancelled (due at 15:20, 20m short at the time); the employee kept working');
+    // back to Yes: the clock out comes back
+    await press('y', '15:03');
+    expect(exN(h, 'CLOCK_OUT_CANCELLED')).toBe(0); // pressed by mistake: the record goes too
+    expect(outs(h, e1).filter((x) => !x.is_voided)).toEqual([{ source: 'ADMIN', event_ts: lk(D, '15:00'), is_voided: 0 }]);
+    expect(exN(h, 'INCOMPLETE_HOURS')).toBe(1);
+    // No again, then the employee really completes the hours: plain confirmation, nothing short
+    await press('n', '15:04');
+    await h.send({ text: 'OUT', ts: lk(D, '15:21'), thread: 1001 });
+    await h.flush();
+    expect(texts(h).at(-1)).toBe('✅ Clock Out recorded · 15:21 (Sri Lanka time)');
+    expect(exN(h, 'INCOMPLETE_HOURS')).toBe(0);
+    expect(exN(h, 'CLOCK_OUT_CANCELLED')).toBe(1); // still there after the day is recalculated
+    expect((await h.session(e1, D))!.status).toBe('LATE');
+    // the old "No" can no longer be changed (it would bring back the 15:00 clock out)
+    const before = outs(h, e1).length;
+    expect((await press('y', '15:30')).status).toBe(200);
+    expect(h.tg.filter((x) => x.method === 'answerCallbackQuery').at(-1)!.body).toMatchObject({ text: 'You have clocked out again since then — this answer can no longer be changed.', show_alert: true });
+    expect(q1(h).answer).toBe('NO');
+    expect(outs(h, e1).length).toBe(before);
+  });
+
+  it('Forgot clock in = an exception the admin approves by correcting the clock in', async () => {
+    const { h, e1 } = await lateDay();
+    const q = q1(h);
+    await h.press({ data: `hq:${q.id}:f`, messageId: q.tg_message_id, fromId: 5100000001, at: lk(D, '15:01') });
+    expect(texts(h).at(-1)).toBe('📝 Noted: forgot clock in. An admin will check and correct your clock-in time.');
+    const x = h.db.get<any>("SELECT id, severity, status, employee_id, work_date FROM attendance_exceptions WHERE code = 'FORGOT_CLOCK_IN'");
+    expect(x).toMatchObject({ severity: 'MEDIUM', status: 'OPEN', employee_id: e1, work_date: D });
+    h.now(lk(D, '16:00'));
+    const fix = (await h.req('GET', `/api/exceptions/${x.id}/fix`)).json.fix;
+    const ci = h.db.get<any>("SELECT id FROM attendance_events WHERE employee_id = ? AND event_type = 'CLOCK_IN'", e1);
+    expect(fix).toMatchObject({ type: 'CLOCK_IN', ts: lk(D, '07:00'), on: true, targetEventId: ci.id, workDate: D });
+    expect((await h.req('PUT', `/api/exceptions/${x.id}`, { status: 'RESOLVED', note: 'approved', fix: { employeeId: e1, workDate: D, eventType: 'CLOCK_IN', ts: fix.ts, reason: fix.reason.en, targetEventId: fix.targetEventId } })).status).toBe(200);
+    const s = (await h.session(e1, D))!;
+    expect(s.actual_in_at).toBe(lk(D, '07:00'));
+    expect(s.late_min).toBe(0);
+    expect(h.db.get<any>("SELECT COUNT(*) AS n FROM attendance_events WHERE employee_id = ? AND event_type = 'CLOCK_IN' AND is_voided = 0", e1).n).toBe(1);
+    expect(exN(h, 'INCOMPLETE_HOURS')).toBe(0);
+    // changing the answer away from "Forgot clock in" takes back an exception that is still open (this one is resolved: kept)
+    expect(h.db.get<any>("SELECT status FROM attendance_exceptions WHERE code = 'FORGOT_CLOCK_IN'").status).toBe('RESOLVED');
+  });
+
+  it('nobody answers within 2 h → "No answer" exception', async () => {
+    const { h } = await lateDay();
+    await h.cron(lk(D, '16:00'));
+    expect(exN(h, 'INCOMPLETE_NO_ANSWER')).toBe(0);
+    await h.cron(lk(D, '17:15'));
+    expect(exN(h, 'INCOMPLETE_NO_ANSWER')).toBe(1);
+  });
+
+  it('OT / ST days and days marked OT by hand are not checked', async () => {
+    const { h, e1, e2 } = await fixture();
+    // a shift whose code is in "Codes not checked" (ST)
+    expect((await h.req('POST', '/api/shifts', { code: 'ST', name: 'ST Day', start: '07:00', end: '15:00' })).status).toBe(200);
+    const st = h.db.get<any>("SELECT id FROM shift_templates WHERE code = 'ST'").id;
+    expect((await h.req('PUT', '/api/roster/cell', { employeeId: e1, date: D, value: st, reason: 'ST day' })).status).toBe(200);
+    // a normal shift marked OT by hand
+    await h.roster(e2, D, 'A');
+    expect((await h.req('PUT', '/api/roster/ot', { employeeId: e2, date: D, on: true })).status).toBe(200);
+    for (const t of [1001, 1002]) { await h.send({ text: 'IN', ts: lk(D, '09:00'), thread: t }); await h.send({ text: 'OUT', ts: lk(D, '13:00'), thread: t }); }
+    await h.flush();
+    expect(h.db.get<any>('SELECT COUNT(*) AS n FROM hours_questions').n).toBe(0);
+    expect(exN(h, 'INCOMPLETE_HOURS')).toBe(0);
+    expect(texts(h).slice(-1)).toEqual(['✅ Clock Out recorded · 13:00 (Sri Lanka time)']);
+    // the list is per currency: without ST, the ST day is checked (recalculated)
+    expect((await h.req('PUT', '/api/settings/rules', { currency: 'LKR', lateAsException: false, botReply: true, noHoursCodes: ['OT'] })).status).toBe(200);
+    expect((await h.req('GET', '/api/meta')).json.rulesCur.LKR.noHoursCodes).toEqual(['OT']);
+    await h.cron(lk(D, '14:00'));
+    expect(h.db.get<any>("SELECT employee_id FROM attendance_exceptions WHERE code = 'INCOMPLETE_HOURS'")).toEqual({ employee_id: e1 });
+  });
+
+  it('the texts can be changed and the question switched off (the exception is still listed)', async () => {
+    const { h, e1 } = await fixture();
+    await h.roster(e1, D, 'A');
+    const { DEFAULT_BOT_TEXTS } = await import('../src/shared/codes');
+    expect((await h.req('PUT', '/api/settings/bot-texts', { ...DEFAULT_BOT_TEXTS, incomplete: '{name}: until {until}, {short} short ({worked}/{need}, in {in}, out {out}, shift {shift})', incYes: 'OK', incNo: 'Oops', incForgot: 'Forgot IN' })).status).toBe(200);
+    await h.send({ text: 'IN', ts: lk(D, '07:30'), thread: 1001 });
+    await h.send({ text: 'OUT', ts: lk(D, '14:00'), thread: 1001 });
+    await h.flush();
+    expect(texts(h).at(-1)).toBe('✅ Clock Out recorded · 14:00 (Sri Lanka time)\n\nNimal Perera: until 15:30, 1h 30m short (6h 30m/8h, in 07:30, out 14:00, shift 07:00–15:00)');
+    expect((sent(h).at(-1)!.body.reply_markup as any).inline_keyboard[0].map((b: any) => b.text)).toEqual(['OK', 'Oops', 'Forgot IN']);
+    // an older page that does not send the new switch keeps it as it is
+    expect((await h.req('PUT', '/api/settings/bot-switches', { early: true, late: true, scheduled: true })).json).toMatchObject({ unchanged: true });
+    expect((await h.req('PUT', '/api/settings/bot-switches', { early: true, late: true, scheduled: true, incomplete: false })).status).toBe(200);
+    await h.roster(e1, '2026-10-16', 'A');
+    await h.send({ text: 'IN', ts: lk('2026-10-16', '07:30'), thread: 1001 });
+    await h.send({ text: 'OUT', ts: lk('2026-10-16', '14:00'), thread: 1001 });
+    await h.flush();
+    expect(texts(h).at(-1)).toBe('✅ Clock Out recorded · 14:00 (Sri Lanka time)');
+    expect(h.db.get<any>('SELECT COUNT(*) AS n FROM hours_questions').n).toBe(1);
+    expect(exN(h, 'INCOMPLETE_HOURS')).toBe(2);
   });
 });
 

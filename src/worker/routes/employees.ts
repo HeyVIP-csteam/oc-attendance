@@ -8,6 +8,7 @@ import { all, chunk, first, stmt } from '../lib/db';
 import { ApiError, bad, body, clientIp, conflict, intParam, notFound, query, requireAdminRole } from '../lib/http';
 import { afterInstancesChanged, generateFromAssignments } from '../lib/roster';
 import { ensureOtMarks } from '../lib/otMarks';
+import { ensureHoursQuestions } from '../lib/hoursQuestions';
 import type { Key } from '../lib/sessions';
 import { bizTz, loadSettings } from '../lib/settings';
 
@@ -230,6 +231,7 @@ employeeRoutes.post('/employees/:id/delete', async (c) => {
   if (!e) throw notFound('Employee not found');
   if (confirm !== e.employee_code) throw bad('CONFIRM', `请输入 ${e.employee_code} 确认删除`, `Type ${e.employee_code} to confirm`);
   await ensureOtMarks(db); // the purge below also removes the employee's manual OT marks
+  await ensureHoursQuestions(db);
   const [ev, msgs, sess] = await db.batch([
     stmt(db, 'SELECT COUNT(*) AS n FROM attendance_events WHERE employee_id = ?', id),
     stmt(db, 'SELECT COUNT(*) AS n FROM telegram_messages WHERE employee_id = ?', id),
@@ -256,6 +258,7 @@ employeeRoutes.post('/employees/:id/delete', async (c) => {
     stmt(db, 'DELETE FROM telegram_topic_mappings WHERE employee_id = ?', id),
     stmt(db, 'DELETE FROM tg_sender_employees WHERE employee_id = ?', id),
     stmt(db, 'DELETE FROM ot_questions WHERE employee_id = ?', id),
+    stmt(db, 'DELETE FROM hours_questions WHERE employee_id = ?', id),
     stmt(db, 'DELETE FROM tg_agent_names WHERE employee_id = ?', id),
     stmt(db, 'DELETE FROM ot_marks WHERE employee_id = ?', id),
     stmt(db, 'DELETE FROM employees WHERE id = ?', id),

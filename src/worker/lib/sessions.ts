@@ -6,6 +6,8 @@ import { exceptionSeverity, FIXED, type EventType, type OtAnswer, type Rules } f
 import { computeSession, type EngineEvent, type EngineInstance, flagKey, hasMajor, runStateMachine, sortEvents, type SessionSummary } from '../../shared/engine';
 import { addDays, fmtDateTime, HOUR, localDate, MIN, zonedToUtc } from '../../shared/time';
 import { all, bumpVersion, chunk, stmt } from './db';
+import { ensureHoursQuestions } from './hoursQuestions';
+import { ensureOtMarks } from './otMarks';
 
 export type Key = [employeeId: number, workDate: string];
 export const keyStr = (k: Key) => `${k[0]}|${k[1]}`;
@@ -158,12 +160,13 @@ export async function recomputeMany(db: D1Database, keys: Key[], o: RecomputeOpt
   const out = new Map<string, Recomputed>();
   const uniq = [...new Map(keys.map((k) => [keyStr(k), k])).values()];
   const rulesOf = await rulesLookup(db, uniq.map((k) => k[0]), o);
+  if (uniq.length) { await ensureOtMarks(db); await ensureHoursQuestions(db); }
   for (const part of chunk(uniq, 40)) {
     const w = pairsWhere(part);
     const wi = pairsWhere(part, 'employee_id', 'shift_date');
     const ws = pairsWhere(part, 's.employee_id', 's.work_date');
     const wm = pairsWhere(part, 'employee_id', 'mark_date');
-    const [instR, evR, brR, exR, adjR, mkR, qR] = await db.batch([
+    const [instR, evR, brR, exR, adjR, mkR, qR, omR, hqR] = await db.batch([
       stmt(db, `SELECT * FROM shift_instances WHERE adjustment_status <> 'CANCELLED' AND ${wi.sql}`, ...wi.params),
       // a message imported from a Telegram export was not "delivered late": its arrival time is its Telegram time
       stmt(db, `SELECT id, employee_id, work_date, event_type, event_ts, tg_message_id,
@@ -175,11 +178,20 @@ export async function recomputeMany(db: D1Database, keys: Key[], o: RecomputeOpt
       stmt(db, `SELECT id, employee_id, work_date, dedupe_key, status, occurred_at, detail FROM attendance_exceptions
                 WHERE source = 'COMPUTED' AND ${w.sql}`, ...w.params),
       stmt(db, `SELECT employee_id, work_date, COUNT(*) AS n FROM attendance_adjustments WHERE ${w.sql} GROUP BY employee_id, work_date`, ...w.params),
-      // roster code OT = overtime on a day off
-      stmt(db, `SELECT employee_id, mark_date FROM roster_marks WHERE code = 'OT' AND ${wm.sql}`, ...wm.params),
+      // roster codes of the day (OT = overtime on a day off; OT / ST … = working hours are not checked)
+      stmt(db, `SELECT employee_id, mark_date, code FROM roster_marks WHERE ${wm.sql}`, ...wm.params),
       stmt(db, `SELECT employee_id, work_date, kind, answer, asked_at FROM ot_questions WHERE ${w.sql}`, ...w.params),
+      // OT marked by hand on the roster: working hours are not checked either
+      stmt(db, `SELECT employee_id, work_date FROM ot_marks WHERE ${w.sql}`, ...w.params),
+      stmt(db, `SELECT employee_id, work_date, answer, asked_at FROM hours_questions WHERE tg_message_id IS NOT NULL AND ${w.sql}`, ...w.params),
     ]);
-    const otDays = new Set((mkR.results as { employee_id: number; mark_date: string }[]).map((r) => `${r.employee_id}|${r.mark_date}`));
+    const marks = new Map((mkR.results as { employee_id: number; mark_date: string; code: string }[]).map((r) => [`${r.employee_id}|${r.mark_date}`, r.code]));
+    const otDays = new Set([...marks].filter(([, c]) => c === 'OT').map(([k]) => k));
+    const otMarked = new Set((omR.results as { employee_id: number; work_date: string }[]).map((r) => `${r.employee_id}|${r.work_date}`));
+    const hqs = new Map<string, { answer: string | null; askedAt: number }[]>();
+    for (const r of hqR.results as { employee_id: number; work_date: string; answer: string | null; asked_at: number }[]) {
+      const k = `${r.employee_id}|${r.work_date}`; hqs.set(k, [...(hqs.get(k) ?? []), { answer: r.answer, askedAt: r.asked_at }]);
+    }
     const group = <T extends { employee_id: number }>(rows: T[], dateField: keyof T) => {
       const m = new Map<string, T[]>();
       for (const r of rows) { const k = `${r.employee_id}|${r[dateField] as string}`; m.set(k, [...(m.get(k) ?? []), r]); }
@@ -199,8 +211,12 @@ export async function recomputeMany(db: D1Database, keys: Key[], o: RecomputeOpt
       const inst = insts.get(ks)?.[0] ?? null;
       const evRows = evs.get(ks) ?? [];
       const engineEvents: EngineEvent[] = evRows.map((e) => ({ id: e.id, type: e.event_type, ts: e.event_ts, tgMessageId: e.tg_message_id, receivedAt: e.received_at, source: e.source, voided: e.is_voided === 1 }));
-      const summary = computeSession({ events: engineEvents, instance: inst ? toEngineInstance(inst) : null, now: o.now, rules: rulesOf(empId), tz: o.tz, otDay: otDays.has(ks),
-        questions: (qs.get(ks) ?? []).map((q) => ({ kind: q.kind, answer: q.answer, askedAt: q.asked_at })) });
+      const r = rulesOf(empId);
+      const skipCodes = new Set((r.noHoursCodes ?? []).map((c) => c.toUpperCase()));
+      const mark = marks.get(ks);
+      const skipHours = otDays.has(ks) || otMarked.has(ks) || (!!mark && skipCodes.has(mark.toUpperCase())) || (!!inst && skipCodes.has(inst.shift_code.toUpperCase()));
+      const summary = computeSession({ events: engineEvents, instance: inst ? toEngineInstance(inst) : null, now: o.now, rules: r, tz: o.tz, otDay: otDays.has(ks),
+        questions: (qs.get(ks) ?? []).map((q) => ({ kind: q.kind, answer: q.answer, askedAt: q.asked_at })), skipHours, hoursQuestions: hqs.get(ks) ?? [] });
       out.set(ks, { key, summary, instance: inst });
       const existingEx = exs.get(ks) ?? [];
 

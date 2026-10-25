@@ -11,6 +11,8 @@ export function rulesFor(s: Pick<Settings, 'rules' | 'rulesCur'>, cur: string | 
 
 export const settingsStmt = (db: D1Database) => db.prepare("SELECT key, value FROM system_settings WHERE key IN ('keywords','rules','rules_cur','parser','roster_codes','bot_texts','bot_switches','data_version')");
 
+const codeList = (v: unknown, d: string[]): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string').map((x) => x.toUpperCase()) : d);
+
 export function parseSettings(rows: { key: string; value: string }[]): Settings {
   const m = new Map(rows.map((r) => [r.key, r.value]));
   const safe = <T>(s: string | undefined, d: T): T => { try { return s ? { ...d, ...JSON.parse(s) } : d; } catch { return d; } };
@@ -19,6 +21,7 @@ export function parseSettings(rows: { key: string; value: string }[]): Settings 
   if (!(Number(rules.outAskMin) >= 0)) rules.outAskMin = DEFAULT_RULES.outAskMin;
   if (!(Number(rules.earlyAskMin) >= 0)) rules.earlyAskMin = DEFAULT_RULES.earlyAskMin;
   if (rules.answerBy !== 'own') rules.answerBy = 'any';
+  rules.noHoursCodes = codeList(rules.noHoursCodes, DEFAULT_RULES.noHoursCodes);
   delete (rules as { allowedChats?: unknown }).allowedChats; // retired setting: a group is accepted once an employee topic is bound in it
   // retired settings: the shift matching window is fixed (FIXED.shiftWindowHours); the OT question uses outAskMin
   const retired = ['windowHours', 'windowUnit', 'forgotOutHours', 'forgotOutUnit'] as const;
@@ -32,6 +35,7 @@ export function parseSettings(rows: { key: string; value: string }[]): Settings 
     if (!(Number(x.outAskMin) >= 0)) x.outAskMin = rules.outAskMin;
     if (!(Number(x.earlyAskMin) >= 0)) x.earlyAskMin = rules.earlyAskMin;
     if (x.answerBy !== 'own') x.answerBy = 'any';
+    x.noHoursCodes = codeList(x.noHoursCodes, rules.noHoursCodes);
     rulesCur[cur] = x;
   }
   return {

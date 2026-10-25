@@ -185,6 +185,7 @@ function Rules() {
     [L('Bot 回复', 'Bot replies'), (r) => (r.botReply ? L('开启', 'On') : L('关闭', 'Off'))],
     [L('提早上班问 OT', 'Ask OT on early clock in'), (r) => ((r.earlyAskMin ?? 30) > 0 ? `${r.earlyAskMin ?? 30} min` : L('关闭', 'Off'))],
     [L('超时未下班问 OT', 'Ask OT with no clock out'), (r) => { const m = r.outAskMin ?? 45; const t = r.outAskUnit === 'h' ? hm(m) : `${m} min`; return L(`下班后 ${t}`, `${t} after shift end`); }],
+    [L('不检查工时的代号', 'Codes not checked for hours'), (r) => (r.noHoursCodes ?? ['OT', 'ST']).join(', ') || '—'],
     [L('谁可以按按钮', 'Who may answer'), (r) => (r.answerBy === 'own' ? L('只有员工本人', 'Only the employee') : L('群里任何人', 'Anyone in the group'))],
   ];
   if (!cur) return <div className="card empty">{L('请先在「货币」新增货币', 'Add a currency first (Currency tab)')}</div>;
@@ -215,7 +216,7 @@ function RulesForm({ cur }: { cur: string }) {
   const brMin0 = r0.breakMinutes === undefined ? 90 : r0.breakMinutes;
   const brUnit0: 'h' | 'm' = r0.breakUnit ?? 'm';
   const oaUnit0: 'h' | 'm' = r0.outAskUnit ?? 'm';
-  const [v, setV] = useState({ bunit: brUnit0, br: brMin0 == null ? '' : String(brUnit0 === 'h' ? Math.round((brMin0 / 60) * 100) / 100 : brMin0), lx: r0.lateAsException ? '1' : '0', bot: r0.botReply ? '1' : '0', ea: String(r0.earlyAskMin ?? 30), ab: r0.answerBy ?? 'any', ounit: oaUnit0, oa: String(oaUnit0 === 'h' ? Math.round(((r0.outAskMin ?? 45) / 60) * 100) / 100 : r0.outAskMin ?? 45) });
+  const [v, setV] = useState({ bunit: brUnit0, br: brMin0 == null ? '' : String(brUnit0 === 'h' ? Math.round((brMin0 / 60) * 100) / 100 : brMin0), lx: r0.lateAsException ? '1' : '0', bot: r0.botReply ? '1' : '0', ea: String(r0.earlyAskMin ?? 30), ab: r0.answerBy ?? 'any', nh: (r0.noHoursCodes ?? ['OT', 'ST']).join(', '), ounit: oaUnit0, oa: String(oaUnit0 === 'h' ? Math.round(((r0.outAskMin ?? 45) / 60) * 100) / 100 : r0.outAskMin ?? 45) });
   const [err, setErr] = useState('');
   const onErr = useErr();
   const brMin = () => (v.br.trim() === '' ? null : Math.min(1440, Math.max(0, Math.round((Number(v.br) || 0) * (v.bunit === 'h' ? 60 : 1)))));
@@ -229,9 +230,11 @@ function RulesForm({ cur }: { cur: string }) {
       return setErr(v.ounit === 'h'
         ? L('「超时未下班问 OT」请填 0–8 小时（可用小数，例如 0.75 = 45 分钟）', '"Ask OT with no clock out": 0–8 hours (decimals allowed, e.g. 0.75 = 45 min)')
         : L('「超时未下班问 OT」请填 0–480 的整数分钟', '"Ask OT with no clock out": a whole number of minutes from 0 to 480'));
+    const nhList = [...new Set(v.nh.split(/[\s,，、]+/).map((x) => x.trim().toUpperCase()).filter(Boolean))];
+    if (nhList.some((x) => !/^[A-Z0-9]{1,6}$/.test(x))) return setErr(L('「不检查工时的代号」只能填 1–6 个英文字母或数字，用逗号分开', '"Codes not checked": 1–6 letters or digits each, separated by commas'));
     setErr('');
     try {
-      await api('/settings/rules', { method: 'PUT', body: { currency: cur, breakMinutes: brMin(), breakUnit: v.bunit, lateAsException: v.lx === '1', botReply: v.bot === '1', outAskMin: oa, outAskUnit: v.ounit, earlyAskMin: Math.min(240, Math.max(0, Math.round(Number(v.ea) || 0))), answerBy: v.ab } });
+      await api('/settings/rules', { method: 'PUT', body: { currency: cur, breakMinutes: brMin(), breakUnit: v.bunit, lateAsException: v.lx === '1', botReply: v.bot === '1', outAskMin: oa, outAskUnit: v.ounit, earlyAskMin: Math.min(240, Math.max(0, Math.round(Number(v.ea) || 0))), answerBy: v.ab, noHoursCodes: nhList } });
       toast(L(`${cur} 规则已保存，${cur} 员工的考勤会重新计算`, `${cur} rules saved; ${cur} attendance is being recalculated`));
       await reloadMeta();
     } catch (e) { onErr(e); }
@@ -244,6 +247,7 @@ function RulesForm({ cur }: { cur: string }) {
         <div className="setrow"><label htmlFor="stBot">{L('Bot 在 Topic 回复确认', 'Bot replies in the topic')}</label><div className="setctl"><select id="stBot" value={v.bot} disabled={readOnly} onChange={(e) => setV({ ...v, bot: e.target.value })}><option value="1">{L('开启', 'On')}</option><option value="0">{L('关闭', 'Off')}</option></select></div></div>
         <div className="setrow"><label htmlFor="stOa">{L('超时未下班问 OT：排班下班后超过多久还没打下班卡，bot 问是不是 OT（例：16:30 下班 + 45 分钟 → 17:15 问）', 'Ask OT with no clock out: time after the scheduled shift end (e.g. ends 16:30 + 45 min → asked at 17:15)')}</label><div className="setctl unitctl"><input id="stOa" type="number" min={0} max={v.ounit === 'm' ? 480 : 8} step={v.ounit === 'm' ? 5 : 0.25} value={v.oa} disabled={readOnly} onChange={(e) => setV({ ...v, oa: e.target.value })} /><select aria-label={L('单位', 'Unit')} value={v.ounit} disabled={readOnly} onChange={(e) => { const u = e.target.value as 'h' | 'm'; setV({ ...v, ounit: u, oa: conv(v.oa, u) || v.oa }); }}><option value="h">{L('小时', 'Hours')}</option><option value="m">{L('分钟', 'Minutes')}</option></select></div></div>
         <div className="setrow"><label htmlFor="stEa">{L('提早上班问 OT：比排班早多少分钟以上打卡，bot 问是不是 OT（0 = 不问）', 'Ask OT on early clock in: minutes before the shift (0 = do not ask)')}</label><div className="setctl"><input id="stEa" type="number" min={0} max={240} step={5} value={v.ea} disabled={readOnly} onChange={(e) => setV({ ...v, ea: e.target.value })} /></div></div>
+        <div className="setrow"><label htmlFor="stNh">{L('不检查工时的代号（排班代号或班次代号，逗号分开）：这些日子不提醒工时不足（例 OT, ST）；手动标 OT 的日子也不检查', 'Codes not checked for working hours (roster or shift codes, comma separated): no incomplete-hours check on these days (e.g. OT, ST); days marked OT by hand are not checked either')}</label><div className="setctl"><input id="stNh" type="text" value={v.nh} placeholder="OT, ST" disabled={readOnly} onChange={(e) => setV({ ...v, nh: e.target.value })} /></div></div>
         <div className="setrow"><label htmlFor="stAb">{L('谁可以按 bot 的按钮', 'Who may answer the bot buttons')}</label><div className="setctl"><select id="stAb" value={v.ab} disabled={readOnly} onChange={(e) => setV({ ...v, ab: e.target.value as 'any' | 'own' })}><option value="any">{L('群里任何人', 'Anyone in the group')}</option><option value="own">{L('只有员工本人', 'Only the employee')}</option></select></div></div>
       </div>
       {err && <div className="err">{err}</div>}
@@ -309,6 +313,21 @@ function BotMessages() {
         <div className="bmh">{L('定时发送的打卡', 'Scheduled punch')}{toggle('scheduled')}{play('scheduled')}</div>
         <p className="mut" style={{ fontSize: 12, margin: '0 0 8px', lineHeight: 1.6 }}>{L('员工用 Telegram「定时发送」打卡时：这笔打卡不计入，并在「异常与审计」记一条「定时发送的打卡」。关闭只是 Bot 不回复，打卡仍然不计入、异常仍然记录。', 'When an employee punches with Telegram\'s "Schedule message": the punch is not counted and "Scheduled message" is listed under Exceptions. Off only stops the reply — the punch is still not counted and the exception is still listed.')}</p>
         {f('scheduled', L('Bot 回复', 'Bot reply'))}
+      </div>
+      <div className="bmcol" style={{ marginTop: 12 }}>
+        <div className="bmh">{L('工时不足', 'Incomplete working hours')}{toggle('incomplete')}{play('incomplete')}</div>
+        <p className="mut" style={{ fontSize: 12, margin: '0 0 8px', lineHeight: 1.6 }}>{L(
+          '员工打 OUT 时没有上满排班时长（含休息），Bot 在下班确认里一起发这个问题，并在「异常与审计」记「工时不足」。准时上班：要上到排班下班；迟到：从实际上班起算满排班时长（例 07:30–16:30，07:50 上班 → 16:50）。差距在早退宽限内不算；考勤规则里「不检查工时的代号」（OT、ST …）及手动标 OT 的日子不检查。关闭只是不发问题 — 异常仍然记录。',
+          'When an employee clocks out without completing the shift length (breaks included), the clock-out confirmation comes with this question, and "Incomplete working hours" is listed under Exceptions. On time: until the shift end. Late: the shift length from the clock in (e.g. 07:30–16:30, clock in 07:50 → 16:50). A gap within the early-leave grace is not counted; days with a code listed in Attendance rules → "Codes not checked" (OT, ST …) or marked OT by hand are not checked. Off only stops the question — the exception is still listed.')}
+          <br />{L('可用：', 'Fields: ')}<code>{'{worked}'}</code> {L('已上时长', 'time worked')} · <code>{'{need}'}</code> {L('排班时长', 'shift length')} · <code>{'{until}'}</code> {L('应下班时间', 'clock out at')} · <code>{'{short}'}</code> {L('差多少', 'time short')} · <code>{'{in}'}</code> · <code>{'{out}'}</code> · <code>{'{shift}'}</code> · <code>{'{name}'}</code></p>
+        {f('incomplete', L('问题（跟在下班确认后面）', 'Question (sent with the clock-out confirmation)'))}
+        <div className="bmbtns">{f('incYes', L('按钮 1', 'Button 1'), true)}{f('incNo', L('按钮 2', 'Button 2'), true)}{f('incForgot', L('按钮 3', 'Button 3'), true)}</div>
+        <div className="bmgrid" style={{ gap: 12 }}>
+          {f('incRYes', L(`按「${v.incYes}」后的回复（确认下班，记工时不足）`, `Reply to "${v.incYes}" (clock out confirmed; incomplete hours recorded)`))}
+          {f('incRNo', L(`按「${v.incNo}」后的回复（取消这次下班，继续上班；记「取消下班」）`, `Reply to "${v.incNo}" (this clock out is cancelled — still working; "Clock out cancelled" recorded)`))}
+          {f('incRForgot', L(`按「${v.incForgot}」后的回复（记「忘记上班打卡」，由管理员审批）`, `Reply to "${v.incForgot}" ("Forgot clock in" listed for the admin to approve)`))}
+          {f('incClockedAgain', L(`已经再次打 OUT 后，想把「${v.incNo}」改掉时的提示`, `Pop-up when "${v.incNo}" is changed after clocking out again`))}
+        </div>
       </div>
       <div className="bmbtns" style={{ marginTop: 6 }}>{f('change', L('「更改答案」按钮', '"Change answer" button'), true, play('early', 'change', true))}{f('notYou', L('别人按时显示（只有员工本人可以回答时）', 'Shown when someone else presses (only the employee may answer)'), true, play('early', 'notyou', true))}</div>
       {demo && <BotDemo demo={demo.k} path={demo.path} texts={v} switches={sw} punchReplies={rulesOf(meta, null).botReply} onClose={() => setDemo(null)} />}

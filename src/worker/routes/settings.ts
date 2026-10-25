@@ -50,7 +50,7 @@ settingsRoutes.get('/version', async (c) => {
 
 // ---------------------------------------------------------------- bot messages (OT questions)
 const BotTextsSchema = z.object(Object.fromEntries((Object.keys(DEFAULT_BOT_TEXTS) as (keyof BotTexts)[]).map((k) =>
-  [k, z.string().trim().max(['earlyYes', 'earlyNo', 'lateStill', 'lateOt', 'lateForgot', 'change'].includes(k) ? 40 : 400)])) as Record<keyof BotTexts, z.ZodString>);
+  [k, z.string().trim().max(['earlyYes', 'earlyNo', 'lateStill', 'lateOt', 'lateForgot', 'change', 'incYes', 'incNo', 'incForgot'].includes(k) ? 40 : ['notYou', 'incClockedAgain'].includes(k) ? 200 : 400)])) as Record<keyof BotTexts, z.ZodString>);
 
 settingsRoutes.put('/settings/bot-texts', async (c) => {
   requireAdminRole(c);
@@ -75,12 +75,14 @@ settingsRoutes.put('/settings/bot-texts', async (c) => {
 settingsRoutes.put('/settings/bot-switches', async (c) => {
   requireAdminRole(c);
   requireSetting(c, 'msgs', 'e');
-  const v: BotSwitches = await body(c, z.object({ early: z.boolean(), late: z.boolean(), scheduled: z.boolean() }));
+  const sent = await body(c, z.object({ early: z.boolean(), late: z.boolean(), scheduled: z.boolean(), incomplete: z.boolean().optional() }));
   const db = c.env.DB;
   const now = Date.now();
   const actor = c.get('admin').username;
   const before = (await loadSettings(db)).botSwitches;
-  if (before.early === v.early && before.late === v.late && before.scheduled === v.scheduled) return c.json({ ok: true, unchanged: true });
+  // a switch not sent (an older page) keeps its current value
+  const v: BotSwitches = { ...before, ...Object.fromEntries(Object.entries(sent).filter(([, x]) => x !== undefined)) };
+  if ((Object.keys(before) as (keyof BotSwitches)[]).every((k) => before[k] === v[k])) return c.json({ ok: true, unchanged: true });
   await db.batch([
     stmt(db, `INSERT INTO system_settings (key, value, updated_at, updated_by) VALUES ('bot_switches', ?, ?, ?)
               ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, updated_by = excluded.updated_by`, JSON.stringify(v), now, actor),
@@ -147,6 +149,8 @@ const RulesSchema = z.object({
   outAskUnit: z.enum(['h', 'm']).optional().default('m'),
   earlyAskMin: z.number().int().min(0).max(240).optional().default(30),
   answerBy: z.enum(['any', 'own']).optional().default('any'),
+  // roster / shift codes of days whose working hours are not checked (OT, ST …)
+  noHoursCodes: z.array(z.string().trim().toUpperCase().regex(/^[A-Z0-9]{1,6}$/)).max(30).optional().default(['OT', 'ST']).transform((v) => [...new Set(v)]),
   currency: z.string().trim().toUpperCase().max(10).optional(), // set → these are that currency's own rules
 });
 
@@ -162,7 +166,8 @@ settingsRoutes.put('/settings/rules', async (c) => {
   const before = await loadSettings(db);
   const since = addDays(localDate(now, bizTz(c.env)), -31);
   // only rules that change computed results need a recalculation (the OT question time does not)
-  const changed = (a: Pick<Rules, 'lateAsException' | 'breakMinutes'>, b: typeof a) => a.lateAsException !== b.lateAsException || a.breakMinutes !== b.breakMinutes;
+  const changed = (a: Pick<Rules, 'lateAsException' | 'breakMinutes' | 'noHoursCodes'>, b: typeof a) => a.lateAsException !== b.lateAsException || a.breakMinutes !== b.breakMinutes
+    || [...(a.noHoursCodes ?? [])].sort().join() !== [...(b.noHoursCodes ?? [])].sort().join();
   const statements: D1PreparedStatement[] = [];
   if (currency) {
     // one currency's own rules (each currency is set on its own)

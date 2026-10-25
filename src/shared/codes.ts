@@ -44,6 +44,10 @@ export const EXCEPTIONS = {
   BREAK_LIMIT_EXCEEDED: { label: bi('超过休息规则', 'Break limit exceeded'), sev: 'LOW' },
   OT_NO_ANSWER: { label: bi('未回答 OT 问题', 'No answer to the OT question'), sev: 'LOW' },
   FORGOT_CLOCK_OUT: { label: bi('忘记下班打卡（按钮）', 'Forgot clock out (button)'), sev: 'MEDIUM' },
+  INCOMPLETE_HOURS: { label: bi('工时不足', 'Incomplete working hours'), sev: 'MEDIUM' },
+  FORGOT_CLOCK_IN: { label: bi('忘记上班打卡（按钮）', 'Forgot clock in (button)'), sev: 'MEDIUM' },
+  CLOCK_OUT_CANCELLED: { label: bi('取消下班（按了 No）', 'Clock out cancelled (No)'), sev: 'LOW' },
+  INCOMPLETE_NO_ANSWER: { label: bi('未回答工时不足问题', 'No answer to the working hours question'), sev: 'LOW' },
   LATE: { label: bi('迟到', 'Late'), sev: 'LOW' },
   EARLY_LEAVE: { label: bi('早退', 'Early leave'), sev: 'LOW' },
 } as const satisfies Record<string, { label: Bi; sev: Severity }>;
@@ -89,6 +93,8 @@ export interface Rules {
   forgotOutUnit?: 'h' | 'm';
   earlyAskMin: number;        // clock in at least this many minutes before the shift → the bot asks "Is this OT?" (0 = off)
   answerBy: 'any' | 'own';    // who may press the bot's buttons: anyone in the group, or only the employee
+  /** roster codes / shift codes of days whose working hours are not checked (OT, ST …): the employee was not scheduled to work */
+  noHoursCodes: string[];
 }
 
 /** Fixed thresholds (not user-editable; removed from the UI by request). */
@@ -120,7 +126,7 @@ export interface ParserRules {
   typedTimeReview: boolean;
 }
 export const DEFAULT_PARSER: ParserRules = { skipLabels: [], typoTolerance: true, ignoreBrackets: true, typedTimeReview: true };
-export const DEFAULT_RULES: Rules = { lateAsException: false, botReply: true, otHours: 9, breakMinutes: 90, breakUnit: 'm', outAskMin: 45, earlyAskMin: 30, answerBy: 'any' };
+export const DEFAULT_RULES: Rules = { lateAsException: false, botReply: true, otHours: 9, breakMinutes: 90, breakUnit: 'm', outAskMin: 45, earlyAskMin: 30, answerBy: 'any', noHoursCodes: ['OT', 'ST'] };
 
 export const BIZ_TZ_DEFAULT = 'Asia/Colombo';
 
@@ -135,6 +141,9 @@ export interface RosterCode { code: string; name: string; color: number }
 
 /** Answers to the bot's OT questions. EARLY: clocked in early (YES = OT / NO); LATE: no clock out after the set hours. */
 export type OtAnswer = 'YES' | 'NO' | 'STILL' | 'OT' | 'FORGOT';
+/** Answers to the "Incomplete working hours" question: YES = clock out confirmed, NO = clock out cancelled (still working),
+ *  FORGOT_IN = the employee forgot to clock in (an exception for the admin to approve). */
+export type HoursAnswer = 'YES' | 'NO' | 'FORGOT_IN';
 
 /** Texts of the bot's OT questions (Settings → Bot messages). {name} {shift} {in} {hours} {out} are filled in. */
 export interface BotTexts {
@@ -143,11 +152,16 @@ export interface BotTexts {
   change: string; notYou: string;
   /** reply to a punch sent with Telegram's "Schedule message" (it is not counted) */
   scheduled: string;
+  /** the question sent with the clock-out confirmation when the shift length was not completed (breaks included;
+   *  late → counted from the clock in). {worked} counted time · {need} shift length · {until} required clock out · {short} missing time */
+  incomplete: string; incYes: string; incNo: string; incForgot: string; incRYes: string; incRNo: string; incRForgot: string;
+  /** pop-up when "No" is changed after the employee has already clocked out again */
+  incClockedAgain: string;
 }
 
 /** Which automatic bot messages are sent (Settings → Bot messages). Detection and exceptions do not depend on these. */
-export interface BotSwitches { early: boolean; late: boolean; scheduled: boolean }
-export const DEFAULT_BOT_SWITCHES: BotSwitches = { early: true, late: true, scheduled: true };
+export interface BotSwitches { early: boolean; late: boolean; scheduled: boolean; incomplete: boolean }
+export const DEFAULT_BOT_SWITCHES: BotSwitches = { early: true, late: true, scheduled: true, incomplete: true };
 export const DEFAULT_BOT_TEXTS: BotTexts = {
   earlyQ: '⏰ Your shift is {shift}, but you clocked in early at {in}. Is this OT?',
   earlyYes: 'Yes', earlyNo: 'No',
@@ -160,4 +174,10 @@ export const DEFAULT_BOT_TEXTS: BotTexts = {
   lateRForgot: '✅ Recorded: CS forgot clock out — time {out}.',
   change: 'Change answer', notYou: 'This button is not for you',
   scheduled: '⚠️ 定时发送的消息不计入打卡，请本人即时打卡。谢谢',
+  incomplete: '⚠️ Incomplete working hours: your shift today is {shift} — {need} including breaks. You worked {worked}. You should clock out at {until} — {short} short.\nDo you want to clock out now?',
+  incYes: 'Yes', incNo: 'No', incForgot: 'Forgot clock in',
+  incRYes: '✅ Clock out confirmed at {out}. Incomplete working hours recorded.',
+  incRNo: '↩️ Clock out at {out} cancelled. Please continue working and clock out again at {until}.',
+  incRForgot: '📝 Noted: forgot clock in. An admin will check and correct your clock-in time.',
+  incClockedAgain: 'You have clocked out again since then — this answer can no longer be changed.',
 };

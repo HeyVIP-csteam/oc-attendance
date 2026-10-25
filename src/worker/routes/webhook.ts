@@ -5,6 +5,7 @@ import { ConfigError, redact, safeEqual, webhookSecret } from '../lib/crypto';
 import { ingestUpdate, type TgUpdate } from '../lib/ingest';
 import { type BotRow, botToken, loadBot, sendReply } from '../lib/telegram';
 import { askOtQuestions, handleOtCallback } from '../lib/otQuestions';
+import { handleHoursCallback, sendHoursQuestion } from '../lib/hoursQuestions';
 
 export const webhookRoutes = new Hono<AppBindings>();
 
@@ -57,7 +58,8 @@ webhookRoutes.post('/webhook/:code', async (c) => {
   // a press on the buttons under an OT question (never stored as a punch)
   if (upd.callback_query) {
     try {
-      const r = await handleOtCallback(c.env, bot, upd.callback_query);
+      const cq = upd.callback_query;
+      const r = cq.data?.startsWith('hq:') ? await handleHoursCallback(c.env, bot, cq) : await handleOtCallback(c.env, bot, cq);
       log('info', 'webhook_callback', { bot: code, update_id: upd.update_id, result: r, ms: Date.now() - receivedAt });
     } catch (e) { log('error', 'webhook_callback_failed', { bot: code, update_id: upd.update_id, error: redact(String((e as Error).message)) }); }
     return c.json({ ok: true, status: 'CALLBACK' });
@@ -71,7 +73,10 @@ webhookRoutes.post('/webhook/:code', async (c) => {
       const send = (async () => {
         try {
           const token = await botToken(c.env, bot);
-          if (token) await sendReply(token, m.chat.id, m.is_topic_message ? m.message_thread_id ?? null : null, m.message_id, r.reply!);
+          if (!token) return;
+          // clocked out short of the shift length: the confirmation comes with the question and its buttons
+          if (r.hours) await sendHoursQuestion(c.env, bot, token, r.hours);
+          else await sendReply(token, m.chat.id, m.is_topic_message ? m.message_thread_id ?? null : null, m.message_id, r.reply!);
         } catch (e) { log('warn', 'bot_reply_failed', { bot: code, error: redact(String((e as Error).message)) }); }
       })();
       try { c.executionCtx.waitUntil(send); } catch { await send; }
