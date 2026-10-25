@@ -263,6 +263,8 @@ type L2 = (zh: string, en: string) => string;
 interface PvLine { who: 'me' | 'bot' | 'gap' | 'off' | 'pop'; text: string; tm?: string; kb?: string[]; answered?: string; quote?: boolean; scheduled?: boolean }
 interface MsgDef {
   key: MsgKey; title: (L: L2) => string; sw?: keyof BotSwitches; demo?: DemoKey;
+  /** extra animated demos (the common texts are shown on the early clock-in question) */
+  demos?: { k: DemoKey; path: string; label: (L: L2) => string }[];
   when: (L: L2) => string; fieldsHelp: string;
   q?: keyof BotTexts; qLabel?: (L: L2) => string;
   buttons: { b: keyof BotTexts; r: keyof BotTexts; does: (L: L2) => string }[];
@@ -317,6 +319,7 @@ const MSGS: MsgDef[] = [
     sample: {},
     preview: (t, _p, on, L) => [{ who: 'me', text: 'IN', tm: '14:30', scheduled: true }, on ? { who: 'bot', text: t.scheduled, tm: '14:30' } : offLine(L)] },
   { key: 'common', title: (L) => L('共用文字', 'Common texts'),
+    demos: [{ k: 'early', path: 'change', label: (L) => L('▶ 演示：更改答案', '▶ Demo: change answer') }, { k: 'early', path: 'notyou', label: (L) => L('▶ 演示：别人去按', '▶ Demo: someone else presses') }],
     when: (L) => L('所有带按钮的问题都会用到。', 'Used under every question with buttons.'),
     fieldsHelp: '', buttons: [],
     extra: [{ k: 'change', label: (L) => L('「更改答案」按钮', '"Change answer" button'), short: true }, { k: 'notYou', label: (L) => L('别人按时跳出的提示（只有员工本人可以回答时）', 'Pop-up when someone else presses (only the employee may answer)') }],
@@ -368,7 +371,7 @@ function BotMessages() {
   const [st, setSt] = usePageState('st-msgs', () => ({ key: 'early' as MsgKey }));
   const [paths, setPaths] = useState<Partial<Record<MsgKey, number>>>({});
   // ▶ the animated demo (step by step) is still there, next to the live preview
-  const [demo, setDemo] = useState<DemoKey | null>(null);
+  const [demo, setDemo] = useState<{ k: DemoKey; path?: string } | null>(null);
   const onErr = useErr();
   const def = MSGS.find((m) => m.key === st.key) ?? MSGS[0];
   const saved = { ...DEFAULT_BOT_TEXTS, ...(meta.botTexts ?? {}) };
@@ -404,7 +407,8 @@ function BotMessages() {
                 <span className="bmsw-t" />{sw[def.sw] ? L('开启', 'On') : L('关闭', 'Off')}
               </label>
             )}
-            {def.demo && <button type="button" className="bd-play" onClick={() => setDemo(def.demo!)}>▶ {L('动画演示', 'Animated demo')}</button>}
+            {def.demo && <button type="button" className="bd-play" onClick={() => setDemo({ k: def.demo! })}>▶ {L('动画演示', 'Animated demo')}</button>}
+            {(def.demos ?? []).map((d) => <button key={d.path} type="button" className="bd-play" onClick={() => setDemo({ k: d.k, path: d.path })}>{d.label(L)}</button>)}
           </div>
           <p className="bm2-when">{def.when(L)}</p>
           {def.q && (
@@ -448,7 +452,7 @@ function BotMessages() {
         </section>
         <LivePreview def={def} t={v} on={on} path={paths[def.key] ?? 0} setPath={(n) => setPaths({ ...paths, [def.key]: n })} L={L} />
       </div>
-      {demo && <BotDemo demo={demo} texts={v} switches={sw} punchReplies={rulesOf(meta, null).botReply} onClose={() => setDemo(null)} />}
+      {demo && <BotDemo demo={demo.k} path={demo.path} texts={v} switches={sw} punchReplies={rulesOf(meta, null).botReply} onClose={() => setDemo(null)} />}
     </div>
   );
 }
