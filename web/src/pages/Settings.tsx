@@ -257,17 +257,124 @@ function RulesForm({ cur }: { cur: string }) {
 }
 
 // ---------------------------------------------------------------- Bot messages (the OT questions and their buttons)
+type MsgKey = 'early' | 'late' | 'incomplete' | 'scheduled' | 'common';
+type L2 = (zh: string, en: string) => string;
+/** One chat line of the live preview. */
+interface PvLine { who: 'me' | 'bot' | 'gap' | 'off' | 'pop'; text: string; tm?: string; kb?: string[]; answered?: string; quote?: boolean; scheduled?: boolean }
+interface MsgDef {
+  key: MsgKey; title: (L: L2) => string; sw?: keyof BotSwitches; demo?: DemoKey;
+  when: (L: L2) => string; fieldsHelp: string;
+  q?: keyof BotTexts; qLabel?: (L: L2) => string;
+  buttons: { b: keyof BotTexts; r: keyof BotTexts; does: (L: L2) => string }[];
+  extra?: { k: keyof BotTexts; label: (L: L2, t: BotTexts) => string; short?: boolean }[];
+  /** sample values filled into the texts (never a real employee) */
+  sample: Record<string, string>;
+  preview: (t: BotTexts, path: number, on: boolean, L: L2, fill: (s: string) => string) => PvLine[];
+}
+
+const CS = 'CS - 1';
+const okLine = (what: string, tm: string): PvLine => ({ who: 'bot', text: `✅ ${what} recorded · ${tm} (Sri Lanka time)`, tm });
+/** question + its buttons; path 0 = not answered yet, n = button n pressed */
+function asked(q: string, labels: string[], replies: string[], path: number, tm: string, tm2: string, change: string): PvLine[] {
+  if (!path) return [{ who: 'bot', text: q, tm, kb: labels }];
+  return [{ who: 'bot', text: q, tm, answered: `✓ ${labels[path - 1]} · ${CS} · ${tm2}`, kb: [change] }, { who: 'bot', text: replies[path - 1], tm: tm2, quote: true }];
+}
+const offLine = (L: L2): PvLine => ({ who: 'off', text: L('已关闭 — Bot 不发送这条消息（检测和异常照常）', 'Off — the bot does not send this message (detection and exceptions still work)') });
+
+const MSGS: MsgDef[] = [
+  { key: 'early', title: (L) => L('提早上班', 'Early clock in'), sw: 'early', demo: 'early',
+    when: (L) => L('员工比排班早打上班卡（达到考勤规则的分钟数）时，马上发出。Yes = 从上班到排班开始算 OT。', 'Sent right after a clock in that is early enough (Attendance rules). Yes = OT from the clock in to the shift start.'),
+    fieldsHelp: '{name} {shift} {in}', q: 'earlyQ',
+    buttons: [{ b: 'earlyYes', r: 'earlyRYes', does: (L) => L('计 OT', 'OT counted') }, { b: 'earlyNo', r: 'earlyRNo', does: (L) => L('不计 OT', 'No OT') }],
+    sample: { name: CS, shift: '14:30–23:30', in: '13:52' },
+    preview: (t, p, on, L, f) => [{ who: 'me', text: 'IN', tm: '13:52' }, okLine('Clock In', '13:52'),
+      ...(on ? asked(f(t.earlyQ), [t.earlyYes, t.earlyNo], [f(t.earlyRYes), f(t.earlyRNo)], p, '13:53', '13:54', t.change) : [offLine(L)])] },
+  { key: 'late', title: (L) => L('超时未下班', 'No clock out'), sw: 'late', demo: 'late',
+    when: (L) => L('排班下班后超过设定时间（考勤规则）还没打下班卡时发出。', 'Sent the set time after the shift end (Attendance rules) when there is no clock out yet.'),
+    fieldsHelp: '{name} {shift} {in} {hours} {out}', q: 'lateQ',
+    buttons: [{ b: 'lateStill', r: 'lateRStill', does: (L) => L('不计 OT', 'No OT') }, { b: 'lateOt', r: 'lateROt', does: (L) => L('计 OT 到下班', 'OT until clock out') },
+      { b: 'lateForgot', r: 'lateRForgot', does: (L) => L('下班 = 排班下班，记异常', 'Clock out = shift end, exception') }],
+    sample: { name: CS, shift: '14:30–23:30', in: '14:28', hours: '9h 45m', out: '23:30' },
+    preview: (t, p, on, L, f) => [{ who: 'me', text: 'IN', tm: '14:28' }, okLine('Clock In', '14:28'), { who: 'gap', text: '00:13' },
+      ...(on ? asked(f(t.lateQ), [t.lateStill, t.lateOt, t.lateForgot], [f(t.lateRStill), f(t.lateROt), f(t.lateRForgot)], p, '00:13', '00:16', t.change) : [offLine(L)])] },
+  { key: 'incomplete', title: (L) => L('工时不足', 'Incomplete working hours'), sw: 'incomplete', demo: 'incomplete',
+    when: (L) => L('打 OUT 时没上满排班时长（含休息；迟到从上班起算），和下班确认一起发出，并记「工时不足」。OT / ST 等「不检查工时的代号」的日子不发。',
+      'Sent with the clock-out confirmation when the shift length (breaks included; late → from the clock in) was not completed, and "Incomplete working hours" is listed. Not on days with a code not checked (OT, ST …).'),
+    fieldsHelp: '{name} {shift} {in} {out} {worked} {need} {until} {short}', q: 'incomplete', qLabel: (L) => L('问题（跟在下班确认后面）', 'Question (after the clock-out confirmation)'),
+    buttons: [{ b: 'incYes', r: 'incRYes', does: (L) => L('下班卡保留', 'Clock out stands') }, { b: 'incNo', r: 'incRNo', does: (L) => L('取消下班，继续上班', 'Clock out cancelled, still working') },
+      { b: 'incForgot', r: 'incRForgot', does: (L) => L('记「忘记上班打卡」待审批', '"Forgot clock in" for approval') }],
+    extra: [{ k: 'incClockedAgain', label: (L, t) => L(`已再次打 OUT 后想改掉「${t.incNo}」时的提示`, `Pop-up when "${t.incNo}" is changed after clocking out again`) }],
+    sample: { name: CS, shift: '14:30–23:30', in: '14:50', out: '23:30', worked: '8h 40m', need: '9h', until: '23:50', short: '20m' },
+    preview: (t, p, on, L, f) => {
+      const ok = '✅ Clock Out recorded · 23:30 (Sri Lanka time)';
+      const head: PvLine[] = [{ who: 'me', text: 'IN', tm: '14:50' }, okLine('Clock In', '14:50'), { who: 'gap', text: '23:30' }, { who: 'me', text: 'OUT', tm: '23:30' }];
+      if (!on) return [...head, { who: 'bot', text: ok, tm: '23:30' }, offLine(L)];
+      return [...head, ...asked(`${ok}\n\n${f(t.incomplete)}`, [t.incYes, t.incNo, t.incForgot], [f(t.incRYes), f(t.incRNo), f(t.incRForgot)], p, '23:30', '23:31', t.change)];
+    } },
+  { key: 'scheduled', title: (L) => L('定时发送的打卡', 'Scheduled punch'), sw: 'scheduled', demo: 'scheduled',
+    when: (L) => L('员工用 Telegram「定时发送」打卡时回复。这笔打卡不计入，并记「定时发送的打卡」；关闭只是不回复。', 'Reply to a punch sent with Telegram\'s "Schedule message". The punch is not counted and "Scheduled message" is listed; off only stops the reply.'),
+    fieldsHelp: '', buttons: [], extra: [{ k: 'scheduled', label: (L) => L('Bot 回复', 'Bot reply') }],
+    sample: {},
+    preview: (t, _p, on, L) => [{ who: 'me', text: 'IN', tm: '14:30', scheduled: true }, on ? { who: 'bot', text: t.scheduled, tm: '14:30' } : offLine(L)] },
+  { key: 'common', title: (L) => L('共用文字', 'Common texts'),
+    when: (L) => L('所有带按钮的问题都会用到。', 'Used under every question with buttons.'),
+    fieldsHelp: '', buttons: [],
+    extra: [{ k: 'change', label: (L) => L('「更改答案」按钮', '"Change answer" button'), short: true }, { k: 'notYou', label: (L) => L('别人按时跳出的提示（只有员工本人可以回答时）', 'Pop-up when someone else presses (only the employee may answer)') }],
+    sample: { name: CS, shift: '14:30–23:30', in: '13:52' },
+    preview: (t, _p, _on, L, f) => [{ who: 'bot', text: f(t.earlyQ), tm: '13:53', answered: `✓ ${t.earlyYes} · ${CS} · 13:54`, kb: [t.change] },
+      { who: 'pop', text: t.notYou }, { who: 'off', text: L('↑ 只有员工本人可以回答时，别人按下按钮会看到这个提示', '↑ shown to someone else who presses, when only the employee may answer') }] },
+];
+
+/** The live preview: the chat as the employee would see it, with the texts as they are in the form now. */
+function LivePreview({ def, t, on, path, setPath, L }: { def: MsgDef; t: BotTexts; on: boolean; path: number; setPath: (n: number) => void; L: L2 }) {
+  const fill = (s: string) => s.replace(/\{(name|shift|in|hours|out|worked|need|until|short)\}/g, (m, k: string) => def.sample[k] ?? m);
+  const lines = def.preview(t, path, on, L, fill);
+  const labels = def.buttons.map((x) => t[x.b]);
+  return (
+    <aside className="bm2-pv" aria-label={L('实时预览', 'Live preview')}>
+      <div className="bm2-pvh"><b>{L('实时预览', 'Live preview')}</b><span>{L('随输入更新 · 不会发送', 'updates as you type · nothing is sent')}</span></div>
+      {labels.length > 0 && on && (
+        <div className="bm2-paths" role="group" aria-label={L('演示哪一种', 'Show')}>
+          <button type="button" className={path === 0 ? 'on' : ''} aria-pressed={path === 0} onClick={() => setPath(0)}>{L('未回答', 'Not answered')}</button>
+          {labels.map((b, i) => <button key={i} type="button" className={path === i + 1 ? 'on' : ''} aria-pressed={path === i + 1} onClick={() => setPath(i + 1)}>{b || '—'}</button>)}
+        </div>
+      )}
+      <div className="bm2-chat">
+        <div className="bm2-top">{CS} <span>Topic{def.sample.shift ? ` · ${L('班次', 'Shift')} ${def.sample.shift}` : ''}</span></div>
+        {lines.map((x, i) => x.who === 'gap' ? <div key={i} className="bm2-gap"><span>· · · {x.text}</span></div>
+          : x.who === 'off' ? <div key={i} className="bm2-off">{x.text}</div>
+          : x.who === 'pop' ? <div key={i} className="bm2-pop">{x.text}</div>
+          : (
+            <div key={i} className={`bm2-grp ${x.who}`}>
+              <div className={`bm2-b ${x.who}`}>
+                <div className="n">{x.who === 'me' ? CS : 'Attendance Bot'}</div>
+                {x.quote && <div className="q">{(lines.find((y) => y.kb)?.text ?? '').split('\n')[0]}</div>}
+                <div className="tx">{x.text}{x.answered ? `\n\n${x.answered}` : ''}</div>
+                <div className="tm">{x.scheduled ? `🕓 ${L('定时发送', 'scheduled')} · ` : ''}{x.tm}{x.who === 'me' ? ' ✓✓' : ''}</div>
+              </div>
+              {x.kb && <div className="bm2-kb" style={{ gridTemplateColumns: `repeat(${x.kb.length}, minmax(0, 1fr))` }}>{x.kb.map((k, j) => <span key={j}>{k || '—'}</span>)}</div>}
+            </div>
+          ))}
+      </div>
+    </aside>
+  );
+}
+
 function BotMessages() {
   const { L } = useI18n();
   const { meta, readOnly, reloadMeta } = useData();
   const [v, setV] = useState<BotTexts>({ ...DEFAULT_BOT_TEXTS, ...(meta.botTexts ?? {}) });
   const [sw, setSw] = useState<BotSwitches>({ ...DEFAULT_BOT_SWITCHES, ...(meta.botSwitches ?? {}) });
-  // ▶ Preview: an animated demo with the texts and switches as they are in the form now (saved or not)
-  const [demo, setDemo] = useState<{ k: DemoKey; path?: string } | null>(null);
-  const play = (k: DemoKey, path?: string, small = false) => (
-    <button type="button" className="bd-play" style={small ? { marginLeft: 8, padding: '2px 8px', fontSize: 11.5 } : undefined} onClick={() => setDemo({ k, path })}>▶ {L('预览', 'Preview')}</button>
-  );
+  const [st, setSt] = usePageState('st-msgs', () => ({ key: 'early' as MsgKey }));
+  const [paths, setPaths] = useState<Partial<Record<MsgKey, number>>>({});
+  // ▶ the animated demo (step by step) is still there, next to the live preview
+  const [demo, setDemo] = useState<DemoKey | null>(null);
   const onErr = useErr();
+  const def = MSGS.find((m) => m.key === st.key) ?? MSGS[0];
+  const saved = { ...DEFAULT_BOT_TEXTS, ...(meta.botTexts ?? {}) };
+  const savedSw = { ...DEFAULT_BOT_SWITCHES, ...(meta.botSwitches ?? {}) };
+  const dirty = (Object.keys(v) as (keyof BotTexts)[]).some((k) => v[k] !== saved[k]) || (Object.keys(sw) as (keyof BotSwitches)[]).some((k) => sw[k] !== savedSw[k]);
+  const changedIn = (m: MsgDef) => [m.q, ...m.buttons.flatMap((b) => [b.b, b.r]), ...(m.extra ?? []).map((e) => e.k)].some((k) => k && v[k] !== saved[k]) || (!!m.sw && sw[m.sw] !== savedSw[m.sw]);
   const save = async () => {
     try {
       await api('/settings/bot-texts', { method: 'PUT', body: v });
@@ -275,66 +382,73 @@ function BotMessages() {
       toast(L('Bot 消息已保存', 'Bot messages saved')); await reloadMeta();
     } catch (e) { onErr(e); }
   };
-  /** On / off switch in a section title: off = the bot does not send this message. */
-  const toggle = (k: keyof BotSwitches) => (
-    <label className={`bmsw ${sw[k] ? 'on' : ''}`} title={L('关闭后 Bot 不会发送这一种消息', 'When off, the bot does not send this message')}>
-      <input type="checkbox" checked={sw[k]} disabled={readOnly} onChange={(e) => setSw({ ...sw, [k]: e.target.checked })} />
-      <span className="bmsw-t" />{sw[k] ? L('开启', 'On') : L('关闭', 'Off')}
-    </label>
-  );
-  const f = (k: keyof BotTexts, label: string, btn = false, extra?: ReactNode) => (
-    <div className={`bmrow ${btn ? 'btn' : ''}`}>
-      <label>{label}{extra}</label>
-      {btn ? <input type="text" maxLength={40} value={v[k]} disabled={readOnly} onChange={(e) => setV({ ...v, [k]: e.target.value })} />
-        : <textarea rows={2} maxLength={400} value={v[k]} disabled={readOnly} onChange={(e) => setV({ ...v, [k]: e.target.value })} />}
-    </div>
-  );
+  const set = (k: keyof BotTexts, x: string) => setV({ ...v, [k]: x });
+  const on = def.sw ? sw[def.sw] : true;
+  const id = (k: string) => `bm2-${k}`;
   return (
-    <div className="card"><h3>{L('Bot 消息', 'Bot messages')}</h3>
-      <p className="mut" style={{ fontSize: 12.5, margin: '0 0 12px', lineHeight: 1.6 }}>{L('会自动替换：', 'Filled in automatically: ')}<code>{'{name}'}</code> {L('员工姓名', 'employee name')} · <code>{'{shift}'}</code> {L('班次时间', 'shift time')} · <code>{'{in}'}</code> {L('上班打卡时间', 'clock-in time')} · <code>{'{hours}'}</code> {L('上班多久', 'time since clock in')} · <code>{'{out}'}</code> {L('下班时间（忘记打卡）', 'clock-out time (forgot)')}</p>
-      <div className="bmgrid">
-        <div className="bmcol">
-          <div className="bmh">{L('提早上班', 'Early clock in')}{toggle('early')}{play('early')}</div>
-          {f('earlyQ', L('问题', 'Question'))}
-          <div className="bmbtns">{f('earlyYes', L('按钮 1', 'Button 1'), true)}{f('earlyNo', L('按钮 2', 'Button 2'), true)}</div>
-          {f('earlyRYes', L(`按「${v.earlyYes}」后的回复`, `Reply to "${v.earlyYes}"`))}
-          {f('earlyRNo', L(`按「${v.earlyNo}」后的回复`, `Reply to "${v.earlyNo}"`))}
-        </div>
-        <div className="bmcol">
-          <div className="bmh">{L('超时未下班', 'No clock out')}{toggle('late')}{play('late')}</div>
-          {f('lateQ', L('问题', 'Question'))}
-          <div className="bmbtns">{f('lateStill', L('按钮 1', 'Button 1'), true)}{f('lateOt', L('按钮 2', 'Button 2'), true)}{f('lateForgot', L('按钮 3', 'Button 3'), true)}</div>
-          {f('lateRStill', L(`按「${v.lateStill}」后的回复（不计算 OT）`, `Reply to "${v.lateStill}" (no OT)`))}
-          {f('lateROt', L(`按「${v.lateOt}」后的回复（计算 OT）`, `Reply to "${v.lateOt}" (OT counted)`))}
-          {f('lateRForgot', L(`按「${v.lateForgot}」后的回复（下班时间 = 排班下班）`, `Reply to "${v.lateForgot}" (clock out = shift end)`))}
-        </div>
+    <div className="bm2">
+      <div className="bm2-tabs" role="tablist" aria-label={L('Bot 消息', 'Bot messages')}>
+        {MSGS.map((m) => (
+          <button key={m.key} type="button" role="tab" aria-selected={m.key === def.key} className={m.key === def.key ? 'on' : ''} onClick={() => setSt({ key: m.key })}>
+            {m.sw && <i className={`bm2-dot ${sw[m.sw] ? '' : 'off'}`} aria-hidden="true" />}{m.title(L)}{changedIn(m) && <b className="bm2-chg" title={L('有未保存的修改', 'Unsaved changes')}>•</b>}
+          </button>
+        ))}
       </div>
-      <div className="bmcol" style={{ marginTop: 12 }}>
-        <div className="bmh">{L('定时发送的打卡', 'Scheduled punch')}{toggle('scheduled')}{play('scheduled')}</div>
-        <p className="mut" style={{ fontSize: 12, margin: '0 0 8px', lineHeight: 1.6 }}>{L('员工用 Telegram「定时发送」打卡时：这笔打卡不计入，并在「异常与审计」记一条「定时发送的打卡」。关闭只是 Bot 不回复，打卡仍然不计入、异常仍然记录。', 'When an employee punches with Telegram\'s "Schedule message": the punch is not counted and "Scheduled message" is listed under Exceptions. Off only stops the reply — the punch is still not counted and the exception is still listed.')}</p>
-        {f('scheduled', L('Bot 回复', 'Bot reply'))}
+      <div className="bm2-body">
+        <section className="card bm2-form" role="tabpanel">
+          <div className="bm2-h">
+            <h3>{def.title(L)}</h3>
+            {def.sw && (
+              <label className={`bmsw ${sw[def.sw] ? 'on' : ''}`} title={L('关闭后 Bot 不会发送这一种消息', 'When off, the bot does not send this message')}>
+                <input type="checkbox" checked={sw[def.sw]} disabled={readOnly} onChange={(e) => setSw({ ...sw, [def.sw!]: e.target.checked })} />
+                <span className="bmsw-t" />{sw[def.sw] ? L('开启', 'On') : L('关闭', 'Off')}
+              </label>
+            )}
+            {def.demo && <button type="button" className="bd-play" onClick={() => setDemo(def.demo!)}>▶ {L('动画演示', 'Animated demo')}</button>}
+          </div>
+          <p className="bm2-when">{def.when(L)}</p>
+          {def.q && (
+            <div className="bm2-f">
+              <label htmlFor={id(def.q)}>{def.qLabel?.(L) ?? L('问题', 'Question')}</label>
+              <textarea id={id(def.q)} rows={3} maxLength={400} value={v[def.q]} disabled={readOnly} onChange={(e) => set(def.q!, e.target.value)} />
+              {def.fieldsHelp && <div className="bm2-help">{L('可用：', 'Fields: ')}{def.fieldsHelp.split(' ').map((x) => <code key={x}>{x}</code>)}</div>}
+            </div>
+          )}
+          {def.buttons.length > 0 && (
+            <div className="bm2-btns" style={{ gridTemplateColumns: `repeat(${def.buttons.length}, minmax(0, 1fr))` }}>
+              {def.buttons.map((b, i) => (
+                <div key={b.b} className="bm2-f">
+                  <label htmlFor={id(b.b)}>{L(`按钮 ${i + 1}`, `Button ${i + 1}`)}</label>
+                  <input id={id(b.b)} type="text" maxLength={40} value={v[b.b]} disabled={readOnly} onChange={(e) => set(b.b, e.target.value)} />
+                  <div className="bm2-help">{b.does(L)}</div>
+                </div>
+              ))}
+            </div>
+          )}
+          {def.buttons.map((b) => (
+            <div key={b.r} className="bm2-f">
+              <label htmlFor={id(b.r)}>{L(`按「${v[b.b]}」后的回复`, `Reply to "${v[b.b]}"`)}</label>
+              <input id={id(b.r)} type="text" maxLength={400} value={v[b.r]} disabled={readOnly} onChange={(e) => set(b.r, e.target.value)} onFocus={() => setPaths({ ...paths, [def.key]: def.buttons.indexOf(b) + 1 })} />
+            </div>
+          ))}
+          {(def.extra ?? []).map((x) => (
+            <div key={x.k} className="bm2-f">
+              <label htmlFor={id(x.k)}>{x.label(L, v)}</label>
+              {x.short ? <input id={id(x.k)} type="text" maxLength={40} value={v[x.k]} disabled={readOnly} onChange={(e) => set(x.k, e.target.value)} />
+                : <textarea id={id(x.k)} rows={2} maxLength={400} value={v[x.k]} disabled={readOnly} onChange={(e) => set(x.k, e.target.value)} />}
+            </div>
+          ))}
+          {!readOnly && (
+            <div className="bm2-foot">
+              {dirty && <span className="bm2-unsaved">{L('有未保存的修改（所有分页一起保存）', 'Unsaved changes (all tabs are saved together)')}</span>}
+              <button className="btn" onClick={() => setV({ ...DEFAULT_BOT_TEXTS })}>{L('恢复预设文字', 'Reset to default')}</button>
+              <button className="btn p" onClick={save}>{L('保存', 'Save')}</button>
+            </div>
+          )}
+        </section>
+        <LivePreview def={def} t={v} on={on} path={paths[def.key] ?? 0} setPath={(n) => setPaths({ ...paths, [def.key]: n })} L={L} />
       </div>
-      <div className="bmcol" style={{ marginTop: 12 }}>
-        <div className="bmh">{L('工时不足', 'Incomplete working hours')}{toggle('incomplete')}{play('incomplete')}</div>
-        <p className="mut" style={{ fontSize: 12, margin: '0 0 8px', lineHeight: 1.6 }}>{L(
-          '员工打 OUT 时没有上满排班时长（含休息），Bot 在下班确认里一起发这个问题，并在「异常与审计」记「工时不足」。准时上班：要上到排班下班；迟到：从实际上班起算满排班时长（例 07:30–16:30，07:50 上班 → 16:50）。差距在早退宽限内不算；考勤规则里「不检查工时的代号」（OT、ST …）及手动标 OT 的日子不检查。关闭只是不发问题 — 异常仍然记录。',
-          'When an employee clocks out without completing the shift length (breaks included), the clock-out confirmation comes with this question, and "Incomplete working hours" is listed under Exceptions. On time: until the shift end. Late: the shift length from the clock in (e.g. 07:30–16:30, clock in 07:50 → 16:50). A gap within the early-leave grace is not counted; days with a code listed in Attendance rules → "Codes not checked" (OT, ST …) or marked OT by hand are not checked. Off only stops the question — the exception is still listed.')}
-          <br />{L('可用：', 'Fields: ')}<code>{'{worked}'}</code> {L('已上时长', 'time worked')} · <code>{'{need}'}</code> {L('排班时长', 'shift length')} · <code>{'{until}'}</code> {L('应下班时间', 'clock out at')} · <code>{'{short}'}</code> {L('差多少', 'time short')} · <code>{'{in}'}</code> · <code>{'{out}'}</code> · <code>{'{shift}'}</code> · <code>{'{name}'}</code></p>
-        {f('incomplete', L('问题（跟在下班确认后面）', 'Question (sent with the clock-out confirmation)'))}
-        <div className="bmbtns">{f('incYes', L('按钮 1', 'Button 1'), true)}{f('incNo', L('按钮 2', 'Button 2'), true)}{f('incForgot', L('按钮 3', 'Button 3'), true)}</div>
-        <div className="bmgrid" style={{ gap: 12 }}>
-          {f('incRYes', L(`按「${v.incYes}」后的回复（确认下班，记工时不足）`, `Reply to "${v.incYes}" (clock out confirmed; incomplete hours recorded)`))}
-          {f('incRNo', L(`按「${v.incNo}」后的回复（取消这次下班，继续上班；记「取消下班」）`, `Reply to "${v.incNo}" (this clock out is cancelled — still working; "Clock out cancelled" recorded)`))}
-          {f('incRForgot', L(`按「${v.incForgot}」后的回复（记「忘记上班打卡」，由管理员审批）`, `Reply to "${v.incForgot}" ("Forgot clock in" listed for the admin to approve)`))}
-          {f('incClockedAgain', L(`已经再次打 OUT 后，想把「${v.incNo}」改掉时的提示`, `Pop-up when "${v.incNo}" is changed after clocking out again`))}
-        </div>
-      </div>
-      <div className="bmbtns" style={{ marginTop: 6 }}>{f('change', L('「更改答案」按钮', '"Change answer" button'), true, play('early', 'change', true))}{f('notYou', L('别人按时显示（只有员工本人可以回答时）', 'Shown when someone else presses (only the employee may answer)'), true, play('early', 'notyou', true))}</div>
-      {demo && <BotDemo demo={demo.k} path={demo.path} texts={v} switches={sw} punchReplies={rulesOf(meta, null).botReply} onClose={() => setDemo(null)} />}
-      {!readOnly && <div className="setfoot" style={{ gap: 8, display: 'flex', justifyContent: 'flex-end' }}>
-        <button className="btn" onClick={() => setV({ ...DEFAULT_BOT_TEXTS })}>{L('恢复预设文字', 'Reset to default')}</button>
-        <button className="btn p" onClick={save}>{L('保存', 'Save')}</button>
-      </div>}
+      {demo && <BotDemo demo={demo} texts={v} switches={sw} punchReplies={rulesOf(meta, null).botReply} onClose={() => setDemo(null)} />}
     </div>
   );
 }
