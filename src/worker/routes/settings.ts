@@ -50,7 +50,7 @@ settingsRoutes.get('/version', async (c) => {
 
 // ---------------------------------------------------------------- bot messages (OT questions)
 const BotTextsSchema = z.object(Object.fromEntries((Object.keys(DEFAULT_BOT_TEXTS) as (keyof BotTexts)[]).map((k) =>
-  [k, z.string().trim().max(['earlyYes', 'earlyNo', 'lateStill', 'lateOt', 'lateForgot', 'change', 'incYes', 'incNo', 'incForgot'].includes(k) ? 40 : ['notYou', 'incClockedAgain'].includes(k) ? 200 : 400)])) as Record<keyof BotTexts, z.ZodString>);
+  [k, z.string().trim().max(['earlyYes', 'earlyNo', 'lateStill', 'lateOt', 'lateForgot', 'change', 'incYes', 'incNo', 'incForgot', 'offYes', 'offNo'].includes(k) ? 40 : ['notYou', 'incClockedAgain'].includes(k) ? 200 : 400)])) as Record<keyof BotTexts, z.ZodString>);
 
 settingsRoutes.put('/settings/bot-texts', async (c) => {
   requireAdminRole(c);

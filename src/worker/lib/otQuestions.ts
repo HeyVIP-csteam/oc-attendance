@@ -37,13 +37,14 @@ const fill = (t: string, c: Ctx) => t
 export const lateAskAt = (c: { actual_in_at: number; scheduled_end_at: number }, outAskMin: number) =>
   Math.max(c.scheduled_end_at + Math.round(outAskMin) * MIN, c.actual_in_at + HOUR);
 
-const keyboard = (t: BotTexts, kind: Kind, id: number) => ({
+/** off = the day-off question (its own button texts; answers are stored as YES / NO like the early question) */
+const keyboard = (t: BotTexts, kind: Kind, id: number, off = false) => ({
   inline_keyboard: kind === 'EARLY'
-    ? [[{ text: t.earlyYes, callback_data: `ot:${id}:y` }, { text: t.earlyNo, callback_data: `ot:${id}:n` }]]
+    ? [[{ text: off ? t.offYes : t.earlyYes, callback_data: `ot:${id}:y` }, { text: off ? t.offNo : t.earlyNo, callback_data: `ot:${id}:n` }]]
     : [[{ text: t.lateStill, callback_data: `ot:${id}:s` }, { text: t.lateOt, callback_data: `ot:${id}:o` }, { text: t.lateForgot, callback_data: `ot:${id}:f` }]],
 });
-const label = (t: BotTexts, a: OtAnswer) => ({ YES: t.earlyYes, NO: t.earlyNo, STILL: t.lateStill, OT: t.lateOt, FORGOT: t.lateForgot })[a];
-const reply = (t: BotTexts, a: OtAnswer) => ({ YES: t.earlyRYes, NO: t.earlyRNo, STILL: t.lateRStill, OT: t.lateROt, FORGOT: t.lateRForgot })[a];
+const label = (t: BotTexts, a: OtAnswer, off = false) => ({ YES: off ? t.offYes : t.earlyYes, NO: off ? t.offNo : t.earlyNo, STILL: t.lateStill, OT: t.lateOt, FORGOT: t.lateForgot })[a];
+const reply = (t: BotTexts, a: OtAnswer, off = false) => ({ YES: off ? t.offRYes : t.earlyRYes, NO: off ? t.offRNo : t.earlyRNo, STILL: t.lateRStill, OT: t.lateROt, FORGOT: t.lateRForgot })[a];
 
 /** The bot in this group: the one that received its latest message (several currencies may share a bot). */
 async function botOfChat(env: Env, chatId: number, cur: string | null): Promise<{ row: BotRow; token: string } | null> {
@@ -110,7 +111,7 @@ export async function askOtQuestions(env: Env, now: number, earlyOnly = false, s
       const ctx: Ctx = { inAt: c.actual_in_at, start: c.scheduled_start_at ?? c.actual_in_at, end: c.scheduled_end_at ?? c.actual_in_at, tz: c.timezone || bizTz(env), name: c.name, askedAt: now, code: off };
       const m = await tgCall<{ message_id: number }>(bot.token, 'sendMessage', {
         chat_id: c.chat_id, ...(c.thread != null ? { message_thread_id: c.thread } : {}),
-        text: fill(off ? st.botTexts.offQ : kind === 'EARLY' ? st.botTexts.earlyQ : st.botTexts.lateQ, ctx), reply_markup: keyboard(st.botTexts, kind, id),
+        text: fill(off ? st.botTexts.offQ : kind === 'EARLY' ? st.botTexts.earlyQ : st.botTexts.lateQ, ctx), reply_markup: keyboard(st.botTexts, kind, id, !!off),
       }, 5000);
       await db.batch([
         stmt(db, 'UPDATE ot_questions SET tg_message_id = ?, bot_id = ? WHERE id = ?', m.message_id, bot.row.id, id),
@@ -153,7 +154,7 @@ export async function handleOtCallback(env: Env, bot: BotRow, cq: TgCallback): P
   const question = fill(offDay ? t.offQ : q.kind === 'EARLY' ? t.earlyQ : t.lateQ, ctx);
   if (m[2] === 'c') {
     // show the buttons again; the current answer stays until a new one is pressed
-    await tgCall(token, 'editMessageReplyMarkup', { chat_id: q.chat_id, message_id: q.tg_message_id, reply_markup: keyboard(t, q.kind, q.id) }, 5000).catch(() => undefined);
+    await tgCall(token, 'editMessageReplyMarkup', { chat_id: q.chat_id, message_id: q.tg_message_id, reply_markup: keyboard(t, q.kind, q.id, offDay) }, 5000).catch(() => undefined);
     await answerCb();
     return 'CHANGE';
   }
@@ -185,18 +186,18 @@ export async function handleOtCallback(env: Env, bot: BotRow, cq: TgCallback): P
     await db.batch([
       stmt(db, 'UPDATE ot_questions SET answer = ?, answered_by = ?, answered_by_tg = ?, answered_at = ?, forgot_event_id = ? WHERE id = ?', a, who.slice(0, 80), cq.from.id, now, forgotEvent, q.id),
       auditStmt(db, { actor, action: 'OT_QUESTION_ANSWERED', entityType: 'attendance_session', entityId: `${q.employee_code}@${q.work_date}`,
-        before: { question: q.kind, answer: prev ?? '' }, after: { question: q.kind, answer: a, answered_by: who, telegram_user: cq.from.id }, ip: 'telegram', at: now }),
+        before: { question: q.kind, answer: prev ?? '' }, after: { question: offDay ? 'DAY_OFF' : q.kind, answer: a, answered_by: who, telegram_user: cq.from.id }, ip: 'telegram', at: now }),
       stmt(db, "UPDATE system_settings SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT), updated_at = ? WHERE key = 'data_version'", now),
     ]);
     await recomputeMany(db, [[q.employee_id, q.work_date]], { now, tz: bizTz(env), rules: settings.rules, byCur: settings.rulesCur });
   }
   // the question shows who answered (with "Change answer"); the bot replies with the configured text
   await tgCall(token, 'editMessageText', {
-    chat_id: q.chat_id, message_id: q.tg_message_id, text: `${question}\n\n✓ ${label(t, a)} · ${who} · ${fmtTime(now, tz)}`,
+    chat_id: q.chat_id, message_id: q.tg_message_id, text: `${question}\n\n✓ ${label(t, a, offDay)} · ${who} · ${fmtTime(now, tz)}`,
     reply_markup: { inline_keyboard: [[{ text: t.change, callback_data: `ot:${q.id}:c` }]] },
   }, 5000).catch(() => undefined);
   if (prev !== a) {
-    await tgCall(token, 'sendMessage', { chat_id: q.chat_id, text: fill(reply(t, a), { ...ctx, end: q.scheduled_end_at ?? now }), reply_parameters: { message_id: q.tg_message_id, allow_sending_without_reply: true } }, 5000)
+    await tgCall(token, 'sendMessage', { chat_id: q.chat_id, text: fill(reply(t, a, offDay), { ...ctx, end: q.scheduled_end_at ?? now }), reply_parameters: { message_id: q.tg_message_id, allow_sending_without_reply: true } }, 5000)
       .catch((e) => log('warn', 'ot_reply_failed', { error: redact(String((e as Error).message)) }));
   }
   await answerCb('✅');

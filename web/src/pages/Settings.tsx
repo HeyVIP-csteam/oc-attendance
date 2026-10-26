@@ -257,7 +257,7 @@ function RulesForm({ cur }: { cur: string }) {
 }
 
 // ---------------------------------------------------------------- Bot messages (the OT questions and their buttons)
-type MsgKey = 'early' | 'late' | 'incomplete' | 'scheduled' | 'common';
+type MsgKey = 'early' | 'dayoff' | 'late' | 'incomplete' | 'scheduled' | 'common';
 type L2 = (zh: string, en: string) => string;
 /** One chat line of the live preview. */
 interface PvLine { who: 'me' | 'bot' | 'gap' | 'off' | 'pop'; text: string; tm?: string; kb?: string[]; answered?: string; quote?: boolean; scheduled?: boolean }
@@ -290,15 +290,17 @@ const MSGS: MsgDef[] = [
     when: (L) => L('员工比排班早打上班卡（达到考勤规则的分钟数）时，马上发出。Yes = 从上班到排班开始算 OT。', 'Sent right after a clock in that is early enough (Attendance rules). Yes = OT from the clock in to the shift start.'),
     fieldsHelp: '{name} {shift} {in}', q: 'earlyQ',
     buttons: [{ b: 'earlyYes', r: 'earlyRYes', does: (L) => L('计 OT', 'OT counted') }, { b: 'earlyNo', r: 'earlyRNo', does: (L) => L('不计 OT', 'No OT') }],
-    extra: [{ k: 'offQ', sw: 'dayoff', variant: 1, label: (L) => L('休假日上班的问题（OFF、VL、SL… 或没排班的日子打上班卡；按钮和回复沿用上面）', 'Question on a day off (clock in on OFF, VL, SL … or an unscheduled day; same buttons and replies as above)'),
-      help: (L) => L('Yes = 这天算 OT；No = 不算 OT。已标 OT 的日子不问。', 'Yes = the day counts as OT; No = no OT. Not asked on days already marked OT.'), fields: '{name} {in} {code}' }],
-    variants: (L) => [L('排班日提早上班', 'Early on a shift day'), L('休假日上班', 'Clock in on a day off')],
-    sample: { name: CS, shift: '14:30–23:30', in: '13:52', code: 'OFF' },
-    preview: (t, p, on, L, f, variant, sws) => variant === 1
-      ? [{ who: 'me', text: 'IN', tm: '11:09' }, okLine('Clock In', '11:09'),
-        ...(sws.dayoff ? ((g) => asked(g(t.offQ), [t.earlyYes, t.earlyNo], [g(t.earlyRYes), g(t.earlyRNo)], p, '11:09', '11:10', t.change))((x: string) => f(x.replace(/\{in\}/g, '11:09'))) : [offLine(L)])]
-      : [{ who: 'me', text: 'IN', tm: '13:52' }, okLine('Clock In', '13:52'),
-        ...(on ? asked(f(t.earlyQ), [t.earlyYes, t.earlyNo], [f(t.earlyRYes), f(t.earlyRNo)], p, '13:53', '13:54', t.change) : [offLine(L)])] },
+    sample: { name: CS, shift: '14:30–23:30', in: '13:52' },
+    preview: (t, p, on, L, f) => [{ who: 'me', text: 'IN', tm: '13:52' }, okLine('Clock In', '13:52'),
+      ...(on ? asked(f(t.earlyQ), [t.earlyYes, t.earlyNo], [f(t.earlyRYes), f(t.earlyRNo)], p, '13:53', '13:54', t.change) : [offLine(L)])] },
+  { key: 'dayoff', title: (L) => L('休假日上班', 'Off day clock in'), sw: 'dayoff', demo: 'dayoff',
+    when: (L) => L('员工在没有班次的日子（OFF、VL、SL… 或排班表空白）打上班卡时，马上发出。已标 OT 的日子不问。没人回答：这天照样算 OT，并记「未回答」。',
+      'Sent right after a clock in on a day without a shift (OFF, VL, SL … or nothing on the roster). Not asked on days already marked OT. Nobody answers: the day still counts as OT and "No answer" is listed.'),
+    fieldsHelp: '{name} {in} {code}', q: 'offQ',
+    buttons: [{ b: 'offYes', r: 'offRYes', does: (L) => L('这天算 1 次 OT', 'The day counts as 1 OT') }, { b: 'offNo', r: 'offRNo', does: (L) => L('不算 OT', 'No OT') }],
+    sample: { name: CS, in: '11:09', code: 'OFF' },
+    preview: (t, p, on, L, f) => [{ who: 'me', text: 'IN', tm: '11:09' }, okLine('Clock In', '11:09'),
+      ...(on ? asked(f(t.offQ), [t.offYes, t.offNo], [f(t.offRYes), f(t.offRNo)], p, '11:09', '11:10', t.change) : [offLine(L)])] },
   { key: 'late', title: (L) => L('超时未下班', 'No clock out'), sw: 'late', demo: 'late',
     when: (L) => L('排班下班后超过设定时间（考勤规则）还没打下班卡时发出。', 'Sent the set time after the shift end (Attendance rules) when there is no clock out yet.'),
     fieldsHelp: '{name} {shift} {in} {hours} {out}', q: 'lateQ',
@@ -359,7 +361,7 @@ function LivePreview({ def, t, on, sws, path, setPath, variant, setVariant, L }:
         </div>
       )}
       <div className="bm2-chat">
-        <div className="bm2-top">{CS} <span>Topic{v === 1 ? ` · ${L('今天', 'Today')} OFF` : def.sample.shift ? ` · ${L('班次', 'Shift')} ${def.sample.shift}` : ''}</span></div>
+        <div className="bm2-top">{CS} <span>Topic{def.sample.code ? ` · ${L('今天', 'Today')} ${def.sample.code}` : def.sample.shift ? ` · ${L('班次', 'Shift')} ${def.sample.shift}` : ''}</span></div>
         {lines.map((x, i) => x.who === 'gap' ? <div key={i} className="bm2-gap"><span>· · · {x.text}</span></div>
           : x.who === 'off' ? <div key={i} className="bm2-off">{x.text}</div>
           : x.who === 'pop' ? <div key={i} className="bm2-pop">{x.text}</div>

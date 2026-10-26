@@ -8,7 +8,7 @@ import type { BotSwitches, BotTexts } from '../../../src/shared/codes';
 import { useI18n } from '../lib/i18n';
 import { Modal } from './ui';
 
-export type DemoKey = 'early' | 'late' | 'scheduled' | 'incomplete';
+export type DemoKey = 'early' | 'dayoff' | 'late' | 'scheduled' | 'incomplete';
 type L = (zh: string, en: string) => string;
 
 // sample data only — never a real employee
@@ -17,6 +17,7 @@ const SAMPLE: Record<DemoKey, Record<string, string>> = {
   early: { name: CS1, shift: '14:30–23:30', in: '13:52', hours: '', out: '' },
   late: { name: CS1, shift: '14:30–23:30', in: '14:28', hours: '9h 45m', out: '23:30' },
   scheduled: { name: CS1, shift: '14:30–23:30', in: '14:30', hours: '', out: '' },
+  dayoff: { name: CS1, shift: '', in: '11:09', hours: '', out: '', code: 'OFF' },
   incomplete: { name: CS1, shift: '14:30–23:30', in: '14:50', hours: '', out: '23:30', worked: '8h 40m', need: '9h', until: '23:50', short: '20m' },
 };
 
@@ -102,19 +103,8 @@ const DEMOS: Record<DemoKey, Demo> = {
   early: {
     title: (L) => L('提早上班', 'Early clock in'),
     paths: (L, t) => [['yes', L(`按「${t.earlyYes}」`, `Press "${t.earlyYes}"`)], ['no', L(`按「${t.earlyNo}」`, `Press "${t.earlyNo}"`)],
-      ['change', L(`更改答案`, 'Change answer')], ['notyou', L('别人去按', 'Someone else presses')], ['dayoff', L('休假日上班', 'Day off clock in')]],
+      ['change', L(`更改答案`, 'Change answer')], ['notyou', L('别人去按', 'Someone else presses')]],
     steps(L, t, on, pr, path) {
-      if (path === 'dayoff') {
-        const d = builders(L, t, { ...SAMPLE.early, in: '11:09', code: 'OFF' });
-        const steps: Step[] = [d.me(L(`今天是 ${CS1} 的休假日（排班表 OFF），他 11:09 打卡上班。`, `Today is ${CS1}'s day off (OFF on the roster). He clocks in at 11:09.`), 'IN', '11:09')];
-        if (pr) steps.push(d.punch(L('Bot 确认这笔打卡。', 'The bot confirms the punch.'), 'Clock In', '11:09'));
-        if (!on.dayoff) return [...steps, d.off(L('「休假日上班」已关闭，Bot 不会问；他打卡下班后这天照样算 OT。', '"Day off" is off, so the bot does not ask. Once he clocks out the day still counts as OT.'), L('「休假日上班」已关闭 — 不发问题', 'Day off question is off — no question'))];
-        return [...steps, d.bot(L('Bot 马上问这是不是 OT（沿用提早上班的按钮）。', 'The bot asks right away whether this is OT (the Early clock in buttons).'), d.fill(t.offQ), '11:09', true),
-          d.buttons(L('同样的两个按钮。', 'The same two buttons.'), [t.earlyYes, t.earlyNo]),
-          d.tap(L(`${CS1} 按「${t.earlyYes}」。`, `${CS1} presses "${t.earlyYes}".`), 0),
-          d.answered(L('问题显示答案和谁按的。', 'The question shows the answer and who pressed it.'), t.earlyYes, '11:10'),
-          d.reply(L(`Bot 回复。这天算 1 次 OT；按「${t.earlyNo}」就不算。`, `The bot replies. The day counts as 1 OT; "${t.earlyNo}" would not count it.`), d.fill(t.earlyRYes), '11:10')];
-      }
       const b = builders(L, t, SAMPLE.early);
       const s: Step[] = [b.me(L(`${CS1} 比班次早 38 分钟到，打卡上班。`, `${CS1} arrives 38 minutes before the shift and clocks in.`), 'IN', '13:52')];
       if (pr) s.push(b.punch(L('Bot 确认这笔打卡（考勤规则 → Bot 回复）。', 'The bot confirms the punch (Attendance rules → Bot replies).'), 'Clock In', '13:52'));
@@ -134,6 +124,23 @@ const DEMOS: Record<DemoKey, Demo> = {
         b.answered(L('问题显示新的答案；之前的答案留在 Audit Log。', 'The question shows the new answer. The earlier answer stays in the Audit Log.'), t.earlyNo, '13:55'),
         b.reply(L('Bot 按新的答案再回复一次。', 'The bot replies again for the new answer.'), b.fill(t.earlyRNo), '13:55'));
       return s;
+    },
+  },
+  dayoff: {
+    title: (L) => L('休假日上班', 'Off day clock in'),
+    paths: (L, t) => [['yes', L(`按「${t.offYes}」`, `Press "${t.offYes}"`)], ['no', L(`按「${t.offNo}」`, `Press "${t.offNo}"`)]],
+    steps(L, t, on, pr, path) {
+      const d = builders(L, t, SAMPLE.dayoff);
+      const s: Step[] = [d.me(L(`今天是 ${CS1} 的休假日（排班表 OFF），他 11:09 打卡上班。`, `Today is ${CS1}'s day off (OFF on the roster). He clocks in at 11:09.`), 'IN', '11:09')];
+      if (pr) s.push(d.punch(L('Bot 确认这笔打卡。', 'The bot confirms the punch.'), 'Clock In', '11:09'));
+      if (!on.dayoff) return [...s, d.off(L('「休假日上班」已关闭，Bot 不会问；他打卡下班后这天照样算 OT。', '"Off day clock in" is off, so the bot does not ask. Once he clocks out the day still counts as OT.'), L('「休假日上班」已关闭 — 不发问题', 'Off day clock in is off — no question'))];
+      const i = path === 'no' ? 1 : 0;
+      const labels = [t.offYes, t.offNo], replies = [t.offRYes, t.offRNo];
+      return [...s, d.bot(L('Bot 马上问这是不是 OT。', 'The bot asks right away whether this is OT.'), d.fill(t.offQ), '11:09', true),
+        d.buttons(L('两个按钮。', 'Two buttons.'), labels),
+        d.tap(L(`${CS1} 按「${labels[i]}」。`, `${CS1} presses "${labels[i]}".`), i),
+        d.answered(L('问题显示答案和谁按的。', 'The question shows the answer and who pressed it.'), labels[i], '11:10'),
+        d.reply(L(i ? 'Bot 回复。这天不算 OT。' : 'Bot 回复。这天算 1 次 OT。', i ? 'The bot replies. The day is not OT.' : 'The bot replies. The day counts as 1 OT.'), d.fill(replies[i]), '11:10')];
     },
   },
   late: {
@@ -248,7 +255,7 @@ export function BotDemo({ demo, path: path0, texts, switches, punchReplies, onCl
         {paths.length > 0 && <div className="bd-paths"><span>{L('演示', 'Show')}</span>
           {paths.map(([k, l]) => <button key={k} className={k === path ? 'on' : ''} onClick={() => { setPath(k); setRun((r) => r + 1); }}>{l}</button>)}</div>}
         <div className="bd-stage" ref={stage}>
-          <div className="bd-top">{CS1} <span>Topic · {path === 'dayoff' ? L('今天 OFF', 'Today OFF') : `${L('班次', 'Shift')} 14:30–23:30`}</span></div>
+          <div className="bd-top">{CS1} <span>Topic · {demo === 'dayoff' ? L('今天 OFF', 'Today OFF') : `${L('班次', 'Shift')} 14:30–23:30`}</span></div>
           <div className="bd-chat" ref={chat} />
           <div className="bd-finger">👆</div>
           <div className="bd-toast" />

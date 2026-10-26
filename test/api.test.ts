@@ -915,7 +915,7 @@ describe('incomplete working hours (question with buttons on clock out)', () => 
   });
 });
 
-describe('day off clock in: "Is this OT?" with the Early clock in buttons', () => {
+describe('off day clock in: "Is this OT?" with its own buttons', () => {
   const sent = (h: Harness) => h.tg.filter((x) => x.method === 'sendMessage');
   const q1 = (h: Harness) => h.db.get<any>("SELECT * FROM ot_questions WHERE kind = 'EARLY' ORDER BY id DESC LIMIT 1");
   const otDay = async (h: Harness, e: number, d: string) => (await h.req('GET', `/api/attendance?from=${d}&to=${d}&emp=${e}`)).json.rows[0]?.ot_day;
@@ -930,10 +930,10 @@ describe('day off clock in: "Is this OT?" with the Early clock in buttons', () =
     const m = sent(h).at(-1)!;
     expect(m.body.text).toBe('📅 Today is your day off (OFF), but you clocked in at 11:09. Is this OT?');
     const q = q1(h);
-    expect(m.body.reply_markup).toEqual({ inline_keyboard: [[{ text: 'Yes', callback_data: `ot:${q.id}:y` }, { text: 'No', callback_data: `ot:${q.id}:n` }]] });
+    expect(m.body.reply_markup).toEqual({ inline_keyboard: [[{ text: 'Yes, OT', callback_data: `ot:${q.id}:y` }, { text: 'No', callback_data: `ot:${q.id}:n` }]] });
     await h.press({ data: `ot:${q.id}:y`, messageId: q.tg_message_id, fromId: 5100000001, name: 'Nimal', at: lk(D, '11:10') });
-    expect(sent(h).at(-1)!.body.text).toBe('✅ Recorded as OT from 11:09. Have a good shift!');
-    expect(h.tg.filter((x) => x.method === 'editMessageText').at(-1)!.body.text).toBe('📅 Today is your day off (OFF), but you clocked in at 11:09. Is this OT?\n\n✓ Yes · Nimal · 11:10');
+    expect(sent(h).at(-1)!.body.text).toBe('✅ Recorded as OT on your day off. Clock in 11:09. Thank you!');
+    expect(h.tg.filter((x) => x.method === 'editMessageText').at(-1)!.body.text).toBe('📅 Today is your day off (OFF), but you clocked in at 11:09. Is this OT?\n\n✓ Yes, OT · Nimal · 11:10');
     await h.send({ text: 'OUT', ts: lk(D, '15:00'), thread: 1001 });
     expect(await otDay(h, e1, D)).toBe(1);
     expect(await rosterOt(h, e1, D)).toBe(true);
@@ -942,6 +942,12 @@ describe('day off clock in: "Is this OT?" with the Early clock in buttons', () =
     await h.flush();
     const q2 = q1(h);
     await h.press({ data: `ot:${q2.id}:n`, messageId: q2.tg_message_id, fromId: 5100000001, at: lk(D, '12:01') });
+    expect(sent(h).at(-1)!.body.text).toBe('✅ Recorded: not OT. Your clock in is 12:00.');
+    // the texts are set on their own (Settings → Bot messages → Off day clock in)
+    const { DEFAULT_BOT_TEXTS } = await import('../src/shared/codes');
+    expect((await h.req('PUT', '/api/settings/bot-texts', { ...DEFAULT_BOT_TEXTS, offYes: 'OT 是', offNo: '不是 OT' })).status).toBe(200);
+    await h.press({ data: `ot:${q2.id}:c`, messageId: q2.tg_message_id, fromId: 5100000001, at: lk(D, '12:02') });
+    expect((h.tg.filter((x) => x.method === 'editMessageReplyMarkup').at(-1)!.body.reply_markup as any).inline_keyboard[0].map((b: any) => b.text)).toEqual(['OT 是', '不是 OT']);
     await h.send({ text: 'OUT', ts: lk(D, '15:00'), thread: 1002 });
     expect(await otDay(h, e2, D)).toBe(0);
     expect(await rosterOt(h, e2, D)).toBe(false);

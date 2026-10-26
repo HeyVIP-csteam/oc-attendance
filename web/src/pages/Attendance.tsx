@@ -234,9 +234,9 @@ export function SessionDrawer({ emp, date, onClose }: { emp: number; date: strin
                 {(data.otQuestions ?? []).length > 0 && <table className="sd-t"><thead><tr><th>{L('问题', 'Question')}</th><th>{L('发送时间', 'Asked')}</th><th>{L('回答', 'Answer')}</th><th>{L('回答人', 'Answered by')}</th><th>{L('回答时间', 'Answered at')}</th></tr></thead><tbody>
                   {data.otQuestions!.map((q) => {
                     const t = { ...DEFAULT_BOT_TEXTS, ...(meta.botTexts ?? {}) };
-                    const lab = q.answer ? { YES: t.earlyYes, NO: t.earlyNo, STILL: t.lateStill, OT: t.lateOt, FORGOT: t.lateForgot }[q.answer] : null;
+                    const lab = q.answer ? { YES: inst ? t.earlyYes : t.offYes, NO: inst ? t.earlyNo : t.offNo, STILL: t.lateStill, OT: t.lateOt, FORGOT: t.lateForgot }[q.answer] : null;
                     const cls = q.answer === 'YES' || q.answer === 'OT' ? 'w' : q.answer === 'FORGOT' ? 'r' : 'ok';
-                    return <tr key={q.kind}><td>{q.kind === 'EARLY' ? (inst ? L('提早上班', 'Early clock in') : L('休假日上班', 'Day off clock in')) : L('超时未下班', 'No clock out')}</td><td>{fmtT(q.asked_at)}</td>
+                    return <tr key={q.kind}><td>{q.kind === 'EARLY' ? (inst ? L('提早上班', 'Early clock in') : L('休假日上班', 'Off day clock in')) : L('超时未下班', 'No clock out')}</td><td>{fmtT(q.asked_at)}</td>
                       <td>{lab ? <span className={`b ${cls}`}>{lab}</span> : <span className="b">{L('未回答', 'No answer')}</span>}</td><td>{q.answered_by ?? <Mut />}</td><td>{q.answered_at ? fmtT(q.answered_at) : <Mut />}</td></tr>;
                   })}
                 </tbody></table>}
