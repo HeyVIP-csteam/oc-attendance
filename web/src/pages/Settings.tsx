@@ -268,10 +268,12 @@ interface MsgDef {
   when: (L: L2) => string; fieldsHelp: string;
   q?: keyof BotTexts; qLabel?: (L: L2) => string;
   buttons: { b: keyof BotTexts; r: keyof BotTexts; does: (L: L2) => string }[];
-  extra?: { k: keyof BotTexts; label: (L: L2, t: BotTexts) => string; short?: boolean }[];
+  extra?: { k: keyof BotTexts; label: (L: L2, t: BotTexts) => string; short?: boolean; sw?: keyof BotSwitches; help?: (L: L2) => string; fields?: string; variant?: number }[];
+  /** situations the live preview can show (e.g. a shift day / a day off) */
+  variants?: (L: L2) => string[];
   /** sample values filled into the texts (never a real employee) */
   sample: Record<string, string>;
-  preview: (t: BotTexts, path: number, on: boolean, L: L2, fill: (s: string) => string) => PvLine[];
+  preview: (t: BotTexts, path: number, on: boolean, L: L2, fill: (s: string) => string, variant: number, sws: BotSwitches) => PvLine[];
 }
 
 const CS = 'CS - 1';
@@ -288,9 +290,15 @@ const MSGS: MsgDef[] = [
     when: (L) => L('员工比排班早打上班卡（达到考勤规则的分钟数）时，马上发出。Yes = 从上班到排班开始算 OT。', 'Sent right after a clock in that is early enough (Attendance rules). Yes = OT from the clock in to the shift start.'),
     fieldsHelp: '{name} {shift} {in}', q: 'earlyQ',
     buttons: [{ b: 'earlyYes', r: 'earlyRYes', does: (L) => L('计 OT', 'OT counted') }, { b: 'earlyNo', r: 'earlyRNo', does: (L) => L('不计 OT', 'No OT') }],
-    sample: { name: CS, shift: '14:30–23:30', in: '13:52' },
-    preview: (t, p, on, L, f) => [{ who: 'me', text: 'IN', tm: '13:52' }, okLine('Clock In', '13:52'),
-      ...(on ? asked(f(t.earlyQ), [t.earlyYes, t.earlyNo], [f(t.earlyRYes), f(t.earlyRNo)], p, '13:53', '13:54', t.change) : [offLine(L)])] },
+    extra: [{ k: 'offQ', sw: 'dayoff', variant: 1, label: (L) => L('休假日上班的问题（OFF、VL、SL… 或没排班的日子打上班卡；按钮和回复沿用上面）', 'Question on a day off (clock in on OFF, VL, SL … or an unscheduled day; same buttons and replies as above)'),
+      help: (L) => L('Yes = 这天算 OT；No = 不算 OT。已标 OT 的日子不问。', 'Yes = the day counts as OT; No = no OT. Not asked on days already marked OT.'), fields: '{name} {in} {code}' }],
+    variants: (L) => [L('排班日提早上班', 'Early on a shift day'), L('休假日上班', 'Clock in on a day off')],
+    sample: { name: CS, shift: '14:30–23:30', in: '13:52', code: 'OFF' },
+    preview: (t, p, on, L, f, variant, sws) => variant === 1
+      ? [{ who: 'me', text: 'IN', tm: '11:09' }, okLine('Clock In', '11:09'),
+        ...(sws.dayoff ? ((g) => asked(g(t.offQ), [t.earlyYes, t.earlyNo], [g(t.earlyRYes), g(t.earlyRNo)], p, '11:09', '11:10', t.change))((x: string) => f(x.replace(/\{in\}/g, '11:09'))) : [offLine(L)])]
+      : [{ who: 'me', text: 'IN', tm: '13:52' }, okLine('Clock In', '13:52'),
+        ...(on ? asked(f(t.earlyQ), [t.earlyYes, t.earlyNo], [f(t.earlyRYes), f(t.earlyRNo)], p, '13:53', '13:54', t.change) : [offLine(L)])] },
   { key: 'late', title: (L) => L('超时未下班', 'No clock out'), sw: 'late', demo: 'late',
     when: (L) => L('排班下班后超过设定时间（考勤规则）还没打下班卡时发出。', 'Sent the set time after the shift end (Attendance rules) when there is no clock out yet.'),
     fieldsHelp: '{name} {shift} {in} {hours} {out}', q: 'lateQ',
@@ -329,21 +337,29 @@ const MSGS: MsgDef[] = [
 ];
 
 /** The live preview: the chat as the employee would see it, with the texts as they are in the form now. */
-function LivePreview({ def, t, on, path, setPath, L }: { def: MsgDef; t: BotTexts; on: boolean; path: number; setPath: (n: number) => void; L: L2 }) {
-  const fill = (s: string) => s.replace(/\{(name|shift|in|hours|out|worked|need|until|short)\}/g, (m, k: string) => def.sample[k] ?? m);
-  const lines = def.preview(t, path, on, L, fill);
+function LivePreview({ def, t, on, sws, path, setPath, variant, setVariant, L }: { def: MsgDef; t: BotTexts; on: boolean; sws: BotSwitches; path: number; setPath: (n: number) => void; variant: number; setVariant: (n: number) => void; L: L2 }) {
+  const fill = (s: string) => s.replace(/\{(name|shift|in|hours|out|worked|need|until|short|code)\}/g, (m, k: string) => def.sample[k] ?? m);
+  const vs = def.variants?.(L) ?? [];
+  const v = vs.length ? Math.min(variant, vs.length - 1) : 0;
+  const lines = def.preview(t, path, on, L, fill, v, sws);
+  const shown = v === 1 ? sws.dayoff : on;
   const labels = def.buttons.map((x) => t[x.b]);
   return (
     <aside className="bm2-pv" aria-label={L('实时预览', 'Live preview')}>
       <div className="bm2-pvh"><b>{L('实时预览', 'Live preview')}</b><span>{L('随输入更新 · 不会发送', 'updates as you type · nothing is sent')}</span></div>
-      {labels.length > 0 && on && (
+      {vs.length > 0 && (
+        <div className="bm2-vars" role="group" aria-label={L('情况', 'Situation')}>
+          {vs.map((x, i) => <button key={i} type="button" className={v === i ? 'on' : ''} aria-pressed={v === i} onClick={() => setVariant(i)}>{x}</button>)}
+        </div>
+      )}
+      {labels.length > 0 && shown && (
         <div className="bm2-paths" role="group" aria-label={L('演示哪一种', 'Show')}>
           <button type="button" className={path === 0 ? 'on' : ''} aria-pressed={path === 0} onClick={() => setPath(0)}>{L('未回答', 'Not answered')}</button>
           {labels.map((b, i) => <button key={i} type="button" className={path === i + 1 ? 'on' : ''} aria-pressed={path === i + 1} onClick={() => setPath(i + 1)}>{b || '—'}</button>)}
         </div>
       )}
       <div className="bm2-chat">
-        <div className="bm2-top">{CS} <span>Topic{def.sample.shift ? ` · ${L('班次', 'Shift')} ${def.sample.shift}` : ''}</span></div>
+        <div className="bm2-top">{CS} <span>Topic{v === 1 ? ` · ${L('今天', 'Today')} OFF` : def.sample.shift ? ` · ${L('班次', 'Shift')} ${def.sample.shift}` : ''}</span></div>
         {lines.map((x, i) => x.who === 'gap' ? <div key={i} className="bm2-gap"><span>· · · {x.text}</span></div>
           : x.who === 'off' ? <div key={i} className="bm2-off">{x.text}</div>
           : x.who === 'pop' ? <div key={i} className="bm2-pop">{x.text}</div>
@@ -370,6 +386,7 @@ function BotMessages() {
   const [sw, setSw] = useState<BotSwitches>({ ...DEFAULT_BOT_SWITCHES, ...(meta.botSwitches ?? {}) });
   const [st, setSt] = usePageState('st-msgs', () => ({ key: 'early' as MsgKey }));
   const [paths, setPaths] = useState<Partial<Record<MsgKey, number>>>({});
+  const [vars, setVars] = useState<Partial<Record<MsgKey, number>>>({});
   // ▶ the animated demo (step by step) is still there, next to the live preview
   const [demo, setDemo] = useState<{ k: DemoKey; path?: string } | null>(null);
   const onErr = useErr();
@@ -377,7 +394,8 @@ function BotMessages() {
   const saved = { ...DEFAULT_BOT_TEXTS, ...(meta.botTexts ?? {}) };
   const savedSw = { ...DEFAULT_BOT_SWITCHES, ...(meta.botSwitches ?? {}) };
   const dirty = (Object.keys(v) as (keyof BotTexts)[]).some((k) => v[k] !== saved[k]) || (Object.keys(sw) as (keyof BotSwitches)[]).some((k) => sw[k] !== savedSw[k]);
-  const changedIn = (m: MsgDef) => [m.q, ...m.buttons.flatMap((b) => [b.b, b.r]), ...(m.extra ?? []).map((e) => e.k)].some((k) => k && v[k] !== saved[k]) || (!!m.sw && sw[m.sw] !== savedSw[m.sw]);
+  const changedIn = (m: MsgDef) => [m.q, ...m.buttons.flatMap((b) => [b.b, b.r]), ...(m.extra ?? []).map((e) => e.k)].some((k) => k && v[k] !== saved[k])
+    || [m.sw, ...(m.extra ?? []).map((e) => e.sw)].some((k) => !!k && sw[k] !== savedSw[k]);
   const save = async () => {
     try {
       await api('/settings/bot-texts', { method: 'PUT', body: v });
@@ -393,7 +411,7 @@ function BotMessages() {
       <div className="bm2-tabs" role="tablist" aria-label={L('Bot 消息', 'Bot messages')}>
         {MSGS.map((m) => (
           <button key={m.key} type="button" role="tab" aria-selected={m.key === def.key} className={m.key === def.key ? 'on' : ''} onClick={() => setSt({ key: m.key })}>
-            {m.sw && <i className={`bm2-dot ${sw[m.sw] ? '' : 'off'}`} aria-hidden="true" />}{m.title(L)}{changedIn(m) && <b className="bm2-chg" title={L('有未保存的修改', 'Unsaved changes')}>•</b>}
+            {m.sw && <i className={`bm2-dot ${sw[m.sw] || (m.extra ?? []).some((x) => x.sw && sw[x.sw]) ? '' : 'off'}`} aria-hidden="true" />}{m.title(L)}{changedIn(m) && <b className="bm2-chg" title={L('有未保存的修改', 'Unsaved changes')}>•</b>}
           </button>
         ))}
       </div>
@@ -414,7 +432,7 @@ function BotMessages() {
           {def.q && (
             <div className="bm2-f">
               <label htmlFor={id(def.q)}>{def.qLabel?.(L) ?? L('问题', 'Question')}</label>
-              <textarea id={id(def.q)} rows={3} maxLength={400} value={v[def.q]} disabled={readOnly} onChange={(e) => set(def.q!, e.target.value)} />
+              <textarea id={id(def.q)} rows={3} maxLength={400} value={v[def.q]} disabled={readOnly} onChange={(e) => set(def.q!, e.target.value)} onFocus={() => { if (def.variants) setVars({ ...vars, [def.key]: 0 }); }} />
               {def.fieldsHelp && <div className="bm2-help">{L('可用：', 'Fields: ')}{def.fieldsHelp.split(' ').map((x) => <code key={x}>{x}</code>)}</div>}
             </div>
           )}
@@ -436,10 +454,20 @@ function BotMessages() {
             </div>
           ))}
           {(def.extra ?? []).map((x) => (
-            <div key={x.k} className="bm2-f">
-              <label htmlFor={id(x.k)}>{x.label(L, v)}</label>
+            <div key={x.k} className={`bm2-f ${x.sw ? 'bm2-sub' : ''}`}>
+              {x.sw ? (
+                <div className="bm2-subh">
+                  <label htmlFor={id(x.k)}>{x.label(L, v)}</label>
+                  <label className={`bmsw ${sw[x.sw] ? 'on' : ''}`} title={L('关闭后 Bot 不会发送这一种消息', 'When off, the bot does not send this message')}>
+                    <input type="checkbox" checked={sw[x.sw]} disabled={readOnly} onChange={(e) => setSw({ ...sw, [x.sw!]: e.target.checked })} />
+                    <span className="bmsw-t" />{sw[x.sw] ? L('开启', 'On') : L('关闭', 'Off')}
+                  </label>
+                </div>
+              ) : <label htmlFor={id(x.k)}>{x.label(L, v)}</label>}
               {x.short ? <input id={id(x.k)} type="text" maxLength={40} value={v[x.k]} disabled={readOnly} onChange={(e) => set(x.k, e.target.value)} />
-                : <textarea id={id(x.k)} rows={2} maxLength={400} value={v[x.k]} disabled={readOnly} onChange={(e) => set(x.k, e.target.value)} />}
+                : <textarea id={id(x.k)} rows={2} maxLength={400} value={v[x.k]} disabled={readOnly} onChange={(e) => set(x.k, e.target.value)}
+                  onFocus={() => { if (x.variant != null) setVars({ ...vars, [def.key]: x.variant }); }} />}
+              {(x.help || x.fields) && <div className="bm2-help">{x.help?.(L)}{x.fields && <>{' '}{L('可用：', 'Fields: ')}{x.fields.split(' ').map((f) => <code key={f}>{f}</code>)}</>}</div>}
             </div>
           ))}
           {!readOnly && (
@@ -450,7 +478,8 @@ function BotMessages() {
             </div>
           )}
         </section>
-        <LivePreview def={def} t={v} on={on} path={paths[def.key] ?? 0} setPath={(n) => setPaths({ ...paths, [def.key]: n })} L={L} />
+        <LivePreview def={def} t={v} on={on} sws={sw} path={paths[def.key] ?? 0} setPath={(n) => setPaths({ ...paths, [def.key]: n })}
+          variant={vars[def.key] ?? 0} setVariant={(n) => setVars({ ...vars, [def.key]: n })} L={L} />
       </div>
       {demo && <BotDemo demo={demo.k} path={demo.path} texts={v} switches={sw} punchReplies={rulesOf(meta, null).botReply} onClose={() => setDemo(null)} />}
     </div>

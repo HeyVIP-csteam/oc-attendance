@@ -15,6 +15,7 @@ import { all, first, stmt } from './db';
 import { redact } from './crypto';
 import { recomputeMany } from './sessions';
 import { bizTz, loadSettings, rulesFor, type Settings } from './settings';
+import { ensureOtMarks } from './otMarks';
 import { type BotRow, botToken, tgCall } from './telegram';
 
 const LATE_LIMIT = 2 * HOUR; // a question this late (cron paused, deploy) is not sent
@@ -26,9 +27,9 @@ const KIND_OF: Record<OtAnswer, Kind> = { YES: 'EARLY', NO: 'EARLY', STILL: 'LAT
 export interface TgCallback { id: string; from: { id: number; is_bot?: boolean; first_name?: string; last_name?: string; username?: string }; message?: { message_id: number; chat: { id: number } }; data?: string }
 
 /** askedAt: when the question was (or is being) sent — {hours} is the time from the clock in to that moment. */
-interface Ctx { inAt: number; start: number; end: number; tz: string; name: string; askedAt: number }
+interface Ctx { inAt: number; start: number; end: number; tz: string; name: string; askedAt: number; code?: string }
 const fill = (t: string, c: Ctx) => t
-  .replace(/\{name\}/g, c.name).replace(/\{in\}/g, fmtTime(c.inAt, c.tz)).replace(/\{out\}/g, fmtTime(Math.min(c.end, Date.now()), c.tz))
+  .replace(/\{code\}/g, c.code ?? 'OFF').replace(/\{name\}/g, c.name).replace(/\{in\}/g, fmtTime(c.inAt, c.tz)).replace(/\{out\}/g, fmtTime(Math.min(c.end, Date.now()), c.tz))
   .replace(/\{shift\}/g, `${fmtTime(c.start, c.tz)}–${fmtTime(c.end, c.tz)}`).replace(/\{hours\}/g, fmtHm(Math.max(0, c.askedAt - c.inAt)));
 
 /** When the "no clock out" question is due: the set minutes after the scheduled end, and never sooner than 1 hour
@@ -63,7 +64,22 @@ const CAND = `SELECT s.employee_id, s.work_date, s.actual_in_at, s.scheduled_sta
 export async function askOtQuestions(env: Env, now: number, earlyOnly = false, settings?: Settings): Promise<number> {
   const db = env.DB;
   const st = settings ?? (await loadSettings(db));
-  const due: { c: Cand; kind: Kind; rules: Rules }[] = [];
+  const due: { c: Cand; kind: Kind; rules: Rules; off?: string }[] = [];
+  // a clock in on a day without a shift (OFF, VL, SL … or not scheduled): "Is this OT?" with the Early clock in buttons.
+  // Not on a day already marked OT (roster code OT, or OT marked by hand).
+  if (st.botSwitches.dayoff) {
+    await ensureOtMarks(db);
+    for (const c of await all<Cand & { mark: string | null }>(db, `SELECT s.employee_id, s.work_date, s.actual_in_at, NULL AS scheduled_start_at, NULL AS scheduled_end_at, e.currency_code, e.timezone, e.name,
+          m.chat_id, m.message_thread_id AS thread, rm.code AS mark
+        FROM attendance_sessions s JOIN employees e ON e.id = s.employee_id JOIN telegram_topic_mappings m ON m.employee_id = e.id AND m.is_active = 1
+        LEFT JOIN roster_marks rm ON rm.employee_id = s.employee_id AND rm.mark_date = s.work_date
+        WHERE s.actual_in_at IS NOT NULL AND s.shift_instance_id IS NULL AND s.actual_in_at >= ? AND e.employment_status = 'ACTIVE' AND COALESCE(rm.code, '') <> 'OT'
+          AND NOT EXISTS (SELECT 1 FROM ot_marks om WHERE om.employee_id = s.employee_id AND om.work_date = s.work_date)
+          AND NOT EXISTS (SELECT 1 FROM ot_questions q WHERE q.employee_id = s.employee_id AND q.work_date = s.work_date AND q.kind = 'EARLY') LIMIT 100`, now - LATE_LIMIT)) {
+      const rules = rulesFor(st, c.currency_code);
+      if (rules.botReply) due.push({ c, kind: 'EARLY', rules, off: c.mark ?? 'OFF' });
+    }
+  }
   for (const c of await all<Cand>(db, `${CAND} AND s.actual_in_at >= ? AND s.actual_in_at < s.scheduled_start_at
       AND NOT EXISTS (SELECT 1 FROM ot_questions q WHERE q.employee_id = s.employee_id AND q.work_date = s.work_date AND q.kind = 'EARLY') LIMIT 100`, now - LATE_LIMIT)) {
     const rules = rulesFor(st, c.currency_code);
@@ -80,7 +96,7 @@ export async function askOtQuestions(env: Env, now: number, earlyOnly = false, s
     }
   }
   let sent = 0;
-  for (const { c, kind, rules } of due.slice(0, 50)) {
+  for (const { c, kind, off } of due.slice(0, 50)) {
     // claim first (UNIQUE per session and kind), with the employee's own Telegram account (from the clock-in message)
     const ins = await db.prepare(`INSERT OR IGNORE INTO ot_questions (employee_id, work_date, kind, chat_id, thread_id, owner_tg_id, in_at, asked_at)
         VALUES (?, ?, ?, ?, ?, (SELECT m.from_user_id FROM attendance_events ev JOIN telegram_messages m ON m.id = ev.message_id
@@ -91,10 +107,10 @@ export async function askOtQuestions(env: Env, now: number, earlyOnly = false, s
     try {
       const bot = await botOfChat(env, c.chat_id, c.currency_code);
       if (!bot) throw new Error('no bot for this group');
-      const ctx: Ctx = { inAt: c.actual_in_at, start: c.scheduled_start_at, end: c.scheduled_end_at, tz: c.timezone || bizTz(env), name: c.name, askedAt: now };
+      const ctx: Ctx = { inAt: c.actual_in_at, start: c.scheduled_start_at ?? c.actual_in_at, end: c.scheduled_end_at ?? c.actual_in_at, tz: c.timezone || bizTz(env), name: c.name, askedAt: now, code: off };
       const m = await tgCall<{ message_id: number }>(bot.token, 'sendMessage', {
         chat_id: c.chat_id, ...(c.thread != null ? { message_thread_id: c.thread } : {}),
-        text: fill(kind === 'EARLY' ? st.botTexts.earlyQ : st.botTexts.lateQ, ctx), reply_markup: keyboard(st.botTexts, kind, id),
+        text: fill(off ? st.botTexts.offQ : kind === 'EARLY' ? st.botTexts.earlyQ : st.botTexts.lateQ, ctx), reply_markup: keyboard(st.botTexts, kind, id),
       }, 5000);
       await db.batch([
         stmt(db, 'UPDATE ot_questions SET tg_message_id = ?, bot_id = ? WHERE id = ?', m.message_id, bot.row.id, id),
@@ -111,7 +127,8 @@ export async function askOtQuestions(env: Env, now: number, earlyOnly = false, s
 }
 
 interface QRow { id: number; employee_id: number; work_date: string; kind: Kind; chat_id: number; tg_message_id: number | null; owner_tg_id: number | null; in_at: number; asked_at: number; answer: OtAnswer | null; forgot_event_id: number | null;
-  employee_code: string; name: string; currency_code: string | null; timezone: string; scheduled_start_at: number | null; scheduled_end_at: number | null; actual_out_at: number | null }
+  employee_code: string; name: string; currency_code: string | null; timezone: string; scheduled_start_at: number | null; scheduled_end_at: number | null; actual_out_at: number | null;
+  shift_instance_id: number | null; mark: string | null }
 
 /** A button press under a question. Always answers the callback so the button stops spinning. */
 export async function handleOtCallback(env: Env, bot: BotRow, cq: TgCallback): Promise<string> {
@@ -121,16 +138,19 @@ export async function handleOtCallback(env: Env, bot: BotRow, cq: TgCallback): P
   const m = /^ot:(\d{1,12}):([ynsofc])$/.exec(cq.data ?? '');
   if (!m || !cq.message || cq.from.is_bot) { await answerCb(); return 'IGNORED'; }
   const db = env.DB;
-  const q = await first<QRow>(db, `SELECT q.*, e.employee_code, e.name, e.currency_code, e.timezone, s.scheduled_start_at, s.scheduled_end_at, s.actual_out_at
-      FROM ot_questions q JOIN employees e ON e.id = q.employee_id LEFT JOIN attendance_sessions s ON s.employee_id = q.employee_id AND s.work_date = q.work_date WHERE q.id = ?`, Number(m[1]));
+  const q = await first<QRow>(db, `SELECT q.*, e.employee_code, e.name, e.currency_code, e.timezone, s.scheduled_start_at, s.scheduled_end_at, s.actual_out_at, s.shift_instance_id, rm.code AS mark
+      FROM ot_questions q JOIN employees e ON e.id = q.employee_id LEFT JOIN attendance_sessions s ON s.employee_id = q.employee_id AND s.work_date = q.work_date
+      LEFT JOIN roster_marks rm ON rm.employee_id = q.employee_id AND rm.mark_date = q.work_date WHERE q.id = ?`, Number(m[1]));
   if (!q || q.chat_id !== cq.message.chat.id || q.tg_message_id !== cq.message.message_id) { await answerCb(); return 'UNKNOWN'; }
   const settings = await loadSettings(db);
   const t = settings.botTexts;
   const rules = rulesFor(settings, q.currency_code);
   if (rules.answerBy === 'own' && q.owner_tg_id != null && cq.from.id !== q.owner_tg_id) { await answerCb(t.notYou, true); return 'NOT_YOU'; }
   const tz = q.timezone || bizTz(env);
-  const ctx: Ctx = { inAt: q.in_at, start: q.scheduled_start_at ?? q.in_at, end: q.scheduled_end_at ?? q.in_at, tz, name: q.name, askedAt: q.asked_at };
-  const question = fill(q.kind === 'EARLY' ? t.earlyQ : t.lateQ, ctx);
+  // an "Is this OT?" question on a day without a shift was the day-off question
+  const offDay = q.kind === 'EARLY' && q.scheduled_start_at == null && q.shift_instance_id == null;
+  const ctx: Ctx = { inAt: q.in_at, start: q.scheduled_start_at ?? q.in_at, end: q.scheduled_end_at ?? q.in_at, tz, name: q.name, askedAt: q.asked_at, code: q.mark ?? 'OFF' };
+  const question = fill(offDay ? t.offQ : q.kind === 'EARLY' ? t.earlyQ : t.lateQ, ctx);
   if (m[2] === 'c') {
     // show the buttons again; the current answer stays until a new one is pressed
     await tgCall(token, 'editMessageReplyMarkup', { chat_id: q.chat_id, message_id: q.tg_message_id, reply_markup: keyboard(t, q.kind, q.id) }, 5000).catch(() => undefined);

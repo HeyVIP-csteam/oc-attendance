@@ -143,7 +143,9 @@ shiftRoutes.get('/roster', async (c) => {
         CASE WHEN s.shift_instance_id IS NULL OR i.adjustment_status = 'CANCELLED' THEN 'OFF' ELSE 'LONG' END AS kind
       FROM attendance_sessions s LEFT JOIN shift_instances i ON i.id = s.shift_instance_id
       WHERE s.employee_id IN (${inList}) AND s.work_date BETWEEN ? AND ? AND s.actual_in_at IS NOT NULL AND s.actual_out_at IS NOT NULL
-        AND (s.shift_instance_id IS NULL OR i.adjustment_status = 'CANCELLED' OR s.ot_ms > 0)`,
+        AND (((s.shift_instance_id IS NULL OR i.adjustment_status = 'CANCELLED')
+              AND NOT EXISTS (SELECT 1 FROM ot_questions oq WHERE oq.employee_id = s.employee_id AND oq.work_date = s.work_date AND oq.kind = 'EARLY' AND oq.answer = 'NO'))
+             OR s.ot_ms > 0)`,
       ...ids, from, to),
     all(db, `SELECT employee_id, mark_date, code FROM roster_marks WHERE employee_id IN (${inList}) AND mark_date BETWEEN ? AND ?`, ...ids, from, to),
     // OT marked by hand on the roster (display only)

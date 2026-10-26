@@ -28,11 +28,13 @@ export const resetOtMarksForTests = () => { ready = false; };
 
 /**
  * SQL: 1 when the session row `s` (with its shift instance `i`) counts as one OT, i.e. the roster shows the red OT badge:
- * marked by hand, worked on a day off (clock in + out, no active shift), or OT confirmed through the bot. Else 0.
+ * marked by hand, worked on a day off (clock in + out, no active shift; not when the day-off question was answered No),
+ * or OT confirmed through the bot. Else 0.
  */
 export const OT_DAY_SQL = `(CASE WHEN EXISTS (SELECT 1 FROM ot_marks om WHERE om.employee_id = s.employee_id AND om.work_date = s.work_date)
   OR COALESCE(s.ot_ms, 0) > 0
-  OR (s.actual_in_at IS NOT NULL AND s.actual_out_at IS NOT NULL AND (s.shift_instance_id IS NULL OR i.adjustment_status = 'CANCELLED'))
+  OR (s.actual_in_at IS NOT NULL AND s.actual_out_at IS NOT NULL AND (s.shift_instance_id IS NULL OR i.adjustment_status = 'CANCELLED')
+      AND NOT EXISTS (SELECT 1 FROM ot_questions oq WHERE oq.employee_id = s.employee_id AND oq.work_date = s.work_date AND oq.kind = 'EARLY' AND oq.answer = 'NO'))
   THEN 1 ELSE 0 END)`;
 
 /** SQL: manual OT marks of employee `e` on days without a session (they count too), for `BETWEEN ? AND ? AND <= ?`. */

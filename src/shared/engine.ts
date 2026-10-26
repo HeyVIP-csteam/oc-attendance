@@ -256,7 +256,7 @@ export function computeSession(input: ComputeInput): SessionSummary | null {
   const waiting = qs.filter((q) => q.answer == null);
   const overdue = waiting.filter((q) => now > q.askedAt + FIXED.otAnswerWaitMin * MIN);
   if (overdue.length) {
-    const what = overdue.map((q) => (q.kind === 'EARLY' ? ['提早上班', 'early clock in'] : ['超时未下班', 'no clock out'])) as [string, string][];
+    const what = overdue.map((q) => (q.kind === 'EARLY' ? (inst ? ['提早上班', 'early clock in'] : ['休假日上班', 'clock in on a day off']) : ['超时未下班', 'no clock out'])) as [string, string][];
     flags.push({ code: 'OT_NO_ANSWER', ts: overdue[0].askedAt, eventId: null, detail: bi(`没有人回答 OT 问题（${what.map((w) => w[0]).join('、')}），不计算 OT`, `Nobody answered the OT question (${what.map((w) => w[1]).join(', ')}) — no OT counted`) });
   }
   for (const q of waiting) if (!overdue.includes(q)) checks.push(q.askedAt + FIXED.otAnswerWaitMin * MIN + 1);

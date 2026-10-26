@@ -147,6 +147,8 @@ export type HoursAnswer = 'YES' | 'NO' | 'FORGOT_IN';
 
 /** Texts of the bot's OT questions (Settings → Bot messages). {name} {shift} {in} {hours} {out} are filled in. */
 export interface BotTexts {
+  /** asked on a clock in on a day with no shift (OFF, VL, SL … or not scheduled); same buttons and replies as earlyQ. {code} = the roster code */
+  offQ: string;
   earlyQ: string; earlyYes: string; earlyNo: string; earlyRYes: string; earlyRNo: string;
   lateQ: string; lateStill: string; lateOt: string; lateForgot: string; lateRStill: string; lateROt: string; lateRForgot: string;
   change: string; notYou: string;
@@ -160,10 +162,11 @@ export interface BotTexts {
 }
 
 /** Which automatic bot messages are sent (Settings → Bot messages). Detection and exceptions do not depend on these. */
-export interface BotSwitches { early: boolean; late: boolean; scheduled: boolean; incomplete: boolean }
-export const DEFAULT_BOT_SWITCHES: BotSwitches = { early: true, late: true, scheduled: true, incomplete: true };
+export interface BotSwitches { early: boolean; late: boolean; scheduled: boolean; incomplete: boolean; dayoff: boolean }
+export const DEFAULT_BOT_SWITCHES: BotSwitches = { early: true, late: true, scheduled: true, incomplete: true, dayoff: true };
 export const DEFAULT_BOT_TEXTS: BotTexts = {
   earlyQ: '⏰ Your shift is {shift}, but you clocked in early at {in}. Is this OT?',
+  offQ: '📅 Today is your day off ({code}), but you clocked in at {in}. Is this OT?',
   earlyYes: 'Yes', earlyNo: 'No',
   earlyRYes: '✅ Recorded as OT from {in}. Have a good shift!',
   earlyRNo: '✅ Recorded. Your clock in is {in}. Have a good shift!',

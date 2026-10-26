@@ -227,7 +227,7 @@ export function SessionDrawer({ emp, date, onClose }: { emp: number; date: strin
             {((data.otQuestions ?? []).length > 0 || data.otMark) && (
               <div className="sd-card">
                 {/* the day's OT: a manual mark on the roster wins over the bot-confirmed OT */}
-                <div className="sd-ch"><h3>OT</h3><span className="c">{data.otMark || (s?.ot_ms ?? 0) > 0 ? L('OT · 算 1 次', 'OT · counts as 1') : L('不计 OT', 'No OT')}</span></div>
+                <div className="sd-ch"><h3>OT</h3><span className="c">{data.otMark || (s?.ot_ms ?? 0) > 0 || (!inst && s?.actual_in_at != null && s?.actual_out_at != null && !(data.otQuestions ?? []).some((q) => q.kind === 'EARLY' && q.answer === 'NO')) ? L('OT · 算 1 次', 'OT · counts as 1') : L('不计 OT', 'No OT')}</span></div>
                 {data.otMark && <div className="sd-exi" style={{ padding: '6px 2px 10px' }}><span className="b r">OT</span>
                   <span className="x">{L(`排班表手动标记 · ${data.otMark.created_by}`, `Marked by hand on the roster · ${data.otMark.created_by}`)}{data.otMark.note ? ` · ${data.otMark.note}` : ''}</span>
                   <span className="t">{fmtDT(data.otMark.created_at).slice(0, 16)}</span></div>}
@@ -236,7 +236,7 @@ export function SessionDrawer({ emp, date, onClose }: { emp: number; date: strin
                     const t = { ...DEFAULT_BOT_TEXTS, ...(meta.botTexts ?? {}) };
                     const lab = q.answer ? { YES: t.earlyYes, NO: t.earlyNo, STILL: t.lateStill, OT: t.lateOt, FORGOT: t.lateForgot }[q.answer] : null;
                     const cls = q.answer === 'YES' || q.answer === 'OT' ? 'w' : q.answer === 'FORGOT' ? 'r' : 'ok';
-                    return <tr key={q.kind}><td>{q.kind === 'EARLY' ? L('提早上班', 'Early clock in') : L('超时未下班', 'No clock out')}</td><td>{fmtT(q.asked_at)}</td>
+                    return <tr key={q.kind}><td>{q.kind === 'EARLY' ? (inst ? L('提早上班', 'Early clock in') : L('休假日上班', 'Day off clock in')) : L('超时未下班', 'No clock out')}</td><td>{fmtT(q.asked_at)}</td>
                       <td>{lab ? <span className={`b ${cls}`}>{lab}</span> : <span className="b">{L('未回答', 'No answer')}</span>}</td><td>{q.answered_by ?? <Mut />}</td><td>{q.answered_at ? fmtT(q.answered_at) : <Mut />}</td></tr>;
                   })}
                 </tbody></table>}

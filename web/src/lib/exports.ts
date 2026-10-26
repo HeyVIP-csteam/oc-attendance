@@ -108,11 +108,11 @@ function drawerOf(x: Ctx, a: AttRowX, d: Detail, g: { ev: Map<number, DEv[]>; br
         rs: e.adj_reason, tags };
     }),
     ot: !om && !oq.length ? null : {
-      h: om || (a.ot_ms ?? 0) > 0 ? L('OT · 算 1 次', 'OT · counts as 1') : L('不计 OT', 'No OT'),
+      h: om || (a.ot_ms ?? 0) > 0 || a.ot_day ? L('OT · 算 1 次', 'OT · counts as 1') : L('不计 OT', 'No OT'),
       mark: om ? [L(`排班表手动标记 · ${om.created_by}`, `Marked by hand on the roster · ${om.created_by}`) + (om.note ? ` · ${om.note}` : ''), fmtDT(om.created_at).slice(0, 16)] : null,
       q: oq.map((o) => {
         const lab = o.answer ? ({ YES: t.earlyYes, NO: t.earlyNo, STILL: t.lateStill, OT: t.lateOt, FORGOT: t.lateForgot } as Record<string, string>)[o.answer] ?? o.answer : null;
-        return [o.kind === 'EARLY' ? L('提早上班', 'Early clock in') : L('超时未下班', 'No clock out'), fmtT(o.asked_at), lab ?? L('未回答', 'No answer'),
+        return [o.kind === 'EARLY' ? (a.scheduled_start_at != null ? L('提早上班', 'Early clock in') : L('休假日上班', 'Day off clock in')) : L('超时未下班', 'No clock out'), fmtT(o.asked_at), lab ?? L('未回答', 'No answer'),
           !lab ? '' : o.answer === 'YES' || o.answer === 'OT' ? 'w' : o.answer === 'FORGOT' ? 'r' : 'ok', o.answered_by ?? '—', o.answered_at ? fmtT(o.answered_at) : '—'];
       }),
     },

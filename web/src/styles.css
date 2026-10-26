@@ -547,3 +547,12 @@ select.need{border-color:#f59e0b;background:#fffbeb}
 .bm2-off{align-self:center;background:rgba(15,23,42,.55);color:#fff;border-radius:8px;padding:5px 10px;font-size:12px;text-align:center;max-width:92%}
 .bm2-pop{align-self:center;background:#1f2937;color:#fff;border-radius:10px;padding:8px 14px;font-size:12.5px;box-shadow:0 6px 18px rgba(0,0,0,.25)}
 @media (max-width:900px){.bm2-pv{position:static;max-width:none}.bm2-btns{grid-template-columns:1fr !important}}
+
+.bm2-vars{display:flex;background:var(--greyb);border-radius:9px;padding:3px;gap:3px}
+.bm2-vars button{flex:1;border:0;background:transparent;border-radius:7px;padding:5px 8px;font-size:12px;cursor:pointer;color:var(--grey)}
+.bm2-vars button.on{background:var(--card);color:var(--ink);font-weight:600;box-shadow:0 1px 2px rgba(15,23,42,.12)}
+.bm2-sub{border:1px dashed #c9d3e1;border-radius:10px;padding:10px 12px;background:#fbfcfe}
+.bm2-subh{display:flex;align-items:flex-start;gap:10px;margin-bottom:4px}.bm2-subh > label:first-child{flex:1;margin:0}
+.bm2-subh .bmsw{margin-left:0;flex:none}
+.bm2-f .bm2-subh label.bmsw{display:inline-flex;align-items:center;gap:6px;margin:0;font-size:12px;font-weight:600;color:var(--mut)}
+.bm2-f .bm2-subh label.bmsw.on{color:#15803d}

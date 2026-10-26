@@ -75,7 +75,7 @@ settingsRoutes.put('/settings/bot-texts', async (c) => {
 settingsRoutes.put('/settings/bot-switches', async (c) => {
   requireAdminRole(c);
   requireSetting(c, 'msgs', 'e');
-  const sent = await body(c, z.object({ early: z.boolean(), late: z.boolean(), scheduled: z.boolean(), incomplete: z.boolean().optional() }));
+  const sent = await body(c, z.object({ early: z.boolean(), late: z.boolean(), scheduled: z.boolean(), incomplete: z.boolean().optional(), dayoff: z.boolean().optional() }));
   const db = c.env.DB;
   const now = Date.now();
   const actor = c.get('admin').username;

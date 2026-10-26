@@ -735,7 +735,7 @@ describe('scheduled punches (Telegram "Schedule message")', () => {
     expect(replies(h).at(-1)).toBe('No scheduled punches please');
     // switched off: no reply, but still not counted and still listed
     expect((await h.req('PUT', '/api/settings/bot-switches', { early: true, late: true, scheduled: false })).status).toBe(200);
-    expect((await h.req('GET', '/api/meta')).json.botSwitches).toEqual({ early: true, late: true, scheduled: false, incomplete: true });
+    expect((await h.req('GET', '/api/meta')).json.botSwitches).toEqual({ early: true, late: true, scheduled: false, incomplete: true, dayoff: true });
     const before = replies(h).length;
     await h.send({ text: 'OUT', ts: lk(D, '15:00'), thread: 1001, scheduled: true });
     expect(replies(h).length).toBe(before);
@@ -912,6 +912,88 @@ describe('incomplete working hours (question with buttons on clock out)', () => 
     expect(texts(h).at(-1)).toBe('✅ Clock Out recorded · 14:00 (Sri Lanka time)');
     expect(h.db.get<any>('SELECT COUNT(*) AS n FROM hours_questions').n).toBe(1);
     expect(exN(h, 'INCOMPLETE_HOURS')).toBe(2);
+  });
+});
+
+describe('day off clock in: "Is this OT?" with the Early clock in buttons', () => {
+  const sent = (h: Harness) => h.tg.filter((x) => x.method === 'sendMessage');
+  const q1 = (h: Harness) => h.db.get<any>("SELECT * FROM ot_questions WHERE kind = 'EARLY' ORDER BY id DESC LIMIT 1");
+  const otDay = async (h: Harness, e: number, d: string) => (await h.req('GET', `/api/attendance?from=${d}&to=${d}&emp=${e}`)).json.rows[0]?.ot_day;
+  const rosterOt = async (h: Harness, e: number, d: string) => (await h.req('GET', `/api/roster?from=${d}&to=${d}&size=100`)).json.ot.some((x: any) => x.employee_id === e && x.work_date === d);
+
+  it('OFF day: asked right after the clock in; Yes = OT, No = not OT', async () => {
+    const { h, e1, e2 } = await fixture();
+    await h.roster(e1, D, 'OFF');
+    await h.roster(e2, D, 'OFF');
+    await h.send({ text: 'IN', ts: lk(D, '11:09'), thread: 1001 });
+    await h.flush();
+    const m = sent(h).at(-1)!;
+    expect(m.body.text).toBe('📅 Today is your day off (OFF), but you clocked in at 11:09. Is this OT?');
+    const q = q1(h);
+    expect(m.body.reply_markup).toEqual({ inline_keyboard: [[{ text: 'Yes', callback_data: `ot:${q.id}:y` }, { text: 'No', callback_data: `ot:${q.id}:n` }]] });
+    await h.press({ data: `ot:${q.id}:y`, messageId: q.tg_message_id, fromId: 5100000001, name: 'Nimal', at: lk(D, '11:10') });
+    expect(sent(h).at(-1)!.body.text).toBe('✅ Recorded as OT from 11:09. Have a good shift!');
+    expect(h.tg.filter((x) => x.method === 'editMessageText').at(-1)!.body.text).toBe('📅 Today is your day off (OFF), but you clocked in at 11:09. Is this OT?\n\n✓ Yes · Nimal · 11:10');
+    await h.send({ text: 'OUT', ts: lk(D, '15:00'), thread: 1001 });
+    expect(await otDay(h, e1, D)).toBe(1);
+    expect(await rosterOt(h, e1, D)).toBe(true);
+    // e2 answers No: worked, but not OT
+    await h.send({ text: 'IN', ts: lk(D, '12:00'), thread: 1002 });
+    await h.flush();
+    const q2 = q1(h);
+    await h.press({ data: `ot:${q2.id}:n`, messageId: q2.tg_message_id, fromId: 5100000001, at: lk(D, '12:01') });
+    await h.send({ text: 'OUT', ts: lk(D, '15:00'), thread: 1002 });
+    expect(await otDay(h, e2, D)).toBe(0);
+    expect(await rosterOt(h, e2, D)).toBe(false);
+  });
+
+  it('also on leave codes and unscheduled days; not on days already marked OT; not when switched off', async () => {
+    const { h, e1, e2 } = await fixture();
+    expect((await h.req('POST', '/api/roster-codes', { code: 'VL', name: 'Vacation leave', color: 5 })).status).toBe(200);
+    expect((await h.req('POST', '/api/roster-codes', { code: 'OT', name: 'Overtime', color: 1 })).status).toBe(200);
+    expect((await h.req('PUT', '/api/roster/cell', { employeeId: e1, date: D, value: 'VL', reason: 'leave' })).status).toBe(200);
+    await h.send({ text: 'IN', ts: lk(D, '09:00'), thread: 1001 });
+    await h.flush();
+    expect(sent(h).at(-1)!.body.text).toBe('📅 Today is your day off (VL), but you clocked in at 09:00. Is this OT?');
+    // unscheduled day (nothing on the roster) → asked as OFF
+    await h.send({ text: 'IN', ts: lk('2026-10-16', '09:00'), thread: 1001 });
+    await h.flush();
+    expect(sent(h).at(-1)!.body.text).toBe('📅 Today is your day off (OFF), but you clocked in at 09:00. Is this OT?');
+    // roster code OT: already OT, not asked
+    expect((await h.req('PUT', '/api/roster/cell', { employeeId: e2, date: D, value: 'OT', reason: 'overtime' })).status).toBe(200);
+    const n = sent(h).length;
+    await h.send({ text: 'IN', ts: lk(D, '09:30'), thread: 1002 });
+    await h.flush();
+    expect(sent(h).length).toBe(n + 1); // only the clock-in confirmation
+    expect(h.db.get<any>("SELECT COUNT(*) AS n FROM ot_questions WHERE employee_id = ?", e2).n).toBe(0);
+    // switched off: not asked (the day still counts as OT once clocked out)
+    expect((await h.req('PUT', '/api/settings/bot-switches', { early: true, late: true, scheduled: true, incomplete: true, dayoff: false })).status).toBe(200);
+    await h.roster(e2, '2026-10-17', 'OFF');
+    await h.send({ text: 'IN', ts: lk('2026-10-17', '10:00'), thread: 1002 });
+    await h.send({ text: 'OUT', ts: lk('2026-10-17', '14:00'), thread: 1002 });
+    await h.flush();
+    expect(h.db.get<any>("SELECT COUNT(*) AS n FROM ot_questions WHERE employee_id = ?", e2).n).toBe(0);
+    expect(await otDay(h, e2, '2026-10-17')).toBe(1);
+  });
+
+  it('nobody answers → "No answer" exception (day off); the day still counts as OT', async () => {
+    const { h, e1 } = await fixture();
+    await h.roster(e1, D, 'OFF');
+    await h.send({ text: 'IN', ts: lk(D, '09:00'), thread: 1001 });
+    await h.send({ text: 'OUT', ts: lk(D, '10:30'), thread: 1001 });
+    await h.flush();
+    await h.cron(lk(D, '11:30'));
+    const x = h.db.get<any>("SELECT detail FROM attendance_exceptions WHERE code = 'OT_NO_ANSWER'");
+    expect(JSON.parse(x.detail).en).toContain('clock in on a day off');
+    expect(await otDay(h, e1, D)).toBe(1);
+  });
+
+  it('a shift day still gets the normal early question', async () => {
+    const { h, e1 } = await fixture();
+    await h.roster(e1, D, 'A'); // 07:00
+    await h.send({ text: 'IN', ts: lk(D, '06:00'), thread: 1001 });
+    await h.flush();
+    expect(sent(h).at(-1)!.body.text).toBe('⏰ Your shift is 07:00–15:00, but you clocked in early at 06:00. Is this OT?');
   });
 });
 
@@ -1607,7 +1689,8 @@ describe('recalculating after a big import', () => {
 
 describe('bot replies only in bound employee topics', () => {
   it('no reply in General or in a topic that is not bound in the web app (still listed as an exception)', async () => {
-    const { h } = await fixture();
+    const { h, e1 } = await fixture();
+    await h.roster(e1, D, 'A'); // a shift day (an unscheduled day would also get the day-off question)
     const replies = () => h.tg.filter((x) => x.method === 'sendMessage').length;
     await h.send({ text: 'IN', ts: lk(D, '07:00'), thread: null });       // General
     await h.send({ text: 'IN', ts: lk(D, '07:01'), thread: 5555 });       // topic nobody is bound to
