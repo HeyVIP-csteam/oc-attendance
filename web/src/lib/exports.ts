@@ -154,7 +154,7 @@ export async function exportAttendance(x: Ctx, q: ExportRange): Promise<number> 
       { label: L('OT（次）', 'OT (times)'), cls: 'w', value: { op: 'count', where: ['ot', '=', 'OT'] }, sub: { agg: { op: 'distinct', f: 'code', where: ['ot', '=', 'OT'] }, tpl: L('{} 位员工', '{} employees') }, click: ['ot', '=', 'OT'] },
     ],
     sort: { k: 'd', dir: -1 }, foot: foot(L),
-    drawer: d ? { close: L('关闭', 'Close'), punch: L('打卡记录', 'Punch records'), time: L('时间', 'Time'), action: L('动作', 'Action'), msg: L('员工消息', 'Message'), status: L('状态', 'Status'),
+    drawer: d ? { close: L('关闭', 'Close'), type: L('类型', 'Type'), detail: L('说明', 'Detail'), punch: L('打卡记录', 'Punch records'), time: L('时间', 'Time'), action: L('动作', 'Action'), msg: L('员工消息', 'Message'), status: L('状态', 'Status'),
       breaks: L('休息明细', 'Breaks'), remark: L('备注', 'Remark'), dur: L('时长', 'Duration'), exc: L('异常', 'Exceptions'), noEx: L('无异常', 'No exceptions'), noPunch: L('没有打卡记录', 'No punches'),
       noBreaks: L('没有休息', 'No breaks'), open: L('未结束', 'Open'), missing: L('未打卡', 'Missing'), q: L('问题', 'Question'), asked: L('发送时间', 'Asked'), ans: L('回答', 'Answer'),
       by: L('回答人', 'Answered by'), at: L('回答时间', 'Answered at'), ro: L('导出时的数据（只读）· 要修改请到后台', 'Data as exported (read only) · make changes in the dashboard'),

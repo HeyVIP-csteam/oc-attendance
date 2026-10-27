@@ -556,3 +556,9 @@ select.need{border-color:#f59e0b;background:#fffbeb}
 .bm2-subh .bmsw{margin-left:0;flex:none}
 .bm2-f .bm2-subh label.bmsw{display:inline-flex;align-items:center;gap:6px;margin:0;font-size:12px;font-weight:600;color:var(--mut)}
 .bm2-f .bm2-subh label.bmsw.on{color:#15803d}
+
+/* session detail: exceptions as a table with the same dividers as Punch records / Breaks */
+.sd-ext td:first-child{white-space:normal;min-width:120px}
+.sd-ext td:first-child .b{white-space:normal;line-height:1.35;display:inline-block}
+.sd-ext td.msg{min-width:0;max-width:none}
+.sd-ext td:first-child .b{border-radius:7px;padding:3px 8px}

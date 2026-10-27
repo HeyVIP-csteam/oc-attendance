@@ -30,7 +30,7 @@ export interface ReportCfg {
   foot: string;
   t: { reset: string; print: string; of: string; rows: string; none: string };
   /** rows carrying `_x` open this popup when clicked */
-  drawer?: Record<'close' | 'punch' | 'time' | 'action' | 'msg' | 'status' | 'breaks' | 'remark' | 'dur' | 'exc' | 'noEx' | 'noPunch' | 'noBreaks' | 'open' | 'missing' | 'q' | 'asked' | 'ans' | 'by' | 'at' | 'ro' | 'hint', string>;
+  drawer?: Record<'close' | 'punch' | 'time' | 'action' | 'type' | 'detail' | 'msg' | 'status' | 'breaks' | 'remark' | 'dur' | 'exc' | 'noEx' | 'noPunch' | 'noBreaks' | 'open' | 'missing' | 'q' | 'asked' | 'ans' | 'by' | 'at' | 'ro' | 'hint', string>;
 }
 
 const CSS = `:root{--bg:#f4f6f9;--card:#fff;--ink:#0f172a;--mut:#64748b;--line:#e5e9f0;--pri:#2563eb;--pri2:#eef4ff;--ok:#15803d;--okb:#dcfce7;--bad:#b91c1c;--badb:#fee2e2;--warn:#b45309;--warnb:#fef3c7;--grey:#475569;--greyb:#eef1f5;--vio:#6d28d9;--viob:#ede9fe}
@@ -97,6 +97,7 @@ tr.go{cursor:pointer}
 .sd-exl{padding:4px 16px}.sd-exi{display:flex;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line)}.sd-exi:last-child{border-bottom:0}
 .sd-exi .x{font-size:13px;text-align:left}.sd-exi .t{margin-left:auto;color:var(--mut);font-size:12px;white-space:nowrap}
 .sd .b{white-space:nowrap}
+.sd-t td.et{white-space:normal;min-width:110px}.sd-t td.et .b{white-space:normal;line-height:1.35;border-radius:7px;padding:3px 8px}
 .sd-ro{color:var(--mut);font-size:11.5px;text-align:center;padding:2px 0 14px}
 @media (max-width:720px){.sd-two{grid-template-columns:1fr}.sd-hd{flex-wrap:wrap}.sd-r{margin-left:0}.sd-body{padding:14px}}
 @media (max-width:640px){.drawer{padding:0}.dbox{max-height:100vh;height:100%;border-radius:0}}
@@ -152,7 +153,7 @@ function openD(x){
   +(x.ot?card2('OT',x.ot.h,(x.ot.mark?'<div class="sd-exl"><div class="sd-exi"><span class="b r">OT</span><span class="x">'+esc(x.ot.mark[0])+'</span><span class="t">'+esc(x.ot.mark[1])+'</span></div></div>':'')
    +(x.ot.q.length?tbl([D.q,D.asked,D.ans,D.by,D.at],x.ot.q.map(function(q){return '<tr><td>'+esc(q[0])+'</td><td>'+esc(q[1])+'</td><td>'+bd([q[2],q[3]])+'</td><td>'+esc(q[4])+'</td><td>'+esc(q[5])+'</td></tr>'})):'')):'')
   +'<div class="sd-two">'+card2(D.breaks,x.brh,x.br.length?tbl(['#',D.remark,D.time,D.dur],x.br.map(function(b){return '<tr><td>'+esc(b[0])+'</td><td>'+esc(b[1])+'</td><td>'+esc(b[2])+' – '+(b[3]==null?bd([D.open,'r']):esc(b[3]))+'</td><td>'+esc(b[4])+'</td></tr>'})):'<div class="mut sd-empty">'+esc(D.noBreaks)+'</div>')
-  +card2(D.exc,x.exh,'<div class="sd-exl">'+(x.ex.length?x.ex.map(function(v){return '<div class="sd-exi">'+bd([v[0],v[1]])+'<span class="x">'+esc(v[2])+'</span><span class="t">'+esc(v[3])+'</span></div>'}).join(''):'<div class="sd-exi">'+bd([D.noEx,'ok'])+'</div>')+'</div>')
+  +card2(D.exc,x.exh,x.ex.length?tbl([D.type,D.detail,D.time],x.ex.map(function(v){return '<tr><td class="et">'+bd([v[0],v[1]])+'</td><td class="msg">'+(v[2]?esc(v[2]):'—')+'</td><td>'+esc(v[3])+'</td></tr>'})):'<div class="sd-empty">'+bd([D.noEx,'ok'])+'</div>')
   +'</div><div class="sd-ro">'+esc(D.ro)+'</div></div></div>';
  var o=document.createElement('div');o.className='drawer';o.innerHTML='<div class="dbox" role="dialog" aria-modal="true"><div class="dscroll">'+h+'</div></div>';
  var bo=document.body.style.overflow;document.body.style.overflow='hidden';

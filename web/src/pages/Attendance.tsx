@@ -253,11 +253,11 @@ export function SessionDrawer({ emp, date, onClose }: { emp: number; date: strin
               </div>
               <div className="sd-card">
                 <div className="sd-ch"><h3>{L('异常', 'Exceptions')}</h3><span className="c">{L(`${data.exceptions.length} 项`, `${data.exceptions.length}`)}</span></div>
-                <div className="sd-exl">
-                  {data.exceptions.length ? data.exceptions.map((x) => (
-                    <div key={x.id} className="sd-exi"><ExB code={x.code} /><span className="x">{x.detail ? dt(parseBi(x.detail)) : ''}</span><span className="t">{hms(x.occurred_at)}</span></div>
-                  )) : <div className="sd-exi"><span className="b ok">{L('无异常', 'No exceptions')}</span></div>}
-                </div>
+                {data.exceptions.length ? (
+                  <table className="sd-t sd-ext"><thead><tr><th>{L('类型', 'Type')}</th><th>{L('说明', 'Detail')}</th><th>{L('时间', 'Time')}</th></tr></thead><tbody>
+                    {data.exceptions.map((x) => <tr key={x.id}><td><ExB code={x.code} /></td><td className="msg">{x.detail ? dt(parseBi(x.detail)) : <span className="mut">—</span>}</td><td>{hms(x.occurred_at)}</td></tr>)}
+                  </tbody></table>
+                ) : <div className="sd-empty"><span className="b ok">{L('无异常', 'No exceptions')}</span></div>}
               </div>
             </div>
 
