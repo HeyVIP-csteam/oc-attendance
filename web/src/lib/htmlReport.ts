@@ -20,6 +20,19 @@ export interface DrawerData {
   brh: string; br: [string, string, string, string | null, string][];
   exh: string; ex: [string, string, string, string][];
 }
+/** One employee over the report period (Reports → click an employee), already formatted. */
+export interface EmpDay {
+  d: string; wd: string;
+  /** a day without a shift: its roster code or "Day off" */
+  off?: string;
+  /** no session that day: the OT note (manual OT on the roster) or the rest-day text */
+  note?: [text: string, cls: string, extra?: string];
+  /** a day with a session: its cells; x = index of its day popup in cfg.days */
+  r?: { shift: string; offShift: boolean; ai: string | null; si: string | null; late: number | null; ao: string | null; so: string | null; early: number | null; br: string | null; net: string | null; ot: boolean; st: Seg; ex: number; exc: string };
+  x?: number;
+}
+export interface EmpData { av: string; nm: string; id: string; meta: [string, string][]; cards: { l: string; v: string; sm?: string; sub: Seg[]; tone?: '' | 'warn' | 'bad' }[]; days: EmpDay[] }
+
 export interface ReportCfg {
   title: string; file: string; brand: string; brandSub: string;
   meta: [string, string][];          // header: label / value pairs; the last one goes on its own line (exported at / by)
@@ -29,8 +42,10 @@ export interface ReportCfg {
   sort: { k: string; dir: 1 | -1 };
   foot: string;
   t: { reset: string; print: string; of: string; rows: string; none: string };
-  /** rows carrying `_x` open this popup when clicked */
+  /** rows carrying `_x` open this popup when clicked (or `_e`: the employee popup, whose days open cfg.days[x]) */
   drawer?: Record<'close' | 'punch' | 'time' | 'action' | 'type' | 'detail' | 'msg' | 'status' | 'breaks' | 'remark' | 'dur' | 'exc' | 'noEx' | 'noPunch' | 'noBreaks' | 'open' | 'missing' | 'q' | 'asked' | 'ans' | 'by' | 'at' | 'ro' | 'hint', string>;
+  days?: DrawerData[];
+  emp?: Record<'title' | 'hint' | 'date' | 'shift' | 'in' | 'late' | 'out' | 'early' | 'breaks' | 'net' | 'status' | 'exc' | 'sch', string>;
 }
 
 const CSS = `:root{--bg:#f4f6f9;--card:#fff;--ink:#0f172a;--mut:#64748b;--line:#e5e9f0;--pri:#2563eb;--pri2:#eef4ff;--ok:#15803d;--okb:#dcfce7;--bad:#b91c1c;--badb:#fee2e2;--warn:#b45309;--warnb:#fef3c7;--grey:#475569;--greyb:#eef1f5;--vio:#6d28d9;--viob:#ede9fe}
@@ -99,6 +114,14 @@ tr.go{cursor:pointer}
 .sd .b{white-space:nowrap}
 .sd-t td.et{white-space:normal;min-width:110px}.sd-t td.et .b{white-space:normal;line-height:1.35;border-radius:7px;padding:3px 8px}
 .sd-ro{color:var(--mut);font-size:11.5px;text-align:center;padding:2px 0 14px}
+.rp-sum{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:16px}
+.rp-sc{background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+.rp-sc .l{font-size:12px;color:var(--mut)}.rp-sc .v{font-size:22px;font-weight:700;margin-top:4px;font-variant-numeric:tabular-nums}
+.rp-sc .v small{font-size:13px;font-weight:600;color:var(--mut)}.rp-sc .s{font-size:12px;color:var(--mut);border-top:1px solid var(--line);padding-top:7px;margin-top:8px}.rp-sc .s b{color:var(--ink)}
+.rp-sc.warn .v{color:var(--warn)}.rp-sc.bad .v{color:var(--bad)}
+.rp-t tr.go{cursor:pointer}.sd-t.rp-t tbody tr.go:hover td{background:var(--pri2)}
+.rp-t tr.rp-none td{background:var(--greyb);color:var(--mut);padding-top:7px;padding-bottom:7px}.rp-off{color:var(--grey);font-weight:600}
+@media (max-width:720px){.rp-sum{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (max-width:720px){.sd-two{grid-template-columns:1fr}.sd-hd{flex-wrap:wrap}.sd-r{margin-left:0}.sd-body{padding:14px}}
 @media (max-width:640px){.drawer{padding:0}.dbox{max-height:100vh;height:100%;border-radius:0}}
 @media (max-width:640px){header,main{padding-left:14px;padding-right:14px}header .meta{margin-left:0;text-align:left}.bar input{width:100%}}
@@ -136,7 +159,7 @@ function draw(){var x=rows();
  var kv=function(r){var v=r[sort.k];return v==null?(sort.dir>0?Infinity:-Infinity):v};
  x.sort(function(a,b){var A=kv(a),B=kv(b);return(A>B?1:A<B?-1:String(a[C.cols[0].k]).localeCompare(String(b[C.cols[0].k])))*sort.dir});
  $('hd').innerHTML=C.cols.map(function(c){return '<th class="'+(c.t==='pid'?'pid':'')+'" data-k="'+c.k+'">'+esc(c.label)+(sort.k===c.k?'<span class="ar">'+(sort.dir>0?'▲':'▼')+'</span>':'')+'</th>'}).join('');
- $('tb').innerHTML=x.length?x.map(function(r){return '<tr'+(D&&r._x?' class="go" data-i="'+r._i+'"':'')+'>'+C.cols.map(function(c){return '<td class="'+(c.t==='pid'?'pid':c.t==='text'?'txt':'')+'">'+cell(c,r)+'</td>'}).join('')+'</tr>'}).join(''):'<tr><td colspan="'+C.cols.length+'" class="mut" style="padding:24px">'+esc(C.t.none)+'</td></tr>';
+ $('tb').innerHTML=x.length?x.map(function(r){return '<tr'+(D&&(r._x||r._e)?' class="go" data-i="'+r._i+'"':'')+'>'+C.cols.map(function(c){return '<td class="'+(c.t==='pid'?'pid':c.t==='text'?'txt':'')+'">'+cell(c,r)+'</td>'}).join('')+'</tr>'}).join(''):'<tr><td colspan="'+C.cols.length+'" class="mut" style="padding:24px">'+esc(C.t.none)+'</td></tr>';
  $('cnt').textContent=x.length+' '+C.t.of+' '+R.length+' '+C.t.rows+(D?' · '+D.hint:'')}
 function sg(a){return a.map(function(p){return p[1]==='b'?'<b>'+esc(p[0])+'</b>':p[1]==='r'?'<b class="red">'+esc(p[0])+'</b>':esc(p[0])}).join('')}
 function bd(p){return '<span class="b '+esc(p[1])+'">'+esc(p[0])+'</span>'}
@@ -145,7 +168,7 @@ function tbl(hs,rows){return '<table class="sd-t"><thead><tr>'+hs.map(function(h
 function openD(x){
  var h='<div class="sd"><div class="sd-hd"><div class="sd-av">'+esc(x.av)+'</div><div style="min-width:0"><h2>'+esc(x.nm)+' <span class="sd-id">PSD ID '+esc(x.id)+'</span></h2><div class="sd-meta">'
   +x.meta.map(function(m){return '<span>'+esc(m[0])+(m[1]?' <b>'+esc(m[1])+'</b>':'')+'</span>'}).join('')+'</div></div>'
-  +'<div class="sd-r">'+bd(x.st)+'<button class="btn" id="dclose">'+esc(D.close)+'</button></div></div><div class="sd-body"><div class="sd-sum">'
+  +'<div class="sd-r">'+bd(x.st)+'<button class="btn dclose">'+esc(D.close)+'</button></div></div><div class="sd-body"><div class="sd-sum">'
   +x.sum.map(function(c){return '<div class="sd-sc"><div class="l">'+esc(c.l)+(c.tag?' '+bd(c.tag):'')+'</div><div class="v">'+(c.v==null?'<span class="mis">'+(c.dash?'—':esc(D.missing))+'</span>':esc(c.v))+'</div><div class="s">'+sg(c.sub)+'</div></div>'}).join('')+'</div>'
   +card2(D.punch,x.evh,x.ev.length?tbl([D.time,D.action,D.msg,D.status],x.ev.map(function(e){
    return '<tr'+(e.vd?' class="vd"':'')+'><td>'+esc(e.t)+(e.od?'<div class="sd-sub">'+esc(e.od)+'</div>':'')+'</td><td><span class="ev"><i class="dot '+esc(e.dot)+'"></i>'+esc(e.a)+'</span></td>'
@@ -155,13 +178,29 @@ function openD(x){
   +'<div class="sd-two">'+card2(D.breaks,x.brh,x.br.length?tbl(['#',D.remark,D.time,D.dur],x.br.map(function(b){return '<tr><td>'+esc(b[0])+'</td><td>'+esc(b[1])+'</td><td>'+esc(b[2])+' – '+(b[3]==null?bd([D.open,'r']):esc(b[3]))+'</td><td>'+esc(b[4])+'</td></tr>'})):'<div class="mut sd-empty">'+esc(D.noBreaks)+'</div>')
   +card2(D.exc,x.exh,x.ex.length?tbl([D.type,D.detail,D.time],x.ex.map(function(v){return '<tr><td class="et">'+bd([v[0],v[1]])+'</td><td class="msg">'+(v[2]?esc(v[2]):'—')+'</td><td>'+esc(v[3])+'</td></tr>'})):'<div class="sd-empty">'+bd([D.noEx,'ok'])+'</div>')
   +'</div><div class="sd-ro">'+esc(D.ro)+'</div></div></div>';
- var o=document.createElement('div');o.className='drawer';o.innerHTML='<div class="dbox" role="dialog" aria-modal="true"><div class="dscroll">'+h+'</div></div>';
- var bo=document.body.style.overflow;document.body.style.overflow='hidden';
- var close=function(){o.remove();document.body.style.overflow=bo;document.removeEventListener('keydown',key)};
- var key=function(e){if(e.key==='Escape')close()};
- o.addEventListener('mousedown',function(e){if(e.target===o)close()});document.addEventListener('keydown',key);
- document.body.appendChild(o);$('dclose').onclick=close}
-if(D)$('tb').onclick=function(e){if(String(window.getSelection())!=='')return;var t=e.target.closest('tr.go');if(t)openD(R[+t.getAttribute('data-i')]._x)};
+ return show(h)}
+// popups stack: the employee popup, then a day on top of it; Esc / the backdrop close the top one only
+var stack=[],bo='';
+function show(h){var o=document.createElement('div');o.className='drawer';o.innerHTML='<div class="dbox" role="dialog" aria-modal="true"><div class="dscroll">'+h+'</div></div>';
+ if(!stack.length){bo=document.body.style.overflow;document.body.style.overflow='hidden'}
+ o.close=function(){o.remove();stack.splice(stack.indexOf(o),1);if(!stack.length)document.body.style.overflow=bo};
+ o.addEventListener('mousedown',function(e){if(e.target===o)o.close()});
+ stack.push(o);document.body.appendChild(o);o.querySelector('.dclose').onclick=o.close;return o}
+document.addEventListener('keydown',function(e){if(e.key==='Escape'&&stack.length)stack[stack.length-1].close()});
+function openE(x){var E=C.emp,mu='<span class="mut">—</span>',rd=function(v){return v?'<b class="red">'+hm(v)+'</b>':mu};
+ var h='<div class="sd"><div class="sd-hd"><div class="sd-av">'+esc(x.av)+'</div><div style="min-width:0"><h2>'+esc(x.nm)+' <span class="sd-id">PSD ID '+esc(x.id)+'</span></h2><div class="sd-meta">'
+  +x.meta.map(function(m){return '<span>'+esc(m[0])+(m[1]?' <b>'+esc(m[1])+'</b>':'')+'</span>'}).join('')+'</div></div>'
+  +'<div class="sd-r"><button class="btn dclose">'+esc(D.close)+'</button></div></div><div class="sd-body"><div class="rp-sum">'
+  +x.cards.map(function(c){return '<div class="rp-sc '+esc(c.tone||'')+'"><div class="l">'+esc(c.l)+'</div><div class="v">'+esc(c.v)+(c.sm?'<small> '+esc(c.sm)+'</small>':'')+'</div><div class="s">'+sg(c.sub)+'</div></div>'}).join('')+'</div>'
+  +card2(E.title,E.hint,'<div style="overflow:auto">'+tbl([E.date,E.shift,E['in'],E.late,E.out,E.early,E.breaks,E.net,'OT',E.status,E.exc],x.days.map(function(d){
+   var dc='<td><b>'+esc(d.d)+'</b> <span class="mut">'+esc(d.wd)+'</span></td>',off='<b class="rp-off">'+esc(d.off)+'</b>';
+   if(!d.r)return '<tr class="rp-none">'+dc+'<td>'+off+'</td><td colspan="9">'+(d.note[1]?bd(d.note)+' ':'')+'<span class="mut">'+(d.note[1]?esc(d.note[2]||''):esc(d.note[0]))+'</span></td></tr>';
+   var r=d.r,sub=function(v){return v?'<div class="sd-sub">'+esc(E.sch)+' '+esc(v)+'</div>':''};
+   return '<tr'+(d.x!=null?' class="go" data-x="'+d.x+'"':'')+'>'+dc+'<td>'+(r.offShift?off:esc(r.shift))+'</td><td>'+(r.ai?esc(r.ai):mu)+sub(r.si)+'</td><td>'+rd(r.late)+'</td><td>'+(r.ao?esc(r.ao):mu)+sub(r.so)+'</td><td>'+rd(r.early)+'</td>'
+    +'<td>'+(r.br?esc(r.br):mu)+'</td><td>'+(r.net?esc(r.net):mu)+'</td><td>'+(r.ot?'<b class="red">OT</b>':mu)+'</td><td>'+bd(r.st)+'</td><td>'+(r.ex?bd([String(r.ex),r.exc]):'<span class="mut">0</span>')+'</td></tr>'})).replace('<table class="sd-t">','<table class="sd-t rp-t">')+'</div>')
+  +'<div class="sd-ro">'+esc(D.ro)+'</div></div></div>';
+ var o=show(h);o.querySelector('tbody').onclick=function(e){var t=e.target.closest('tr.go');if(t)openD(C.days[+t.getAttribute('data-x')])}}
+if(D)$('tb').onclick=function(e){if(String(window.getSelection())!=='')return;var t=e.target.closest('tr.go');if(!t)return;var r=R[+t.getAttribute('data-i')];if(r._e)openE(r._e);else openD(r._x)};
 $('kpis').onclick=function(e){var k=e.target.closest('.kpi.go');if(!k)return;var i=+k.getAttribute('data-i');card=card===i?-1:i;draw()};
 $('hd').onclick=function(e){var h=e.target.closest('th');if(!h)return;var k=h.getAttribute('data-k');sort={k:k,dir:sort.k===k?-sort.dir:1};draw()};
 $('q').oninput=draw;C.filters.forEach(function(f){$('f_'+f.k).onchange=draw});

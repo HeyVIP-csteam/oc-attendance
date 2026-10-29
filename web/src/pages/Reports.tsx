@@ -6,7 +6,9 @@ import { useI18n } from '../lib/i18n';
 import { useApi, useData, usePageState } from '../lib/store';
 import { ExportHtmlButton } from '../components/ExportHtml';
 import { exportReports } from '../lib/exports';
-import { type AttRow, useDetailExport } from './Attendance';
+import { type AttRow, SessionDrawer, useDetailExport } from './Attendance';
+import { useState } from 'react';
+import { EmployeeReport } from '../components/EmployeeReport';
 
 interface SummaryRow { employee_id: number; employee_code: string; name: string; scheduled: number; present: number; absent: number; late_times: number; late_min: number; early_times: number; early_min: number; breaks: number; break_ms: number; shift_ms: number; ot_times?: number; exceptions: number }
 
@@ -21,6 +23,14 @@ export function Reports() {
   const ex = useDetailExport();
   const { meta } = useData();
   const setF = (p: Partial<typeof f>) => set({ ...p, page: 1 });
+  const [open, setOpen] = useState<{ emp: number } | null>(null);
+  const [day, setDay] = useState<{ emp: number; date: string } | null>(null);
+  const onRow = (j: number) => {
+    const r = data?.rows[j];
+    if (!r) return;
+    if (data!.mode === 'summary') setOpen({ emp: r.employee_id });
+    else setDay({ emp: r.employee_id, date: (r as AttRow).work_date });
+  };
   let cols: string[] = [];
   let rows: (string | number)[][] = [];
   const left: number[] = [0]; // PSD ID
@@ -49,13 +59,16 @@ export function Reports() {
           {rows.length ? (
             <>
               <div className="tw"><table><thead><tr>{cols.map((c, i) => <th key={i} className={left.includes(i) ? 'pid' : ''}>{c}</th>)}</tr></thead><tbody>
-                {rows.map((r, j) => <tr key={j}>{r.map((v, i) => <td key={i} className={left.includes(i) ? 'pid' : ''}>{i === 0 ? <b>{v}</b> : v}</td>)}</tr>)}
+                {rows.map((r, j) => <tr key={j} className="cl">{r.map((v, i) => <td key={i} onClick={() => onRow(j)} className={left.includes(i) ? 'pid' : ''}
+                  title={data.mode === 'summary' ? L('点击查看这位员工的明细', 'Click for this employee\'s details') : undefined}>{i === 0 ? <b>{v}</b> : v}</td>)}</tr>)}
               </tbody></table></div>
               <Pager total={data.total} page={f.page} size={f.size} onPage={(page) => set({ page })} />
             </>
           ) : <div className="empty">{L('此条件下没有数据', 'No data for these filters')}</div>}
         </div>
       )}
+      {open && <EmployeeReport emp={open.emp} from={from} to={to} shift={f.shift} onClose={() => setOpen(null)} />}
+      {day && <SessionDrawer emp={day.emp} date={day.date} onClose={() => setDay(null)} />}
     </>
   );
 }

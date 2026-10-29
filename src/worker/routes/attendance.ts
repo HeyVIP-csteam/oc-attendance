@@ -347,6 +347,39 @@ attendanceRoutes.get('/reports', async (c) => {
   return c.json({ mode: 'detail', total: (cnt.results[0] as { n: number }).n, rows: rows.results });
 });
 
+/**
+ * One employee over a date range (the Reports popup): the same totals as the summary row, every day of the range
+ * (max 400 days), plus the roster codes and manual OT marks of days without a session.
+ */
+attendanceRoutes.get('/reports/employee/:emp', async (c) => {
+  const emp = intParam(c, 'emp');
+  const f = query(c, Filters.pick({ from: true, to: true, shift: true }));
+  await assertEmployee(c, emp);
+  const db = c.env.DB;
+  await ensureOtMarks(db);
+  const w = sw(c, { ...f, emp });
+  const [from, to] = f.from <= f.to ? [f.from, f.to] : [f.to, f.from];
+  const [empR, sumR, rowsR, mkR, omR] = await db.batch([
+    stmt(db, 'SELECT id, employee_code, name, currency_code, employment_status FROM employees WHERE id = ?', emp),
+    stmt(db, `SELECT COUNT(s.shift_instance_id) AS scheduled, SUM(s.actual_in_at IS NOT NULL AND s.shift_instance_id IS NOT NULL) AS present, SUM(s.status = 'ABSENT') AS absent,
+                SUM(s.late_min > 0) AS late_times, SUM(COALESCE(s.late_min, 0)) AS late_min, SUM(s.early_min > 0) AS early_times, SUM(COALESCE(s.early_min, 0)) AS early_min,
+                SUM(s.break_count) AS breaks, SUM(s.total_break_ms) AS break_ms, SUM(COALESCE(s.net_worked_ms, 0)) AS net_ms,
+                SUM(CASE WHEN s.net_worked_ms IS NOT NULL THEN s.shift_duration_ms ELSE 0 END) AS shift_ms, SUM(s.missing <> 'NONE') AS missing,
+                SUM(${OT_DAY_SQL}) + (SELECT COUNT(*) FROM ot_marks m WHERE m.employee_id = ? AND m.work_date BETWEEN ? AND ? AND m.work_date <= ?
+                  AND NOT EXISTS (SELECT 1 FROM attendance_sessions s2 WHERE s2.employee_id = m.employee_id AND s2.work_date = m.work_date)) AS ot_times,
+                SUM(s.exception_count) AS exceptions
+              FROM attendance_sessions s JOIN employees e ON e.id = s.employee_id LEFT JOIN shift_instances i ON i.id = s.shift_instance_id WHERE ${w.sql}`,
+      emp, ...otRange(f, c), ...w.params),
+    stmt(db, `${ROW_SELECT} WHERE ${w.sql} ORDER BY s.work_date ASC LIMIT 400`, ...w.params),
+    // days without a session: the roster code of the day (OFF, VL …) and OT marked by hand on the roster
+    stmt(db, 'SELECT mark_date AS date, code FROM roster_marks WHERE employee_id = ? AND mark_date BETWEEN ? AND ?', emp, from, to),
+    stmt(db, 'SELECT work_date AS date, note FROM ot_marks WHERE employee_id = ? AND work_date BETWEEN ? AND ?', emp, from, to),
+  ]);
+  const employee = empR.results[0];
+  if (!employee) throw notFound('Employee not found');
+  return c.json({ employee, summary: sumR.results[0] ?? {}, rows: rowsR.results, marks: mkR.results, otMarks: omR.results });
+});
+
 /** Per-employee summary of a date range for the HTML export (all employees, no paging). */
 attendanceRoutes.get('/reports/export', async (c) => {
   const f = query(c, Filters.pick({ from: true, to: true, cur: true, emp: true }));
@@ -360,5 +393,18 @@ attendanceRoutes.get('/reports/export', async (c) => {
       SUM(CASE WHEN s.net_worked_ms IS NOT NULL THEN s.shift_duration_ms ELSE 0 END) AS shift_ms, SUM(s.missing <> 'NONE') AS missing, SUM(s.exception_count) AS exceptions
     FROM attendance_sessions s JOIN employees e ON e.id = s.employee_id LEFT JOIN shift_instances i ON i.id = s.shift_instance_id
     WHERE ${w.sql} GROUP BY e.id ORDER BY COALESCE(e.sort_order, 1000000000), e.employee_code`, ...otRange(f, c), ...w.params);
-  return c.json({ rows });
+  // the downloaded report opens the same employee popup as the dashboard: every day of each employee (with what the day
+  // popup shows), plus the roster codes and manual OT marks of days without a session
+  const days = await all<{ session_id: number }>(c.env.DB, `${ROW_SELECT} WHERE ${w.sql} ORDER BY e.employee_code, s.work_date LIMIT 20000`, ...w.params);
+  const detail = await exportDetail(c.env.DB, days.map((r) => r.session_id));
+  const [from, to] = otRange(f, c);
+  const sc = scopeSql(c);
+  const ec = `${f.cur ? ' AND e.currency_code = ?' : ''}${f.emp ? ' AND e.id = ?' : ''}${sc.sql}`;
+  const ep = [...(f.cur ? [f.cur] : []), ...(f.emp ? [f.emp] : []), ...sc.params];
+  const td = todayOf(c);
+  const [marks, otMarks] = await c.env.DB.batch([
+    stmt(c.env.DB, `SELECT m.employee_id, m.mark_date AS date, m.code FROM roster_marks m JOIN employees e ON e.id = m.employee_id WHERE m.mark_date BETWEEN ? AND ? AND m.mark_date <= ?${ec}`, from, to, td, ...ep),
+    stmt(c.env.DB, `SELECT m.employee_id, m.work_date AS date FROM ot_marks m JOIN employees e ON e.id = m.employee_id WHERE m.work_date BETWEEN ? AND ? AND m.work_date <= ?${ec}`, from, to, td, ...ep),
+  ]);
+  return c.json({ rows, days, detail, marks: marks.results, otMarks: otMarks.results });
 });

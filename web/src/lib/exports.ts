@@ -7,7 +7,9 @@ import type { ExportRange } from '../components/ExportHtml';
 import { api, qs } from './api';
 import { fmtDT, fmtDur, fmtMin, fmtT } from './format';
 import type { Bi } from '../../../src/shared/codes';
-import { downloadHtmlReport, type ReportCfg, type DrawerData, type Seg } from './htmlReport';
+import { downloadHtmlReport, type ReportCfg, type DrawerData, type EmpData, type EmpDay, type Seg } from './htmlReport';
+import { addDays } from '../../../src/shared/time';
+import { today } from './format';
 import type { Meta } from './store';
 
 type L = (zh: string, en: string) => string;
@@ -29,9 +31,9 @@ function common(x: Ctx, q: ExportRange, title: string, kind: string): Pick<Repor
 const foot = (L: L) => L('时间为斯里兰卡时间 (UTC+05:30) · 迟到 / 早退 = 超过宽限后，从排班时间起算的完整分钟 · 时长以小时和分钟表示',
   'Times are Sri Lanka time (UTC+05:30) · Late / Early = full minutes from the scheduled time once past the grace · Durations in hours and minutes');
 
-interface AttRowX { employee_code: string; name: string; currency_code: string | null; work_date: string; shift_name: string | null; mark_code?: string | null; scheduled_start_at: number | null; actual_in_at: number | null; late_min: number | null;
+interface AttRowX { employee_id?: number; employee_code: string; name: string; currency_code: string | null; work_date: string; shift_name: string | null; mark_code?: string | null; scheduled_start_at: number | null; actual_in_at: number | null; late_min: number | null;
   scheduled_end_at: number | null; actual_out_at: number | null; early_min: number | null; break_count: number; open_break_count: number; total_break_ms: number; net_worked_ms: number | null; shift_duration_ms?: number | null; status: string; missing: string; exception_count: number;
-  session_id: number; break_exceeded: number | null; ot_ms?: number | null; ot_day?: number }
+  session_id: number; break_exceeded: number | null; ot_ms?: number | null; ot_day?: number; has_major_exception?: number }
 
 function statusOf(x: Ctx, r: Pick<AttRowX, 'status' | 'mark_code'>): [string, string] {
   if (r.status === 'NO_SCHEDULE' && r.mark_code) {
@@ -196,13 +198,75 @@ export async function exportBreaks(x: Ctx, q: ExportRange): Promise<number> {
   return rows.length;
 }
 
-interface SumX { employee_code: string; name: string; currency_code: string | null; scheduled: number; present: number; absent: number; late_times: number; late_min: number; early_times: number; early_min: number; breaks: number; break_ms: number; shift_ms: number; ot_times?: number | null; exceptions: number }
+interface SumX { employee_id: number; net_ms?: number; missing?: number; employee_code: string; name: string; currency_code: string | null; scheduled: number; present: number; absent: number; late_times: number; late_min: number; early_times: number; early_min: number; breaks: number; break_ms: number; shift_ms: number; ot_times?: number | null; exceptions: number }
+
+/** The texts of the day popup (shared by the Attendance report and the Reports employee popup). */
+const drawerTexts = (L: L): NonNullable<ReportCfg['drawer']> => ({ close: L('关闭', 'Close'), type: L('类型', 'Type'), detail: L('说明', 'Detail'), punch: L('打卡记录', 'Punch records'), time: L('时间', 'Time'), action: L('动作', 'Action'), msg: L('员工消息', 'Message'), status: L('状态', 'Status'),
+  breaks: L('休息明细', 'Breaks'), remark: L('备注', 'Remark'), dur: L('时长', 'Duration'), exc: L('异常', 'Exceptions'), noEx: L('无异常', 'No exceptions'), noPunch: L('没有打卡记录', 'No punches'),
+  noBreaks: L('没有休息', 'No breaks'), open: L('未结束', 'Open'), missing: L('未打卡', 'Missing'), q: L('问题', 'Question'), asked: L('发送时间', 'Asked'), ans: L('回答', 'Answer'),
+  by: L('回答人', 'Answered by'), at: L('回答时间', 'Answered at'), ro: L('导出时的数据（只读）· 要修改请到后台', 'Data as exported (read only) · make changes in the dashboard'),
+  hint: L('点击任一行查看明细', 'Click a row for details') });
+
+/** One employee's popup: the same cards and day list as the dashboard (Reports → click an employee). */
+function empOf(x: Ctx, a: SumX, q: ExportRange, days: AttRowX[], dayIdx: Map<number, number>, marks: Map<string, string>, otMarked: Set<string>): EmpData {
+  const { L } = x;
+  const en = L('zh', 'en') === 'en';
+  const n = (v: number | null | undefined) => v ?? 0;
+  const byDate = new Map(days.map((r) => [r.work_date, r]));
+  const last = q.to < today() ? q.to : today();
+  const dates: string[] = [];
+  for (let d = q.from; d <= last && dates.length < 400; d = addDays(d, 1)) dates.push(d);
+  const markName = (code: string) => (x.meta.rosterCodes ?? []).find((c) => c.code === code)?.name;
+  const offOf = (d: string) => { const m = marks.get(`${a.employee_id}|${d}`); return m ? (markName(m) ? `${m} · ${markName(m)}` : m) : 'Day off'; };
+  const sched = days.filter((r) => r.shift_name).length;
+  const present = days.filter((r) => r.shift_name && r.actual_in_at != null).length;
+  const rate = sched ? Math.round((present / sched) * 100) : null;
+  const sevC = (r: AttRowX) => (r.has_major_exception ? 'r' : '');
+  const ed: EmpDay[] = dates.map((d) => {
+    const wdN = new Date(`${d}T00:00:00Z`).getUTCDay();
+    const base = { d: d.slice(5), wd: en ? WD_EN[wdN] : `周${WD_ZH[wdN]}` };
+    const r = byDate.get(d);
+    if (!r) return { ...base, off: offOf(d), note: otMarked.has(`${a.employee_id}|${d}`) ? [L('当日 OT', 'OT day'), 'r', L('排班表手动标记 OT', 'OT marked on the roster')] : [L('休息日', 'Rest day'), ''] };
+    const offShift = !r.shift_name;
+    const st: Seg = offShift && r.ot_day ? [L('当日 OT', 'OT day'), 'r'] : (statusOf(x, r) as Seg);
+    return { ...base, off: offShift ? offOf(d) : undefined, x: dayIdx.get(r.session_id),
+      r: { shift: r.shift_name ?? '', offShift, ai: r.actual_in_at ? fmtT(r.actual_in_at) : null, si: r.scheduled_start_at ? fmtT(r.scheduled_start_at) : null, late: r.late_min || null,
+        ao: r.actual_out_at ? fmtT(r.actual_out_at) : null, so: r.scheduled_end_at ? fmtT(r.scheduled_end_at) : null, early: r.early_min || null,
+        br: r.break_count ? `${r.break_count} · ${fmtDur(r.total_break_ms)}` : null, net: r.net_worked_ms == null ? null : fmtDur(r.net_worked_ms), ot: !!r.ot_day, st, ex: r.exception_count, exc: sevC(r) } };
+  });
+  const span = Math.round((Date.parse(q.to) - Date.parse(q.from)) / 86_400_000) + 1;
+  return {
+    av: a.name.split(/[\s\-_.]+/).filter(Boolean).map((w) => w[0]).join('').slice(0, 2).toUpperCase() || '?', nm: a.name, id: a.employee_code,
+    meta: [[L('期间', 'Period'), `${q.from} → ${q.to} · ${L(`${span} 天`, `${span} days`)}`], ...(a.currency_code ? [[L('货币', 'Currency'), a.currency_code] as [string, string]] : []), [L('斯里兰卡时间', 'Sri Lanka time'), '']],
+    cards: [
+      { l: L('出勤（排班日）', 'Present (shift days)'), v: String(present), sm: `/ ${sched}`, sub: rate == null ? [[L('没有排班', 'No shifts'), '']] : [[L('出勤率', 'Attendance') + ' ', ''], [`${rate}%`, 'b']] },
+      { l: L('缺勤', 'Absent'), v: String(n(a.absent)), sub: [[L('排班未出勤', 'Scheduled, no show'), '']], tone: n(a.absent) ? 'bad' : '' },
+      { l: L('迟到', 'Late'), v: String(n(a.late_times)), sm: L('次', 'times'), sub: [[L('合计', 'Total') + ' ', ''], [n(a.late_min) ? fmtMin(a.late_min) : '0', 'b']], tone: n(a.late_times) ? 'warn' : '' },
+      { l: L('早退', 'Early leave'), v: String(n(a.early_times)), sm: L('次', 'times'), sub: [[L('合计', 'Total') + ' ', ''], [n(a.early_min) ? fmtMin(a.early_min) : '0', 'b']], tone: n(a.early_times) ? 'warn' : '' },
+      { l: L('缺卡', 'Missing punch'), v: String(n(a.missing)), sm: L('天', 'days'), sub: [[L('缺上班 / 下班 / 休息未结束', 'In / out / break not ended'), '']], tone: n(a.missing) ? 'bad' : '' },
+      { l: L('休息', 'Breaks'), v: fmtDur(n(a.break_ms)), sub: [[L('共 ', ''), ''], [String(n(a.breaks)), 'b'], [' ' + L('次', 'breaks'), '']] },
+      { l: L('净工时', 'Net worked'), v: fmtDur(n(a.net_ms)), sub: [[L('在班', 'On shift') + ' ', ''], [fmtDur(n(a.shift_ms)), 'b']] },
+      { l: 'OT', v: String(n(a.ot_times)), sm: L('次', 'times'), sub: [[L('异常', 'Exceptions') + ' ', ''], [String(n(a.exceptions)), 'b']] },
+    ],
+    days: ed,
+  };
+}
 
 export async function exportReports(x: Ctx, q: ExportRange): Promise<number> {
   const { L } = x;
-  const r = await api<{ rows: SumX[] }>(`/reports/export?${qs({ ...q })}`);
+  const r = await api<{ rows: SumX[]; days: AttRowX[]; detail: Detail; marks: { employee_id: number; date: string; code: string }[]; otMarks: { employee_id: number; date: string }[] }>(`/reports/export?${qs({ ...q })}`);
   const n = (v: number | null | undefined) => v ?? 0;
-  const rows = r.rows.map((a) => ({ code: a.employee_code, name: a.name, cur: a.currency_code, sch: n(a.scheduled), pre: n(a.present), abs: n(a.absent), lt: n(a.late_times), lm: n(a.late_min),
+  // the day popups (same as the Attendance report), referenced by index from each employee's day list
+  const d = r.detail;
+  const g = { ev: group(d.events), br: group(d.breaks), ex: group(d.exceptions), om: group(d.otMarks), oq: group(d.otQuestions), qu: group(d.quotas) };
+  const dayPop: DrawerData[] = r.days.map((a) => drawerOf(x, a, d, g, statusOf(x, a)));
+  const dayIdx = new Map(r.days.map((a, i) => [a.session_id, i]));
+  const byEmp = new Map<number, AttRowX[]>();
+  for (const a of r.days) { const l = byEmp.get(a.employee_id!); if (l) l.push(a); else byEmp.set(a.employee_id!, [a]); }
+  const marks = new Map(r.marks.map((m) => [`${m.employee_id}|${m.date}`, m.code]));
+  const otMarked = new Set(r.otMarks.map((m) => `${m.employee_id}|${m.date}`));
+  const rows = r.rows.map((a) => ({ _e: empOf(x, a, q, byEmp.get(a.employee_id) ?? [], dayIdx, marks, otMarked),
+    code: a.employee_code, name: a.name, cur: a.currency_code, sch: n(a.scheduled), pre: n(a.present), abs: n(a.absent), lt: n(a.late_times), lm: n(a.late_min),
     et: n(a.early_times), em: n(a.early_min), br: n(a.breaks), bm: n(a.break_ms), sm: n(a.shift_ms), ot: n(a.ot_times), ex: n(a.exceptions) }));
   downloadHtmlReport({
     ...common(x, q, L('考勤汇总报表', 'Attendance summary'), 'report'),
@@ -222,6 +286,9 @@ export async function exportReports(x: Ctx, q: ExportRange): Promise<number> {
       { label: L('OT（次）', 'OT (times)'), cls: 'w', value: { op: 'sum', f: 'ot' }, sub: { agg: { op: 'count', where: ['ot', '>', 0] }, tpl: L('{} 位员工', '{} employees') }, click: ['ot', '>', 0] },
     ],
     sort: { k: 'code', dir: 1 }, foot: foot(L),
+    drawer: { ...drawerTexts(L), hint: L('点击员工查看每日明细', 'Click an employee for each day') }, days: dayPop,
+    emp: { title: L('每日明细', 'Day by day'), hint: L('点击某天查看当日打卡', 'Click a day for its punches'), date: L('日期', 'Date'), shift: L('班次', 'Shift'), in: L('上班', 'Clock in'),
+      late: L('迟到', 'Late'), out: L('下班', 'Clock out'), early: L('早退', 'Early'), breaks: L('休息', 'Breaks'), net: L('净工时', 'Net'), status: L('状态', 'Status'), exc: L('异常', 'Exc.'), sch: L('排', 'sch') },
   });
   return rows.length;
 }

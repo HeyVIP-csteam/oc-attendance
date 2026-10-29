@@ -349,11 +349,6 @@ table.grid td{white-space:normal}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .tw .brtbl tbody tr.brm:hover td{background:#16213a}}
 
 /* currency switch (segmented) */
-.seg{display:inline-flex;background:var(--greyb);border-radius:10px;padding:3px;gap:2px;max-width:100%;overflow-x:auto}
-.seg button{border:0;background:transparent;padding:7px 16px;border-radius:8px;font:inherit;color:var(--grey);cursor:pointer;display:flex;gap:6px;align-items:center;white-space:nowrap;width:auto}
-.seg button.on{background:var(--card);color:var(--ink);font-weight:600;box-shadow:0 1px 2px rgba(15,23,42,.08)}
-.seg .dot{min-width:18px;height:18px;padding:0 5px;border-radius:999px;background:#94a3b8;color:#fff;font-size:11px;display:grid;place-items:center;font-weight:600}
-.seg button.on .dot{background:var(--pri)}
 .rnote{background:var(--pri2);color:var(--pri);border-radius:8px;padding:8px 12px;margin:0 0 12px;font-size:12.5px}
 .cmp{margin-top:16px}
 .cmp td.cx{color:var(--warn);font-weight:600}
@@ -562,3 +557,18 @@ select.need{border-color:#f59e0b;background:#fffbeb}
 .sd-ext td:first-child .b{white-space:normal;line-height:1.35;display:inline-block}
 .sd-ext td.msg{min-width:0;max-width:none}
 .sd-ext td:first-child .b{border-radius:7px;padding:3px 8px}
+
+/* ---------------------------------------------------------------- reports: one employee over a period */
+.rp-sum{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:16px}
+.rp-sc{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+.rp-sc .l{font-size:12px;color:var(--mut)}
+.rp-sc .v{font-size:22px;font-weight:700;margin-top:4px;font-variant-numeric:tabular-nums}
+.rp-sc .v small{font-size:13px;font-weight:600;color:var(--mut)}
+.rp-sc .s{font-size:12px;color:var(--mut);border-top:1px solid var(--line);padding-top:7px;margin-top:8px}
+.rp-sc .s b{color:var(--ink)}
+.rp-sc.warn .v{color:var(--warn)}
+.rp-sc.bad .v{color:var(--bad)}
+.rp-t tr.cl:hover td{background:var(--pri2)}
+@media (max-width:720px){.rp-sum{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.rp-t tr.rp-none td{background:var(--greyb);color:var(--mut);padding-top:7px;padding-bottom:7px}
+.rp-off{color:var(--grey);font-weight:600}

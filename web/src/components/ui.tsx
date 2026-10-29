@@ -85,15 +85,17 @@ export function Modal({ onClose, children, wide }: { onClose: () => void; childr
 }
 
 export function Drawer({ onClose, children }: { onClose: () => void; children: ReactNode }) {
+  const self = useRef<HTMLDivElement>(null);
   // the page behind the popup does not scroll while it is open
   useEffect(() => { const o = document.body.style.overflow; document.body.style.overflow = 'hidden'; return () => { document.body.style.overflow = o; }; }, []);
   useEffect(() => {
-    const k = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    // a popup opened from another popup: Esc closes only the top one
+    const k = (e: KeyboardEvent) => { if (e.key === 'Escape' && [...document.querySelectorAll('.drawer')].pop() === self.current) onClose(); };
     document.addEventListener('keydown', k);
     return () => document.removeEventListener('keydown', k);
   }, [onClose]);
   return (
-    <div className="drawer" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div className="drawer" ref={self} onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="dbox" role="dialog" aria-modal="true"><div className="dscroll">{children}</div></div>
     </div>
   );
