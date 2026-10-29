@@ -1003,6 +1003,49 @@ describe('off day clock in: "Is this OT?" with its own buttons', () => {
   });
 });
 
+describe('reports: one employee over a period (popup and HTML export)', () => {
+  it('totals, every session day in date order, roster codes and manual OT of the days without one', async () => {
+    const { h, e1, e2 } = await fixture(lk('2026-10-14', '05:00')); // topic bindings count from their creation
+    const [d1, d2, d3, d4] = ['2026-10-15', '2026-10-16', '2026-10-17', '2026-10-18'];
+    await h.roster(e1, d1, 'A'); // 07:00–15:00
+    await h.send({ text: 'IN', ts: lk(d1, '07:20'), thread: 1001 }); // 20 min late
+    await h.send({ text: 'OUT', ts: lk(d1, '15:05'), thread: 1001 });
+    await h.send({ text: 'IN', ts: lk(d2, '09:00'), thread: 1001 }); // a day off worked → that day's OT
+    await h.send({ text: 'OUT', ts: lk(d2, '13:00'), thread: 1001 });
+    expect((await h.req('PUT', '/api/roster/cell', { employeeId: e1, date: d3, value: 'OFF', reason: 'weekly off' })).status).toBe(200);
+    expect((await h.req('PUT', '/api/roster/ot', { employeeId: e1, date: d4, on: true })).status).toBe(200);
+    h.now(lk('2026-10-20', '12:00'));
+    const r = await h.req('GET', `/api/reports/employee/${e1}?from=${d1}&to=${d4}`);
+    expect(r.status).toBe(200);
+    expect(r.json.employee).toMatchObject({ employee_code: 'E001' });
+    // present counts shift days only (the day off worked is OT, not attendance); OT: worked day off + manual mark
+    expect(r.json.summary).toMatchObject({ scheduled: 1, present: 1, late_times: 1, late_min: 20, ot_times: 2 });
+    expect(r.json.rows.map((x: any) => [x.work_date, x.shift_name, x.ot_day])).toEqual([[d1, 'A Shift', 0], [d2, null, 1]]);
+    expect(r.json.marks).toEqual([{ date: d3, code: 'OFF' }]);
+    expect(r.json.otMarks.map((m: any) => m.date)).toEqual([d4]);
+    // the HTML export carries the same days, each day's popup data and the days without a session
+    const x = (await h.req('GET', `/api/reports/export?from=${d1}&to=${d4}&emp=${e1}`)).json;
+    expect(x.days.map((d: any) => d.work_date)).toEqual([d1, d2]);
+    expect(x.detail.events.filter((ev: any) => ev.session_id === x.days[0].session_id).map((ev: any) => ev.event_type)).toEqual(['CLOCK_IN', 'CLOCK_OUT']);
+    expect(x.marks).toEqual([{ employee_id: e1, date: d3, code: 'OFF' }]);
+    expect(x.otMarks).toEqual([{ employee_id: e1, date: d4 }]);
+    // another employee's days never leak into the export of one currency / one employee
+    expect(x.days.every((d: any) => d.employee_id === e1)).toBe(true);
+    expect((await h.req('GET', '/api/reports/employee/99999?from=2026-10-15&to=2026-10-18')).status).toBe(404);
+    void e2;
+  });
+
+  it('a currency-limited account cannot open another currency\'s employee', async () => {
+    const { h, e1 } = await fixture(lk('2026-10-20', '12:00'));
+    await h.req('POST', '/api/currencies', { code: 'PKR' });
+    expect((await h.req('POST', '/api/admins', { username: 'pkr', password: 'pkr-password-12', role: 'admin', currencies: ['PKR'] })).status).toBe(200);
+    await h.login('pkr', 'pkr-password-12');
+    expect((await h.req('GET', `/api/reports/employee/${e1}?from=2026-10-15&to=2026-10-18`)).status).toBe(403);
+    const x = (await h.req('GET', '/api/reports/export?from=2026-10-01&to=2026-10-20')).json;
+    expect(JSON.stringify(x)).not.toContain('E001');
+  });
+});
+
 describe('manual OT on the roster', () => {
   it('OT is counted in times: every day with the red OT badge counts once (marked by hand, day off worked, bot-confirmed)', async () => {
     const { h, e1, e2 } = await fixture();
