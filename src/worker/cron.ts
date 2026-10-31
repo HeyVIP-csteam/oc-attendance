@@ -2,6 +2,7 @@
 //   1. materialise sessions for today's / yesterday's shift instances (so no-shows become visible)
 //   2. recompute sessions whose status can change with time (next_check_at), explicit dirty marks, and crash recovery
 //   3. once per business day: generate instances from default-shift assignments and purge expired admin sessions
+//   0. once per rule change: mark the days that change must recalculate (oneTimeRechecks)
 //   4. the bot's OT questions in the employees' topics (Settings → Attendance rules / Bot messages)
 // Each run uses a bounded number of D1 queries (well below the per-invocation limits of the free plan).
 
@@ -30,6 +31,8 @@ export async function runCron(env: Env, now = Date.now()): Promise<{ materialise
     ]);
   }
 
+  await oneTimeRechecks(db, now);
+
   const mat = await stmt(db, `INSERT INTO attendance_sessions (employee_id, work_date, shift_instance_id, state, status, computed_at, next_check_at)
       SELECT i.employee_id, i.shift_date, i.id, 'NOT_STARTED', 'SCHEDULED', 0, 0 FROM shift_instances i
       WHERE i.shift_date BETWEEN ? AND ? AND i.adjustment_status <> 'CANCELLED'
@@ -45,4 +48,27 @@ export async function runCron(env: Env, now = Date.now()): Promise<{ materialise
   const res = { materialised: mat.meta.changes ?? 0, recomputed: keys.length, generated, reminders };
   log('info', 'cron', res);
   return res;
+}
+
+/**
+ * Recalculations a rule change needs, done by the cron itself once (so a deploy needs no manual migration step).
+ * Each one marks the affected days for recalculation and records that it ran in system_settings; the recalculation
+ * itself is the usual step below (200 days per run). Running the matching migration file as well is harmless.
+ */
+const RECHECKS: { key: string; sql: string }[] = [
+  // break limit compared in whole minutes, as displayed (1h 30m against 90m is within the limit) — migration 0021
+  { key: 'recheck_break_whole_minutes', sql: 'UPDATE attendance_sessions SET next_check_at = 0 WHERE break_exceeded = 1' },
+];
+
+export async function oneTimeRechecks(db: D1Database, now: number): Promise<string[]> {
+  const done = new Set((await db.prepare(`SELECT key FROM system_settings WHERE key IN (${RECHECKS.map(() => '?').join(',')})`).bind(...RECHECKS.map((r) => r.key)).all<{ key: string }>()).results.map((r) => r.key));
+  const todo = RECHECKS.filter((r) => !done.has(r.key));
+  for (const r of todo) {
+    await db.batch([
+      db.prepare(r.sql),
+      stmt(db, "INSERT INTO system_settings (key, value, updated_at, updated_by) VALUES (?, '1', ?, 'cron') ON CONFLICT (key) DO NOTHING", r.key, now),
+    ]);
+    log('info', 'one_time_recheck', { key: r.key });
+  }
+  return todo.map((r) => r.key);
 }

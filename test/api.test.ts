@@ -1120,6 +1120,33 @@ describe('shift matching window (fixed, no longer a setting)', () => {
   });
 });
 
+describe('one-time rechecks done by the cron (no manual migration step)', () => {
+  it('break limit in whole minutes: a day flagged "1h 30m > 90m" under the old rule is cleared once after the deploy', async () => {
+    const { h, e1 } = await fixture();
+    await h.roster(e1, D, 'A');
+    await h.send({ text: 'IN', ts: lk(D, '07:00'), thread: 1001 });
+    await h.send({ text: 'BREAK', ts: lk(D, '10:00'), thread: 1001 });
+    await h.send({ text: 'RESUME', ts: lk(D, '11:30') + 20_000, thread: 1001 }); // 1h 30m 20s, shown as 1h 30m
+    await h.send({ text: 'OUT', ts: lk(D, '15:00'), thread: 1001 });
+    expect((await h.session(e1, D))!.break_exceeded).toBe(0); // new rule
+    // what the old rule (compared to the second) had stored before this version was deployed
+    h.db.sqlite.exec(`UPDATE attendance_sessions SET break_exceeded = 1, next_check_at = NULL WHERE employee_id = ${e1}`);
+    h.db.sqlite.exec(`INSERT INTO attendance_exceptions (dedupe_key, source, code, severity, employee_id, work_date, occurred_at, detail, status, created_at, updated_at)
+      VALUES ('C|${e1}|${D}|BREAK_LIMIT_EXCEEDED|', 'COMPUTED', 'BREAK_LIMIT_EXCEEDED', 'LOW', ${e1}, '${D}', 0, '{"zh":"x","en":"daily total 1h 30m > 90m"}', 'OPEN', 0, 0)`);
+    const open = () => h.db.rows<any>("SELECT id FROM attendance_exceptions WHERE code = 'BREAK_LIMIT_EXCEEDED' AND status = 'OPEN'").length;
+    expect(open()).toBe(1);
+    await h.cron(lk(D, '16:00'));
+    expect(open()).toBe(0);
+    expect((await h.session(e1, D))!.break_exceeded).toBe(0);
+    expect(h.db.get<any>("SELECT value FROM system_settings WHERE key = 'recheck_break_whole_minutes'")).toMatchObject({ value: '1' });
+    // it runs once only: the next cron run does not mark the days again
+    h.db.sqlite.exec(`UPDATE attendance_sessions SET break_exceeded = 1, next_check_at = NULL WHERE employee_id = ${e1}`);
+    const { oneTimeRechecks } = await import('../src/worker/cron');
+    expect(await oneTimeRechecks(h.env.DB, lk(D, '16:15'))).toEqual([]);
+    expect((await h.session(e1, D))!.next_check_at).toBeNull();
+  });
+});
+
 describe('daily break allowance (Attendance rules)', () => {
   it('one setting for every shift; empty = no limit', async () => {
     const { h, e1 } = await fixture();
