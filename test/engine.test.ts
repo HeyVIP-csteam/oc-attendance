@@ -257,6 +257,19 @@ describe('calculations', () => {
     expect(s.breakExceeded).toBe(true);
     expect(s.flags.map((f) => f.code)).toContain('BREAK_LIMIT_EXCEEDED');
   });
+  it('break limit is compared in whole minutes, as displayed: 1h 30m against 90m is fine, 1h 31m is over', () => {
+    const run = (endSec: number, endT = '11:30') => computeSession({ events: [ev('CLOCK_IN', lk(d, '07:00')), ev('BREAK_START', lk(d, '10:00')), ev('BREAK_END', lk(d, endT, endSec)), ev('CLOCK_OUT', lk(d, '15:00'))],
+      instance: A, now: lk(d, '16:00'), rules: { ...rules, breakMinutes: 90 }, tz: TZ })!;
+    for (const sec of [0, 20, 29]) {
+      const s = run(sec); // shows "1h 30m"
+      expect([sec, s.breakExceeded, s.flags.some((f) => f.code === 'BREAK_LIMIT_EXCEEDED')]).toEqual([sec, false, false]);
+    }
+    for (const [sec, t] of [[40, '11:30'], [0, '11:31']] as const) {
+      const s = run(sec, t); // shows "1h 31m"
+      expect(s.breakExceeded).toBe(true);
+      expect(s.flags.find((f) => f.code === 'BREAK_LIMIT_EXCEEDED')!.detail).toMatchObject({ en: 'daily total 1h 31m > 90m' });
+    }
+  });
   it('unscheduled punches compute hours but are flagged', () => {
     const s = computeSession({ events: [ev('CLOCK_IN', lk(d, '10:00')), ev('CLOCK_OUT', lk(d, '14:00'))], instance: null, now: lk(d, '15:00'), rules, tz: TZ })!;
     expect(s.status).toBe('NO_SCHEDULE');

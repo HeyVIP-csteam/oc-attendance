@@ -196,7 +196,8 @@ export function computeSession(input: ComputeInput): SessionSummary | null {
   // the daily break allowance is one setting for every shift (Settings → Attendance rules); older shift-level values are only a fallback
   const quota = rules.breakMinutes !== undefined ? rules.breakMinutes : inst?.breakMinutes ?? null;
   if (inst && quota != null && inT != null) {
-    breakExceeded = totalBreakMs > quota * MIN;
+    // compared in whole minutes, as displayed (fmtDuration): 1h 30m against 90m is within the limit, 1h 31m is over
+    breakExceeded = Math.round(totalBreakMs / MIN) > quota;
     if (breakExceeded) flags.push({ code: 'BREAK_LIMIT_EXCEEDED', ts: inT ?? inst.startAt, eventId: null, detail: bi(`当日合计 ${fmtDuration(totalBreakMs)} > ${quota}m`, `daily total ${fmtDuration(totalBreakMs)} > ${quota}m`) });
   }
 
