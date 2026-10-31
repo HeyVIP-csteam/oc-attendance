@@ -64,13 +64,15 @@ function Roster({ f, set }: { f: { from: string; to: string; cur: string; page: 
       toast(L(`已导出 ${r.employees.length} 名员工的排班`, `Exported the roster of ${r.employees.length} employees`));
     } catch (e) { toast(L('导出失败', 'Export failed') + ': ' + (e as Error).message); }
   };
-  // the import format with the selected dates and the employees of the selected currency, every shift cell empty
-  const doTemplate = async () => {
+  const [tplOpen, setTplOpen] = useState(false);
+  // the import format for one month (1st → last day) and the employees of the chosen currency, every shift cell empty
+  const doTemplate = async (month: string, cur: string) => {
     try {
-      const r = await api<{ from: string; to: string; employees: { id: number; employee_code: string; name: string; currency_code: string | null }[] }>(`/roster/export?${qs({ from: f.from, to: f.to, cur: f.cur })}`);
+      const from = `${month}-01`;
+      const r = await api<{ from: string; to: string; employees: { id: number; employee_code: string; name: string; currency_code: string | null }[] }>(`/roster/export?${qs({ from, to: monthEnd(from), cur })}`);
       const ds: string[] = [];
       for (let d = r.from; d <= r.to; d = addDays(d, 1)) ds.push(d);
-      await exportXLSX(`roster_template_${r.from}_${r.to}${f.cur ? '_' + f.cur : ''}`, ['PSD ID', 'Employee Name', 'Currency', ...ds],
+      await exportXLSX(`roster_template_${month}${cur ? '_' + cur : ''}`, ['PSD ID', 'Employee Name', 'Currency', ...ds],
         r.employees.map((e) => [e.employee_code, e.name, e.currency_code ?? '', ...ds.map(() => '')]), [
           ['How to use', 'Fill in the shift codes, then Shifts & Roster → Import'],
           ['Shift codes', meta.shifts.filter((s) => s.is_active).map((s) => `${s.code} = ${s.name}`).join(' / ')],
@@ -80,7 +82,9 @@ function Roster({ f, set }: { f: { from: string; to: string; cur: string; page: 
           ['Dates', 'Each column header is a date (YYYY-MM-DD). You can add or remove date columns'],
           ['Employees', 'Rows can be added or removed; only the PSD ID column is used to find the employee'],
         ]);
-    } catch (e) { toast(L('导出失败', 'Export failed') + ': ' + (e as Error).message); }
+      toast(L(`已导出 ${month} 的排班模板（${r.employees.length} 名员工）`, `Exported the ${month} roster template (${r.employees.length} employees)`));
+      return true;
+    } catch (e) { toast(L('导出失败', 'Export failed') + ': ' + (e as Error).message); return false; }
   };
   const doImport = async (file: File) => {
     try {
@@ -98,11 +102,12 @@ function Roster({ f, set }: { f: { from: string; to: string; cur: string; page: 
         <div className="rowact">
           {!readOnly && <button className="btn" onClick={() => { if (fileRef.current) { fileRef.current.value = ''; fileRef.current.click(); } }}>{L('导入', 'Import')}</button>}
           <button className="btn" onClick={doExport}>{L('导出', 'Export')}</button>
-          <button className="btn" onClick={doTemplate}>{L('导出模板', 'Export template')}</button>
+          <button className="btn" onClick={() => setTplOpen(true)}>{L('导出模板', 'Export template')}</button>
           <input ref={fileRef} type="file" accept=".csv,.xlsx" hidden onChange={(e) => { const x = e.target.files?.[0]; if (x) void doImport(x); }} />
         </div>
         {capped && <span className="b w">{L('最多显示 31 天', 'Shows at most 31 days')}</span>}
       </div></div>
+      {tplOpen && <TemplateDialog month={(f.from <= f.to ? f.from : f.to).slice(0, 7)} cur={f.cur} onClose={() => setTplOpen(false)} run={doTemplate} />}
       <ErrBox error={error} />
       {data && (
         <>
@@ -247,6 +252,35 @@ function ImportModal({ grid, file, plan, currency, onClose }: { grid: (string | 
       {(plan.changeCount > 0 || plan.unchanged > 0) && <div style={{ marginTop: 12 }}><label className="mut" style={{ fontSize: 12 }}>{L('原因（必填）', 'Reason (required)')}</label><textarea rows={2} value={reason} onChange={(e) => setReason(e.target.value)} /></div>}
       <div style={{ marginTop: 8 }}><ErrBox error={err} /></div>
       <ModalActions onCancel={onClose} onOk={plan.changeCount > 0 || plan.unchanged > 0 ? apply : undefined} busy={busy} okLabel={plan.changeCount > 0 ? L(`确认导入 ${plan.changeCount} 项`, `Import ${plan.changeCount} changes`) : L('只更新排列顺序', 'Update the row order only')} />
+    </Modal>
+  );
+}
+
+/** Export template: choose the year and month (and currency) the empty roster file is for. */
+function TemplateDialog({ month, cur, onClose, run }: { month: string; cur: string; onClose: () => void; run: (month: string, cur: string) => Promise<boolean> }) {
+  const { L } = useI18n();
+  // this year and the next two (rosters are planned ahead); a past year being viewed starts on this year
+  const thisYear = Number(today().slice(0, 4));
+  const years = [thisYear, thisYear + 1, thisYear + 2];
+  const [y, setY] = useState(years.includes(Number(month.slice(0, 4))) ? Number(month.slice(0, 4)) : thisYear);
+  const [mo, setMo] = useState(Number(month.slice(5, 7)));
+  const [c, setC] = useState(cur);
+  const [busy, setBusy] = useState(false);
+  const m = `${y}-${String(mo).padStart(2, '0')}`;
+  const days = Number(monthEnd(`${m}-01`).slice(8));
+  const go = async () => { setBusy(true); const ok = await run(m, c); setBusy(false); if (ok) onClose(); };
+  return (
+    <Modal onClose={onClose}>
+      <h3 style={{ marginTop: 0 }}>{L('导出排班模板', 'Export roster template')}</h3>
+      <div className="fg xfg">
+        <div><label>{L('年份', 'Year')}</label>
+          <select value={y} onChange={(e) => setY(Number(e.target.value))}>{years.map((x) => <option key={x} value={x}>{x}</option>)}</select></div>
+        <div><label>{L('月份', 'Month')}</label>
+          <select value={mo} onChange={(e) => setMo(Number(e.target.value))}>{Array.from({ length: 12 }, (_, i) => i + 1).map((x) => <option key={x} value={x}>{String(x).padStart(2, '0')}</option>)}</select></div>
+        <div className="full xhint" style={{ marginTop: 0 }}>{L(`${m}-01 → ${m}-${days} · 共 ${days} 天`, `${m}-01 → ${m}-${days} · ${days} days`)}</div>
+        <div className="full"><label>{L('货币', 'Currency')}</label><select value={c} onChange={(e) => setC(e.target.value)}><CurrencyOptions all={L('全部货币', 'All currencies')} /></select></div>
+      </div>
+      <ModalActions onCancel={onClose} onOk={go} busy={busy} okLabel={L('下载模板', 'Download template')} />
     </Modal>
   );
 }
