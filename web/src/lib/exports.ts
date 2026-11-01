@@ -232,7 +232,7 @@ function empOf(x: Ctx, a: SumX, q: ExportRange, days: AttRowX[], dayIdx: Map<num
     return { ...base, off: offShift ? offOf(d) : undefined, x: dayIdx.get(r.session_id),
       r: { shift: r.shift_name ?? '', offShift, ai: r.actual_in_at ? fmtT(r.actual_in_at) : null, si: r.scheduled_start_at ? fmtT(r.scheduled_start_at) : null, late: r.late_min || null,
         ao: r.actual_out_at ? fmtT(r.actual_out_at) : null, so: r.scheduled_end_at ? fmtT(r.scheduled_end_at) : null, early: r.early_min || null,
-        br: r.break_count ? `${r.break_count} · ${fmtDur(r.total_break_ms)}` : null, net: r.net_worked_ms == null ? null : fmtDur(r.net_worked_ms), ot: !!r.ot_day, st, ex: r.exception_count, exc: sevC(r) } };
+        brn: r.break_count, bro: r.open_break_count, brt: r.break_count ? fmtDur(r.total_break_ms) : null, over: !!r.break_exceeded, net: r.net_worked_ms == null ? null : fmtDur(r.net_worked_ms), ot: !!r.ot_day, st, ex: r.exception_count, exc: sevC(r) } };
   });
   const span = Math.round((Date.parse(q.to) - Date.parse(q.from)) / 86_400_000) + 1;
   return {
@@ -288,7 +288,7 @@ export async function exportReports(x: Ctx, q: ExportRange): Promise<number> {
     sort: { k: 'code', dir: 1 }, foot: foot(L),
     drawer: { ...drawerTexts(L), hint: L('点击员工查看每日明细', 'Click an employee for each day') }, days: dayPop,
     emp: { title: L('每日明细', 'Day by day'), hint: L('点击某天查看当日打卡', 'Click a day for its punches'), date: L('日期', 'Date'), shift: L('班次', 'Shift'), in: L('上班', 'Clock in'),
-      late: L('迟到', 'Late'), out: L('下班', 'Clock out'), early: L('早退', 'Early'), breaks: L('休息', 'Breaks'), net: L('净工时', 'Net'), status: L('状态', 'Status'), exc: L('异常', 'Exc.'), sch: L('排', 'sch') },
+      late: L('迟到', 'Late'), out: L('下班', 'Clock out'), early: L('早退', 'Early'), breaks: L('休息次数', 'Breaks'), bt: L('休息总时长', 'Break total'), net: L('净工时', 'Net'), status: L('状态', 'Status'), exc: L('异常', 'Exc.'), sch: L('排', 'sch') },
   });
   return rows.length;
 }

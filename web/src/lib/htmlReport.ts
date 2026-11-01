@@ -28,7 +28,7 @@ export interface EmpDay {
   /** no session that day: the OT note (manual OT on the roster) or the rest-day text */
   note?: [text: string, cls: string, extra?: string];
   /** a day with a session: its cells; x = index of its day popup in cfg.days */
-  r?: { shift: string; offShift: boolean; ai: string | null; si: string | null; late: number | null; ao: string | null; so: string | null; early: number | null; br: string | null; net: string | null; ot: boolean; st: Seg; ex: number; exc: string };
+  r?: { shift: string; offShift: boolean; ai: string | null; si: string | null; late: number | null; ao: string | null; so: string | null; early: number | null; brn: number; bro: number; brt: string | null; over: boolean; net: string | null; ot: boolean; st: Seg; ex: number; exc: string };
   x?: number;
 }
 export interface EmpData { av: string; nm: string; id: string; meta: [string, string][]; cards: { l: string; v: string; sm?: string; sub: Seg[]; tone?: '' | 'warn' | 'bad' }[]; days: EmpDay[] }
@@ -45,7 +45,7 @@ export interface ReportCfg {
   /** rows carrying `_x` open this popup when clicked (or `_e`: the employee popup, whose days open cfg.days[x]) */
   drawer?: Record<'close' | 'punch' | 'time' | 'action' | 'type' | 'detail' | 'msg' | 'status' | 'breaks' | 'remark' | 'dur' | 'exc' | 'noEx' | 'noPunch' | 'noBreaks' | 'open' | 'missing' | 'q' | 'asked' | 'ans' | 'by' | 'at' | 'ro' | 'hint', string>;
   days?: DrawerData[];
-  emp?: Record<'title' | 'hint' | 'date' | 'shift' | 'in' | 'late' | 'out' | 'early' | 'breaks' | 'net' | 'status' | 'exc' | 'sch', string>;
+  emp?: Record<'title' | 'hint' | 'date' | 'shift' | 'in' | 'late' | 'out' | 'early' | 'breaks' | 'bt' | 'net' | 'status' | 'exc' | 'sch', string>;
 }
 
 const CSS = `:root{--bg:#f4f6f9;--card:#fff;--ink:#0f172a;--mut:#64748b;--line:#e5e9f0;--pri:#2563eb;--pri2:#eef4ff;--ok:#15803d;--okb:#dcfce7;--bad:#b91c1c;--badb:#fee2e2;--warn:#b45309;--warnb:#fef3c7;--grey:#475569;--greyb:#eef1f5;--vio:#6d28d9;--viob:#ede9fe}
@@ -192,12 +192,12 @@ function openE(x){var E=C.emp,mu='<span class="mut">—</span>',rd=function(v){r
   +x.meta.map(function(m){return '<span>'+esc(m[0])+(m[1]?' <b>'+esc(m[1])+'</b>':'')+'</span>'}).join('')+'</div></div>'
   +'<div class="sd-r"><button class="btn dclose">'+esc(D.close)+'</button></div></div><div class="sd-body"><div class="rp-sum">'
   +x.cards.map(function(c){return '<div class="rp-sc '+esc(c.tone||'')+'"><div class="l">'+esc(c.l)+'</div><div class="v">'+esc(c.v)+(c.sm?'<small> '+esc(c.sm)+'</small>':'')+'</div><div class="s">'+sg(c.sub)+'</div></div>'}).join('')+'</div>'
-  +card2(E.title,E.hint,'<div style="overflow:auto">'+tbl([E.date,E.shift,E['in'],E.late,E.out,E.early,E.breaks,E.net,'OT',E.status,E.exc],x.days.map(function(d){
+  +card2(E.title,E.hint,'<div style="overflow:auto">'+tbl([E.date,E.shift,E['in'],E.late,E.out,E.early,E.breaks,E.bt,E.net,'OT',E.status,E.exc],x.days.map(function(d){
    var dc='<td><b>'+esc(d.d)+'</b> <span class="mut">'+esc(d.wd)+'</span></td>',off='<b class="rp-off">'+esc(d.off)+'</b>';
-   if(!d.r)return '<tr class="rp-none">'+dc+'<td>'+off+'</td><td colspan="9">'+(d.note[1]?bd(d.note)+' ':'')+'<span class="mut">'+(d.note[1]?esc(d.note[2]||''):esc(d.note[0]))+'</span></td></tr>';
+   if(!d.r)return '<tr class="rp-none">'+dc+'<td>'+off+'</td><td colspan="10">'+(d.note[1]?bd(d.note)+' ':'')+'<span class="mut">'+(d.note[1]?esc(d.note[2]||''):esc(d.note[0]))+'</span></td></tr>';
    var r=d.r,sub=function(v){return v?'<div class="sd-sub">'+esc(E.sch)+' '+esc(v)+'</div>':''};
    return '<tr'+(d.x!=null?' class="go" data-x="'+d.x+'"':'')+'>'+dc+'<td>'+(r.offShift?off:esc(r.shift))+'</td><td>'+(r.ai?esc(r.ai):mu)+sub(r.si)+'</td><td>'+rd(r.late)+'</td><td>'+(r.ao?esc(r.ao):mu)+sub(r.so)+'</td><td>'+rd(r.early)+'</td>'
-    +'<td>'+(r.br?esc(r.br):mu)+'</td><td>'+(r.net?esc(r.net):mu)+'</td><td>'+(r.ot?'<b class="red">OT</b>':mu)+'</td><td>'+bd(r.st)+'</td><td>'+(r.ex?bd([String(r.ex),r.exc]):'<span class="mut">0</span>')+'</td></tr>'})).replace('<table class="sd-t">','<table class="sd-t rp-t">')+'</div>')
+    +'<td>'+(r.brn?esc(r.brn):mu)+(r.bro?' '+bd(['+'+r.bro,'r']):'')+'</td><td>'+(r.brt?(r.over?'<b class="red">'+esc(r.brt)+'</b>':esc(r.brt)):mu)+'</td><td>'+(r.net?esc(r.net):mu)+'</td><td>'+(r.ot?'<b class="red">OT</b>':mu)+'</td><td>'+bd(r.st)+'</td><td>'+(r.ex?bd([String(r.ex),r.exc]):'<span class="mut">0</span>')+'</td></tr>'})).replace('<table class="sd-t">','<table class="sd-t rp-t">')+'</div>')
   +'<div class="sd-ro">'+esc(D.ro)+'</div></div></div>';
  var o=show(h);o.querySelector('tbody').onclick=function(e){var t=e.target.closest('tr.go');if(t)openD(C.days[+t.getAttribute('data-x')])}}
 if(D)$('tb').onclick=function(e){if(String(window.getSelection())!=='')return;var t=e.target.closest('tr.go');if(!t)return;var r=R[+t.getAttribute('data-i')];if(r._e)openE(r._e);else openD(r._x)};

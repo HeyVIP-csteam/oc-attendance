@@ -84,7 +84,7 @@ export function EmployeeReport({ emp, from, to, shift, onClose }: { emp: number;
                 <div className="sd-ch"><h3>{L('每日明细', 'Day by day')}</h3><span className="c">{L('点击某天查看当日打卡', 'Click a day for its punches')}</span></div>
                 <div className="tw"><table className="sd-t rp-t"><thead><tr>
                   <th>{L('日期', 'Date')}</th><th>{L('班次', 'Shift')}</th><th>{L('上班', 'Clock in')}</th><th>{L('迟到', 'Late')}</th><th>{L('下班', 'Clock out')}</th><th>{L('早退', 'Early')}</th>
-                  <th>{L('休息', 'Breaks')}</th><th>{L('净工时', 'Net')}</th><th>OT</th><th>{L('状态', 'Status')}</th><th>{L('异常', 'Exc.')}</th>
+                  <th>{L('休息次数', 'Breaks')}</th><th>{L('休息总时长', 'Break total')}</th><th>{L('净工时', 'Net')}</th><th>OT</th><th>{L('状态', 'Status')}</th><th>{L('异常', 'Exc.')}</th>
                 </tr></thead><tbody>
                   {dates.map((d) => {
                     const r = byDate.get(d);
@@ -92,7 +92,7 @@ export function EmployeeReport({ emp, from, to, shift, onClose }: { emp: number;
                     if (!r) return (
                       <tr key={d} className="rp-none">
                         {date}<td>{dayOff(d)}</td>
-                        <td colSpan={9}>{otMarked.has(d) ? <>{otBadge} <span className="mut">{L('排班表手动标记 OT', 'OT marked on the roster')}</span></> : <span className="mut">{L('休息日', 'Rest day')}</span>}</td>
+                        <td colSpan={10}>{otMarked.has(d) ? <>{otBadge} <span className="mut">{L('排班表手动标记 OT', 'OT marked on the roster')}</span></> : <span className="mut">{L('休息日', 'Rest day')}</span>}</td>
                       </tr>
                     );
                     const off = !r.shift_name; // worked without a shift that day
@@ -104,7 +104,9 @@ export function EmployeeReport({ emp, from, to, shift, onClose }: { emp: number;
                         <td>{r.late_min ? <b style={{ color: LATE_RED }}>{fmtMin(r.late_min)}</b> : <Mut />}</td>
                         <td>{r.actual_out_at ? fmtT(r.actual_out_at) : <Mut />}{r.scheduled_end_at ? <div className="sd-sub">{L('排', 'sch')} {fmtT(r.scheduled_end_at)}</div> : null}</td>
                         <td>{r.early_min ? <b style={{ color: LATE_RED }}>{fmtMin(r.early_min)}</b> : <Mut />}</td>
-                        <td>{r.break_count ? <>{r.break_count} · {fmtDur(r.total_break_ms)}</> : <Mut />}{r.open_break_count > 0 && <> <span className="b r">+{r.open_break_count}</span></>}</td>
+                        <td>{r.break_count ? r.break_count : <Mut />}{r.open_break_count > 0 && <> <span className="b r">+{r.open_break_count}</span></>}</td>
+                        {/* over the daily break allowance: red */}
+                        <td>{r.break_count ? (r.break_exceeded ? <b style={{ color: LATE_RED }}>{fmtDur(r.total_break_ms)}</b> : fmtDur(r.total_break_ms)) : <Mut />}</td>
                         <td>{r.net_worked_ms == null ? <Mut /> : fmtDur(r.net_worked_ms)}</td>
                         <td>{r.ot_day ? <b style={{ color: LATE_RED }}>OT</b> : <Mut />}</td>
                         <td>{off && r.ot_day ? otBadge : <StatusBadge st={r.status} mark={r.mark_code} />}</td>
